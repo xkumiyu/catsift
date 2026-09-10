@@ -15,6 +15,7 @@ import (
 	"github.com/xkumiyu/agentstats/internal/cache"
 	"github.com/xkumiyu/agentstats/internal/codex"
 	ctxsource "github.com/xkumiyu/agentstats/internal/ctx"
+	"github.com/xkumiyu/agentstats/internal/opencode"
 	"github.com/xkumiyu/agentstats/internal/output"
 	"github.com/xkumiyu/agentstats/internal/skillinventory"
 	"github.com/xkumiyu/agentstats/internal/usage"
@@ -43,12 +44,13 @@ const statsUsageText = `Usage: agentstats stats [options]
 Show an overview of agent usage.
 
 Options:
-  --source SOURCE   codex or ctx (default: codex)
+  --source SOURCE   codex, ctx, or opencode (default: codex)
   --days N          Include the last N days (N >= 1; default: all time)
   --from DATE       Include records on or after DATE (YYYY-MM-DD)
   --to DATE         Include records before the day after DATE (YYYY-MM-DD)
   --codex-home PATH Override CODEX_HOME for this invocation (default: CODEX_HOME or ~/.codex)
   --ctx-data-root PATH Read a specific ctx data root (default: ctx default)
+  --opencode-home PATH Override OpenCode data root for this invocation (default: XDG_DATA_HOME/opencode or ~/.local/share/opencode)
   --color MODE      auto, always, or never (default: auto; human report only)
   --verbose         Show input and cache diagnostic details
   --strict-input    Exit non-zero when input records are skipped
@@ -61,12 +63,13 @@ const toolsUsageText = `Usage: agentstats tools [options]
 Show tool usage by canonical name.
 
 Options:
-  --source SOURCE   codex or ctx (default: codex)
+  --source SOURCE   codex, ctx, or opencode (default: codex)
   --days N          Include the last N days (N >= 1; default: all time)
   --from DATE       Include records on or after DATE (YYYY-MM-DD)
   --to DATE         Include records before the day after DATE (YYYY-MM-DD)
   --codex-home PATH Override CODEX_HOME for this invocation (default: CODEX_HOME or ~/.codex)
   --ctx-data-root PATH Read a specific ctx data root (default: ctx default)
+  --opencode-home PATH Override OpenCode data root for this invocation (default: XDG_DATA_HOME/opencode or ~/.local/share/opencode)
   --color MODE      auto, always, or never (default: auto; human report only)
   --layer LAYER     effective, runtime, or model (default: effective)
   --verbose         Show input and cache diagnostic details
@@ -80,12 +83,13 @@ const skillsUsageText = `Usage: agentstats skills [options]
 Show skill usage and evidence state.
 
 Options:
-  --source SOURCE   codex or ctx (default: codex)
+  --source SOURCE   codex, ctx, or opencode (default: codex)
   --days N          Include the last N days (N >= 1; default: all time)
   --from DATE       Include records on or after DATE (YYYY-MM-DD)
   --to DATE         Include records before the day after DATE (YYYY-MM-DD)
   --codex-home PATH Override CODEX_HOME for this invocation (default: CODEX_HOME or ~/.codex)
   --ctx-data-root PATH Read a specific ctx data root (default: ctx default)
+  --opencode-home PATH Override OpenCode data root for this invocation (default: XDG_DATA_HOME/opencode or ~/.local/share/opencode)
   --color MODE      auto, always, or never (default: auto; human report only)
   --group-by UNIT   turn or session (default: turn; no effect on --unused)
   --strict          Count confirmed skill evidence only
@@ -293,6 +297,7 @@ func runWithCtxLoader(args []string, stdout, stderr io.Writer, loadCtx ctxHistor
 	to := flags.String("to", "", "include records through date")
 	codexHome := flags.String("codex-home", "", "override CODEX_HOME for this invocation")
 	ctxDataRoot := flags.String("ctx-data-root", "", "ctx data root path")
+	opencodeHome := flags.String("opencode-home", "", "override OpenCode data root for this invocation")
 	color := flags.String("color", string(output.ColorAuto), "human report color mode")
 	layer := flags.String("layer", string(usage.LayerEffective), "tool layer")
 	var groupBy *string
@@ -319,25 +324,32 @@ func runWithCtxLoader(args []string, stdout, stderr io.Writer, loadCtx ctxHistor
 	}
 	selectedSource := usage.SourceKind(strings.ToLower(strings.TrimSpace(*source)))
 	if !selectedSource.Valid() {
-		diagnostics.errorf("invalid --source %q (want codex or ctx)", *source)
+		diagnostics.errorf("invalid --source %q (want codex, ctx, or opencode)", *source)
 		return 2
 	}
 	codexHomeSet := false
 	ctxDataRootSet := false
+	opencodeHomeSet := false
 	flags.Visit(func(f *flag.Flag) {
 		switch f.Name {
 		case "codex-home":
 			codexHomeSet = true
 		case "ctx-data-root":
 			ctxDataRootSet = true
+		case "opencode-home":
+			opencodeHomeSet = true
 		}
 	})
-	if selectedSource == usage.SourceCtx && codexHomeSet {
+	if selectedSource != usage.SourceCodex && codexHomeSet {
 		diagnostics.errorf("--codex-home is only valid for codex source")
 		return 2
 	}
-	if selectedSource == usage.SourceCodex && ctxDataRootSet {
+	if selectedSource != usage.SourceCtx && ctxDataRootSet {
 		diagnostics.errorf("--ctx-data-root is only valid for ctx source")
+		return 2
+	}
+	if selectedSource != usage.SourceOpenCode && opencodeHomeSet {
+		diagnostics.errorf("--opencode-home is only valid for opencode source")
 		return 2
 	}
 	mode := output.ColorMode(*color)
@@ -449,7 +461,8 @@ func runWithCtxLoader(args []string, stdout, stderr io.Writer, loadCtx ctxHistor
 		sourcePath   string
 		stopProgress func()
 	)
-	if selectedSource == usage.SourceCtx {
+	switch selectedSource {
+	case usage.SourceCtx:
 		sourcePath = strings.TrimSpace(*ctxDataRoot)
 		stopProgress = progress.Start("Reading ctx history")
 		ctxOptions := ctxsource.IngestOptions{DataRoot: *ctxDataRoot, Days: *days, DaysSet: daysSet, From: fromDate, To: toDate, Now: now, CacheDir: cacheDir}
@@ -465,7 +478,28 @@ func runWithCtxLoader(args []string, stdout, stderr io.Writer, loadCtx ctxHistor
 			return 1
 		}
 		turns, sessionCount, warnings, agents = input.Turns, len(input.Sessions), input.Warnings, input.Agents
-	} else {
+	case usage.SourceOpenCode:
+		home, resolveErr := opencode.ResolveHome(*opencodeHome)
+		if resolveErr != nil {
+			diagnostics.errorf("resolve OpenCode data root: %v", resolveErr)
+			return 1
+		}
+		sourcePath = home
+		stopProgress = progress.Start("Reading OpenCode history")
+		opencodeOptions := opencode.IngestOptions{Days: *days, DaysSet: daysSet, From: fromDate, To: toDate, Now: now, CacheDir: cacheDir}
+		if *verbose {
+			opencodeOptions.Diagnostic = func(message string) {
+				diagnostics.write("debug", message)
+			}
+		}
+		input, loadErr := opencode.Load(home, opencodeOptions)
+		if loadErr != nil {
+			stopProgress()
+			diagnostics.errorf("read OpenCode history %q: %v", home, loadErr)
+			return 1
+		}
+		turns, sessionCount, warnings, agents = input.Turns, len(input.Sessions), input.Warnings, input.Agents
+	case usage.SourceCodex:
 		home, resolveErr := codex.ResolveHome(*codexHome)
 		if resolveErr != nil {
 			diagnostics.errorf("resolve Codex home: %v", resolveErr)

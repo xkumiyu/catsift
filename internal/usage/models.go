@@ -10,11 +10,14 @@ import (
 type SourceKind string
 
 const (
-	SourceCodex SourceKind = "codex"
-	SourceCtx   SourceKind = "ctx"
+	SourceCodex    SourceKind = "codex"
+	SourceCtx      SourceKind = "ctx"
+	SourceOpenCode SourceKind = "opencode"
 )
 
-func (s SourceKind) Valid() bool { return s == SourceCodex || s == SourceCtx }
+func (s SourceKind) Valid() bool {
+	return s == SourceCodex || s == SourceCtx || s == SourceOpenCode
+}
 
 // CanonicalAgentID returns the stable, lower-case identifier used for
 // cross-agent identity and sorting. Provider names are intentionally kept
@@ -258,6 +261,16 @@ func NewCodexSourceRef(path string, line int, cliVersion string) SourceRef {
 	source.Agent = "codex"
 	source.Provider = "codex"
 	return source
+}
+
+func NewOpenCodeSourceRef(path, cliVersion string) SourceRef {
+	return SourceRef{
+		Path:       path,
+		CLIVersion: cliVersion,
+		Source:     SourceOpenCode,
+		Agent:      "opencode",
+		Provider:   "opencode",
+	}
 }
 
 func NewCtxSourceRef(path, provider, providerSessionID, ctxSessionID, eventID string) SourceRef {

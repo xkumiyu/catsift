@@ -8,6 +8,7 @@ agentstatsは、AIコーディングエージェントの利用状況を確認�
 > [!NOTE]
 > agentstatsは次に対応しています。
 > - Codexのローカル履歴（デフォルト）
+> - OpenCodeのローカル履歴
 > - [ctx](https://github.com/ctxrs/ctx)のevent stream
 
 ## クイックスタート
@@ -72,8 +73,6 @@ ctx sourceでは、Token usageを利用できません。
 
 利用されたSkillと、その利用がどのように検出されたかを表示します。
 
-詳しくは[Skill集計の詳細](#skill集計の詳細)を参照してください。
-
 ```sh
 agentstats skills --view mode
 ```
@@ -94,6 +93,8 @@ openspec-apply-change             2         1        0      3
 
 2 skills, 9 uses total
 ```
+
+詳しくは[Skill集計の詳細](#skill集計の詳細)を参照してください。
 
 ### Toolの利用状況
 
@@ -119,9 +120,7 @@ shell          42         0  2026-09-01 12:34 JST
 
 ### 共通オプション
 
-- `--source`で履歴sourceを選択します。デフォルトはCodexのローカル履歴で、
-  ctxのevent streamを使う場合は`--source ctx`を指定します。1回の実行で読み取る
-  sourceは1つだけです。
+- `--source`で履歴sourceを選択します。デフォルトはCodexのローカル履歴です。1回の実行で利用できるsourceは1つだけです。
 - `--days N`でレポートの対象を直近N日間に制限します。
 - `--from YYYY-MM-DD`と`--to YYYY-MM-DD`でUTCの暦日範囲（指定日を含む）を指定します。どちらか一方だけでも指定できます。`--days`とは併用できません。
 - `Period`は、実際に集計されたデータの期間を表示します。
@@ -178,6 +177,5 @@ inventoryのidentityはcanonical skill nameと絶対物理PATHの組み合わせ
 
 ## データの扱い
 
-Codexの履歴またはctxの公開された読み取り専用イベントストリームだけを読み取り、
-選択したデータを変更しません。履歴を外部へ送信せず、通常の出力にユーザー本文、
-コマンド本文、その他のraw event詳細を含めません。
+Codexの履歴、ctxの公開された読み取り専用event stream、またはOpenCodeのローカルread-only databaseだけを読み取り、選択したデータを変更しません。
+履歴を外部へ送信せず、通常の出力にユーザー本文、コマンド本文、その他のraw event詳細を含めません。

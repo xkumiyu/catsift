@@ -12,7 +12,7 @@ import (
 )
 
 var (
-	skillBlockRE         = regexp.MustCompile(`(?is)<skill(?:\s+[^>]*)?>(.*?)</skill\s*>`)
+	skillBlockRE         = regexp.MustCompile(`(?is)<(?:skill|skill_content)(?:\s+[^>]*)?>(.*?)</(?:skill|skill_content)\s*>`)
 	attrRE               = regexp.MustCompile(`(?i)(?:name|skill|skill_name|path)\s*=\s*["']([^"']+)["']`)
 	requestRE            = regexp.MustCompile(`^\s*\$([A-Za-z0-9][A-Za-z0-9_.:-]*)\b`)
 	frontNameRE          = regexp.MustCompile(`(?im)^\s*name\s*:\s*["']?([^\s"']+)["']?\s*$`)
@@ -23,7 +23,7 @@ var (
 
 const maxSkillFileBytes = 128 * 1024
 
-// DetectInjectedSkills recognizes an explicit structured <skill> block. It is
+// DetectInjectedSkills recognizes an explicit structured skill block. It is
 // kept as the compatibility helper for callers that already know the block is
 // explicit; ingestion uses the mode-aware helpers because a block alone does
 // not reveal how it was selected.

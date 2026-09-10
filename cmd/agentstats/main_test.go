@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	ctxsource "github.com/xkumiyu/agentstats/internal/ctx"
 	"github.com/xkumiyu/agentstats/internal/usage"
 	appversion "github.com/xkumiyu/agentstats/internal/version"
+	_ "modernc.org/sqlite"
 )
 
 func testHome(t *testing.T) string {
@@ -204,6 +206,9 @@ func TestRunValidatesExclusiveHistorySources(t *testing.T) {
 		{name: "invalid source", args: []string{"stats", "--source", "sqlite"}, want: "invalid --source"},
 		{name: "codex option for ctx", args: []string{"stats", "--source", "ctx", "--codex-home", root}, want: "--codex-home is only valid for codex"},
 		{name: "ctx option for codex", args: []string{"stats", "--source", "codex", "--ctx-data-root", root}, want: "--ctx-data-root is only valid for ctx"},
+		{name: "OpenCode option for codex", args: []string{"stats", "--source", "codex", "--opencode-home", root}, want: "--opencode-home is only valid for opencode"},
+		{name: "Codex option for OpenCode", args: []string{"stats", "--source", "opencode", "--codex-home", root}, want: "--codex-home is only valid for codex"},
+		{name: "ctx option for OpenCode", args: []string{"stats", "--source", "opencode", "--ctx-data-root", root}, want: "--ctx-data-root is only valid for ctx"},
 		{name: "days and range", args: []string{"stats", "--days", "1", "--from", "2026-01-01"}, want: "cannot be combined"},
 		{name: "reversed range", args: []string{"stats", "--from", "2026-01-02", "--to", "2026-01-01"}, want: "must not be after"},
 	}
@@ -215,6 +220,173 @@ func TestRunValidatesExclusiveHistorySources(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRunOpenCodeSourceProducesJSONAndHumanReports(t *testing.T) {
+	root := writeOpenCodeHome(t)
+
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"stats", "--source", "opencode", "--opencode-home", root, "--json"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("OpenCode stats JSON exit=%d stderr=%s", code, stderr.String())
+	}
+	var stats struct {
+		Source      string   `json:"source"`
+		Agents      []string `json:"agents"`
+		Sessions    int      `json:"sessions"`
+		Turns       int      `json:"turns"`
+		UserPrompts int      `json:"user_prompts"`
+		ToolCalls   int      `json:"tool_calls"`
+		InputTokens int64    `json:"input_tokens"`
+		TotalTokens int64    `json:"total_tokens"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &stats); err != nil {
+		t.Fatal(err)
+	}
+	if stats.Source != "opencode" || strings.Join(stats.Agents, ",") != "opencode" || stats.Sessions != 1 || stats.Turns != 1 || stats.UserPrompts != 1 || stats.ToolCalls != 1 || stats.InputTokens != 5 || stats.TotalTokens != 7 {
+		t.Fatalf("OpenCode stats = %#v", stats)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := run([]string{"tools", "--source", "opencode", "--opencode-home", root, "--color", "never"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("OpenCode tools exit=%d stderr=%s", code, stderr.String())
+	}
+	for _, want := range []string{"Source: OpenCode (" + root + ")", "Agents: OpenCode", "shell"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Errorf("OpenCode human report missing %q: %s", want, stdout.String())
+		}
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := run([]string{"skills", "--source", "opencode", "--opencode-home", root, "--json"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("OpenCode skills JSON exit=%d stderr=%s", code, stderr.String())
+	}
+	var skills struct {
+		Rows []struct {
+			Name  string `json:"name"`
+			Total int    `json:"total"`
+		} `json:"rows"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &skills); err != nil {
+		t.Fatal(err)
+	}
+	if len(skills.Rows) != 1 || skills.Rows[0].Name != "review" || skills.Rows[0].Total != 1 {
+		t.Fatalf("OpenCode skills = %#v", skills)
+	}
+
+	skillRoot := t.TempDir()
+	writeTestSkill(t, filepath.Join(skillRoot, ".agents", "skills", "review"), "review")
+	stdout.Reset()
+	stderr.Reset()
+	if code := run([]string{"skills", "--source", "opencode", "--opencode-home", root, "--unused", "--root", skillRoot, "--json"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("OpenCode unused skills JSON exit=%d stderr=%s", code, stderr.String())
+	}
+	var unused struct {
+		Source         string `json:"source"`
+		UnusedCount    int    `json:"unused_count"`
+		InstalledCount int    `json:"installed_count"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &unused); err != nil {
+		t.Fatal(err)
+	}
+	if unused.Source != "opencode" || unused.InstalledCount != 1 || unused.UnusedCount != 0 {
+		t.Fatalf("OpenCode unused skills = %#v", unused)
+	}
+
+	emptyRoot := t.TempDir()
+	stdout.Reset()
+	stderr.Reset()
+	if code := run([]string{"stats", "--source", "opencode", "--opencode-home", emptyRoot, "--json"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("empty OpenCode source exit=%d stderr=%s", code, stderr.String())
+	}
+	var empty struct {
+		Sessions int `json:"sessions"`
+		Turns    int `json:"turns"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &empty); err != nil {
+		t.Fatal(err)
+	}
+	if empty.Sessions != 0 || empty.Turns != 0 {
+		t.Fatalf("empty OpenCode result = %#v", empty)
+	}
+}
+
+func TestRunOpenCodeWarningsStayOnStderrAndStrictInputFails(t *testing.T) {
+	root := writeOpenCodeHome(t)
+	database, err := sql.Open("sqlite", filepath.Join(root, "opencode.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO part VALUES (?, ?, ?, ?, ?, ?)`, "bad", "m1", "s1", int64(1_700_000_004_000), int64(1_700_000_004_000), `{not-json}`); err != nil {
+		_ = database.Close()
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"stats", "--source", "opencode", "--opencode-home", root, "--json", "--strict-input"}, &stdout, &stderr); code != 1 {
+		t.Fatalf("strict OpenCode exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	var value map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &value); err != nil {
+		t.Fatalf("stdout is not standalone JSON: %v (%s)", err, stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "input diagnostics encountered") || strings.Contains(stdout.String(), "opencode_malformed_part") {
+		t.Fatalf("warning routing = stdout %q stderr %q", stdout.String(), stderr.String())
+	}
+}
+
+func TestRunOpenCodeAcceptsCommonReportOptions(t *testing.T) {
+	root := writeOpenCodeHome(t)
+	for _, args := range [][]string{
+		{"stats", "--source", "opencode", "--opencode-home", root, "--days", "1", "--json"},
+		{"stats", "--source", "opencode", "--opencode-home", root, "--from", "2023-11-14", "--to", "2023-11-14", "--json"},
+		{"tools", "--source", "opencode", "--opencode-home", root, "--layer", "runtime", "--json"},
+		{"skills", "--source", "opencode", "--opencode-home", root, "--group-by", "session", "--strict", "--json"},
+	} {
+		var stdout, stderr bytes.Buffer
+		if code := run(args, &stdout, &stderr); code != 0 {
+			t.Fatalf("OpenCode options %v exit=%d stdout=%q stderr=%q", args, code, stdout.String(), stderr.String())
+		}
+	}
+}
+
+func writeOpenCodeHome(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	database, err := sql.Open("sqlite", filepath.Join(root, "opencode.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = database.Close() }()
+	for _, statement := range []string{
+		`CREATE TABLE session (id TEXT PRIMARY KEY, directory TEXT, version TEXT, time_created INTEGER, time_updated INTEGER)`,
+		`CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT, time_created INTEGER, time_updated INTEGER, data TEXT)`,
+		`CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT, session_id TEXT, time_created INTEGER, time_updated INTEGER, data TEXT)`,
+	} {
+		if _, err := database.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows := []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO session VALUES (?, ?, ?, ?, ?)`, []any{"s1", "/workspace/project", "1.18.27", int64(1_700_000_000_000), int64(1_700_000_010_000)}},
+		{`INSERT INTO message VALUES (?, ?, ?, ?, ?)`, []any{"m1", "s1", int64(1_700_000_001_000), int64(1_700_000_001_000), `{"role":"user"}`}},
+		{`INSERT INTO part VALUES (?, ?, ?, ?, ?, ?)`, []any{"p1", "m1", "s1", int64(1_700_000_001_000), int64(1_700_000_001_000), `{"type":"text","text":"$review"}`}},
+		{`INSERT INTO part VALUES (?, ?, ?, ?, ?, ?)`, []any{"p2", "m1", "s1", int64(1_700_000_002_000), int64(1_700_000_002_000), `{"type":"tool","tool":"bash","callID":"call-1","state":{"status":"completed","input":{"command":"true"}}}`}},
+		{`INSERT INTO message VALUES (?, ?, ?, ?, ?)`, []any{"m2", "s1", int64(1_700_000_003_000), int64(1_700_000_003_000), `{"role":"assistant","tokens":{"input":5,"output":2,"total":7}}`}},
+	}
+	for _, row := range rows {
+		if _, err := database.Exec(row.query, row.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return root
 }
 
 func TestRunDateRangeFiltersCodexHistory(t *testing.T) {
@@ -533,7 +705,7 @@ func TestRunHelpDocumentsHistorySourceOptions(t *testing.T) {
 	if code := run([]string{"stats", "--help"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("help exit=%d stderr=%s", code, stderr.String())
 	}
-	for _, want := range []string{"--source SOURCE", "codex or ctx", "--days N", "--from DATE", "--to DATE", "--codex-home PATH", "--ctx-data-root PATH", "input and cache diagnostic details"} {
+	for _, want := range []string{"--source SOURCE", "codex, ctx, or opencode", "--days N", "--from DATE", "--to DATE", "--codex-home PATH", "--ctx-data-root PATH", "--opencode-home PATH", "input and cache diagnostic details"} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Errorf("help missing %q: %s", want, stdout.String())
 		}

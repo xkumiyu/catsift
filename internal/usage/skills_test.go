@@ -26,6 +26,13 @@ func TestDetectStructuredSkillEvidence(t *testing.T) {
 	}
 }
 
+func TestDetectSkillContentBlock(t *testing.T) {
+	evidence := DetectInjectedSkills(`<skill_content name="report">body</skill_content>`, "s", "t", time.Unix(1, 0), SourceRef{Path: "fixture"})
+	if len(evidence) != 1 || evidence[0].SkillName != "report" || evidence[0].State != StateConfirmed {
+		t.Fatalf("skill content evidence = %#v", evidence)
+	}
+}
+
 func TestInjectedSkillCanKeepUnknownActivationMode(t *testing.T) {
 	evidence := DetectInjectedSkillsWithMode(
 		`<skill name="report">body</skill>`,

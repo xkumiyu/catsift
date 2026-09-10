@@ -102,3 +102,13 @@ func TestSnapshotRoundTripRestoresReportFacts(t *testing.T) {
 		t.Fatalf("source facts changed: %#v", restored.Source)
 	}
 }
+
+func TestSnapshotRoundTripPreservesOpenCodeSource(t *testing.T) {
+	source := usage.NewOpenCodeSourceRef("/tmp/opencode/opencode.db", "1.18.27")
+	turn := usage.NewTurn("opencode\x00session", "message-1", 1, source)
+	turn.UserPrompts = 1
+	restored := TurnFromUsage(turn).Usage()
+	if restored.Source.Source != usage.SourceOpenCode || restored.Source.Agent != "opencode" || restored.Source.Provider != "opencode" {
+		t.Fatalf("OpenCode source was not preserved: %#v", restored.Source)
+	}
+}

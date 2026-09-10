@@ -8,6 +8,7 @@ It aggregates local history and reports session, tool, and skill usage.
 > [!NOTE]
 > agentstats supports:
 > - Codex local history (default)
+> - OpenCode local history
 > - [ctx](https://github.com/ctxrs/ctx) event stream
 
 ## Quick start
@@ -119,9 +120,8 @@ shell          42         0  2026-09-01 12:34 JST
 
 ### Common options
 
-- `--source` selects the history source. Codex local history is the default;
-  use `--source ctx` for the ctx event stream. Each invocation reads one source
-  only.
+- `--source` selects the history source. Codex local history is the default. An
+  invocation can use only one source.
 - `--days N` limits the report to the last N days.
 - `--from YYYY-MM-DD` and `--to YYYY-MM-DD` select an inclusive UTC calendar-date range; either option may be used alone. They cannot be combined with `--days`.
 - `Period` shows the date range of the data actually included in the aggregation.
@@ -179,6 +179,7 @@ subsequent runs.
 
 ## Data handling
 
-agentstats reads Codex history or ctx's public read-only event stream and never
-modifies the selected data. It does not send history externally, and normal
-reports do not include prompt text, command text, or other raw event details.
+agentstats reads Codex history, ctx's public read-only event stream, or
+OpenCode's local read-only database and never modifies the selected data.
+It does not send history externally, and normal reports do not include prompt
+text, command text, or other raw event details.

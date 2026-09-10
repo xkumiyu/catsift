@@ -71,3 +71,16 @@ func TestSourceRefPreservesSourceAndAgentIdentity(t *testing.T) {
 		t.Fatalf("agent display name = %q", got)
 	}
 }
+
+func TestOpenCodeSourceRefPreservesIdentity(t *testing.T) {
+	source := NewOpenCodeSourceRef("/tmp/opencode/opencode.db", "1.18.27")
+	if !SourceOpenCode.Valid() {
+		t.Fatal("OpenCode source should be valid")
+	}
+	if source.Source != SourceOpenCode || source.Agent != "opencode" || source.Provider != "opencode" {
+		t.Fatalf("OpenCode source identity = %#v", source)
+	}
+	if source.Path != "/tmp/opencode/opencode.db" || source.CLIVersion != "1.18.27" {
+		t.Fatalf("OpenCode source metadata = %#v", source)
+	}
+}

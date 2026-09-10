@@ -119,6 +119,8 @@ func (c ReportContext) sourceContext() string {
 	label := string(c.sourceKind())
 	if c.sourceKind() == usage.SourceCodex {
 		label = "Codex"
+	} else if c.sourceKind() == usage.SourceOpenCode {
+		label = "OpenCode"
 	}
 	path := strings.TrimSpace(c.SourcePath)
 	if path == "" && c.sourceKind() == usage.SourceCodex {
