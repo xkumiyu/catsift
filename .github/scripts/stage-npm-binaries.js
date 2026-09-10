@@ -29,7 +29,7 @@ function stageBinaries({ distDir, npmDir, version }) {
       (candidate) =>
         candidate.type === "Binary" &&
         candidate.name === expectedName &&
-        candidate.extra?.ID === "agentstats-binary",
+        candidate.extra?.ID === "catsift-binary",
     );
     if (!artifact) {
       throw new Error(`GoReleaser binary artifact not found: ${expectedName}`);

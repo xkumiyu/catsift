@@ -17,7 +17,7 @@ import (
 
 const (
 	SchemaVersion = 1
-	cacheDirName  = "agentstats"
+	cacheDirName  = "catsift"
 	cacheVersion  = "v1"
 )
 
@@ -33,7 +33,7 @@ type Envelope struct {
 	Snapshot      json.RawMessage `json:"snapshot"`
 }
 
-// Store addresses one versioned agentstats cache directory.
+// Store addresses one versioned CatSift cache directory.
 type Store struct {
 	Dir string
 }
@@ -141,7 +141,7 @@ func (s Store) Write(source, scope, revision, parserVersion string, snapshot any
 	if err := os.Chmod(directory, 0o700); err != nil {
 		return fmt.Errorf("secure cache directory: %w", err)
 	}
-	temporary, err := os.CreateTemp(directory, ".agentstats-cache-*")
+	temporary, err := os.CreateTemp(directory, ".catsift-cache-*")
 	if err != nil {
 		return fmt.Errorf("create cache temporary file: %w", err)
 	}

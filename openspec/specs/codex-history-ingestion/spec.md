@@ -103,7 +103,7 @@ Codex sourceで有効なcacheを利用する場合、システムはcache済み�
 
 #### Scenario: Codexの直近1日をcacheから集計する
 
-- **WHEN** 全期間のCodex cacheが存在し、userが`agentstats stats --days 1`を実行する
+- **WHEN** 全期間のCodex cacheが存在し、userが`catsift stats --days 1`を実行する
 - **THEN** システムはcache済みtimestampを用いて直近24時間だけを集計し、全履歴をfreshに再解析した場合と同じ結果を出力する
 
 #### Scenario: Codex cacheがない状態で期間指定する

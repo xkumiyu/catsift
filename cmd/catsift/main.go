@@ -11,21 +11,21 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/xkumiyu/agentstats/internal/aggregate"
-	"github.com/xkumiyu/agentstats/internal/cache"
-	"github.com/xkumiyu/agentstats/internal/codex"
-	ctxsource "github.com/xkumiyu/agentstats/internal/ctx"
-	"github.com/xkumiyu/agentstats/internal/opencode"
-	"github.com/xkumiyu/agentstats/internal/output"
-	"github.com/xkumiyu/agentstats/internal/skillinventory"
-	"github.com/xkumiyu/agentstats/internal/usage"
-	appversion "github.com/xkumiyu/agentstats/internal/version"
+	"github.com/xkumiyu/catsift/internal/aggregate"
+	"github.com/xkumiyu/catsift/internal/cache"
+	"github.com/xkumiyu/catsift/internal/codex"
+	ctxsource "github.com/xkumiyu/catsift/internal/ctx"
+	"github.com/xkumiyu/catsift/internal/opencode"
+	"github.com/xkumiyu/catsift/internal/output"
+	"github.com/xkumiyu/catsift/internal/skillinventory"
+	"github.com/xkumiyu/catsift/internal/usage"
+	appversion "github.com/xkumiyu/catsift/internal/version"
 )
 
 const usageText = `Usage:
-  agentstats <command> [options]
-  agentstats --help
-  agentstats --version
+  catsift <command> [options]
+  catsift --help
+  catsift --version
 
 Commands:
   stats     Show an overview of agent usage
@@ -34,12 +34,12 @@ Commands:
 
 Options:
   --help       Show this help
-  --version    Show the agentstats version
+  --version    Show the catsift version
 
-Run "agentstats <command> --help" for command-specific options.
+Run "catsift <command> --help" for command-specific options.
 `
 
-const statsUsageText = `Usage: agentstats stats [options]
+const statsUsageText = `Usage: catsift stats [options]
 
 Show an overview of agent usage.
 
@@ -58,7 +58,7 @@ Options:
   --help            Show this help
 `
 
-const toolsUsageText = `Usage: agentstats tools [options]
+const toolsUsageText = `Usage: catsift tools [options]
 
 Show tool usage by canonical name.
 
@@ -78,7 +78,7 @@ Options:
   --help            Show this help
 `
 
-const skillsUsageText = `Usage: agentstats skills [options]
+const skillsUsageText = `Usage: catsift skills [options]
 
 Show skill usage and evidence state.
 
@@ -267,7 +267,7 @@ func runWithCtxLoader(args []string, stdout, stderr io.Writer, loadCtx ctxHistor
 		return 0
 	}
 	if kind == "--version" {
-		_, _ = fmt.Fprintf(stdout, "agentstats %s\n", appversion.String())
+		_, _ = fmt.Fprintf(stdout, "catsift %s\n", appversion.String())
 		return 0
 	}
 	if kind != "stats" && kind != "tools" && kind != "skills" {
@@ -280,7 +280,7 @@ func runWithCtxLoader(args []string, stdout, stderr io.Writer, loadCtx ctxHistor
 		return 0
 	}
 	if hasOption(args[1:], "--version") {
-		diagnostics.errorf("--version is a top-level option; use agentstats --version")
+		diagnostics.errorf("--version is a top-level option; use catsift --version")
 		return 2
 	}
 	if kind != "skills" && hasOption(args[1:], "--group-by") {

@@ -1,6 +1,6 @@
 ## Context
 
-現在のhuman rendererは、全command共通の `AGENTSTATS · CODEX` title、1行に連結したcontext、および `Rows` を含むfooterを `internal/output` で組み立てている。`TerminalCapabilities` と `--color` の挙動、集計結果の型、JSON renderer、terminal幅ごとのtable layoutは既存の契約として維持する。変更対象はproposal.mdとdelta specで定めたhuman-readable reportの表示層に限定する。
+現在のhuman rendererは、全command共通の `CatSift · CODEX` title、1行に連結したcontext、および `Rows` を含むfooterを `internal/output` で組み立てている。`TerminalCapabilities` と `--color` の挙動、集計結果の型、JSON renderer、terminal幅ごとのtable layoutは既存の契約として維持する。変更対象はproposal.mdとdelta specで定めたhuman-readable reportの表示層に限定する。
 
 ## Goals / Non-Goals
 
@@ -30,7 +30,7 @@ TOOL USAGE
 SKILL USAGE
 ```
 
-`stats`には既存のtable headingがないため `USAGE OVERVIEW` を追加し、`tools` と `skills` は既存のsection headingをreport headingとして利用する。`AGENTSTATS`、`agentstats stats` のような実行ファイル名・製品名だけのheadingは出力しない。対象Agentはheadingへ埋め込まず、全human reportで `Agent: Codex` のcontext lineとして表示する。
+`stats`には既存のtable headingがないため `USAGE OVERVIEW` を追加し、`tools` と `skills` は既存のsection headingをreport headingとして利用する。`CatSift`、`catsift stats` のような実行ファイル名・製品名だけのheadingは出力しない。対象Agentはheadingへ埋め込まず、全human reportで `Agent: Codex` のcontext lineとして表示する。
 
 製品名を残す案は、通常のCLI実行ではcommand名と重複し、集計内容を伝えないため採用しない。内容headingを残すことで、reportを単独でコピーした場合にも何の値かは判別できる。
 
@@ -112,4 +112,4 @@ JSONは既存の`RenderJSON`を経由し、human heading、context、footer、AN
 
 永続data、CLI option、JSON schemaのmigrationは不要である。実装時はhuman rendererのheading/context/footer/style helperを更新し、plain reportのtest、styled reportのtest、READMEの例を順に新しい表示契約へ合わせる。集計・JSON・履歴読取への変更は行わない。
 
-rollbackはbinaryを以前のversionへ戻すだけで完了し、agentstatsが読むCodex履歴やユーザー設定へ影響しない。
+rollbackはbinaryを以前のversionへ戻すだけで完了し、catsiftが読むCodex履歴やユーザー設定へ影響しない。

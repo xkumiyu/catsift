@@ -2,8 +2,8 @@
 
 ## Repository
 
-- This repository is a Go CLI module: `github.com/xkumiyu/agentstats`.
-- The CLI entrypoint is `cmd/agentstats`; implementation packages are under `internal/`.
+- This repository is a Go CLI module: `github.com/xkumiyu/catsift`.
+- The CLI entrypoint is `cmd/catsift`; implementation packages are under `internal/`.
 - Keep Go tests beside their packages as `*_test.go`; fuzz tests use `*_fuzz_test.go`.
 - `npm/` contains the Node.js distribution wrapper and its tests.
 

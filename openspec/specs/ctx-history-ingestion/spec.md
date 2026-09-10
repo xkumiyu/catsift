@@ -2,7 +2,7 @@
 
 ## Purpose
 
-ctxが保持する複数Agentの履歴を、内部DB schemaに依存せず、agentstatsの利用統計へ取り込むための読み取り専用入力契約を定義する。
+ctxが保持する複数Agentの履歴を、内部DB schemaに依存せず、catsiftの利用統計へ取り込むための読み取り専用入力契約を定義する。
 
 ## Requirements
 
@@ -95,7 +95,7 @@ ctx sourceで有効なgeneration cacheを利用する場合、システムはcac
 
 #### Scenario: ctxの直近1日をcacheから集計する
 
-- **WHEN** complete generation cacheが存在し、userが`agentstats stats --source ctx --days 1`を実行する
+- **WHEN** complete generation cacheが存在し、userが`catsift stats --source ctx --days 1`を実行する
 - **THEN** システムはgeneration cache全体から直近24時間のeventだけを集計し、freshな全page列挙後にfilterした場合と同じ結果を出力する
 
 #### Scenario: cacheがない状態でctxの期間指定する

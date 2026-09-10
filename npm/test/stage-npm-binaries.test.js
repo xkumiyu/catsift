@@ -13,7 +13,7 @@ const {
 } = require("../../.github/scripts/stage-npm-binaries.js");
 
 test("stages every GoReleaser binary with a target-specific npm name", () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "agentstats-stage-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "catsift-stage-"));
   const distDir = path.join(root, "dist");
   const npmDir = path.join(root, "npm");
   const version = "1.2.3";
@@ -25,7 +25,7 @@ test("stages every GoReleaser binary with a target-specific npm name", () => {
       const targetDir = path.join(distDir, `${target.os}_${target.arch}_v1`);
       const source = path.join(
         targetDir,
-        target.os === "windows" ? "agentstats.exe" : "agentstats",
+        target.os === "windows" ? "catsift.exe" : "catsift",
       );
       fs.mkdirSync(targetDir, { recursive: true });
       fs.writeFileSync(
@@ -38,7 +38,7 @@ test("stages every GoReleaser binary with a target-specific npm name", () => {
         goos: target.os,
         goarch: target.arch,
         type: "Binary",
-        extra: { ID: "agentstats-binary" },
+        extra: { ID: "catsift-binary" },
       });
     }
     fs.writeFileSync(path.join(distDir, "artifacts.json"), JSON.stringify(artifacts));

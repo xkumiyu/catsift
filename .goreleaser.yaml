@@ -1,17 +1,17 @@
 version: 2
 
-project_name: agentstats
+project_name: catsift
 
 builds:
-  - id: agentstats
-    main: ./cmd/agentstats
-    binary: agentstats
+  - id: catsift
+    main: ./cmd/catsift
+    binary: catsift
     env:
       - CGO_ENABLED=0
     flags:
       - -trimpath
     ldflags:
-      - -s -w -X github.com/xkumiyu/agentstats/internal/version.Version={{.Version}}
+      - -s -w -X github.com/xkumiyu/catsift/internal/version.Version={{.Version}}
     goos:
       - linux
       - darwin
@@ -22,7 +22,7 @@ builds:
     mod_timestamp: "{{ .CommitTimestamp }}"
 
 archives:
-  - id: agentstats
+  - id: catsift
     formats:
       - tar.gz
     format_overrides:
@@ -30,9 +30,9 @@ archives:
         formats:
           - zip
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
-  - id: agentstats-binary
+  - id: catsift-binary
     ids:
-      - agentstats
+      - catsift
     formats:
       - binary
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"

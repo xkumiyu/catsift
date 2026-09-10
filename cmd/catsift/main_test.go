@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	ctxsource "github.com/xkumiyu/agentstats/internal/ctx"
-	"github.com/xkumiyu/agentstats/internal/usage"
-	appversion "github.com/xkumiyu/agentstats/internal/version"
+	ctxsource "github.com/xkumiyu/catsift/internal/ctx"
+	"github.com/xkumiyu/catsift/internal/usage"
+	appversion "github.com/xkumiyu/catsift/internal/version"
 	_ "modernc.org/sqlite"
 )
 
@@ -87,7 +87,7 @@ func TestRunCommandsAndMachineOutput(t *testing.T) {
 			t.Errorf("stats missing %q: %s", want, stdout.String())
 		}
 	}
-	if strings.Contains(stdout.String(), "AGENTSTATS") || strings.Contains(stdout.String(), " · ") {
+	if strings.Contains(stdout.String(), "CATSIFT") || strings.Contains(stdout.String(), " · ") {
 		t.Fatalf("stats contains obsolete display: %s", stdout.String())
 	}
 	if strings.Contains(stdout.String(), "\x1b[") {
@@ -182,7 +182,7 @@ func TestRunVersionFlag(t *testing.T) {
 	if code := run([]string{"--version"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("version exit=%d stderr=%s", code, stderr.String())
 	}
-	if got, want := stdout.String(), "agentstats "+appversion.String()+"\n"; got != want {
+	if got, want := stdout.String(), "catsift "+appversion.String()+"\n"; got != want {
 		t.Fatalf("version output = %q, want %q", got, want)
 	}
 	if stderr.Len() != 0 {
@@ -191,7 +191,7 @@ func TestRunVersionFlag(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	if code := run([]string{"stats", "--version"}, &stdout, &stderr); code == 0 || !strings.Contains(stderr.String(), "use agentstats --version") {
+	if code := run([]string{"stats", "--version"}, &stdout, &stderr); code == 0 || !strings.Contains(stderr.String(), "use catsift --version") {
 		t.Fatalf("subcommand version exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 }
@@ -717,7 +717,7 @@ func TestRunHelpIsScopedToCommand(t *testing.T) {
 	if code := run([]string{"--help"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("root help exit=%d stderr=%s", code, stderr.String())
 	}
-	for _, want := range []string{"Usage:", "agentstats <command> [options]", "stats", "tools", "skills", "--version"} {
+	for _, want := range []string{"Usage:", "catsift <command> [options]", "stats", "tools", "skills", "--version"} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Errorf("root help missing %q: %s", want, stdout.String())
 		}
@@ -736,9 +736,9 @@ func TestRunHelpIsScopedToCommand(t *testing.T) {
 		want    []string
 		omit    []string
 	}{
-		{command: "stats", want: []string{"Usage: agentstats stats [options]", "--days"}, omit: []string{"--layer", "--strict", "--group-by"}},
-		{command: "tools", want: []string{"Usage: agentstats tools [options]", "--days", "--layer"}, omit: []string{"--group-by", "--strict"}},
-		{command: "skills", want: []string{"Usage: agentstats skills [options]", "--days", "--group-by", "--strict", "--unused", "--root", "--view"}, omit: []string{"--layer"}},
+		{command: "stats", want: []string{"Usage: catsift stats [options]", "--days"}, omit: []string{"--layer", "--strict", "--group-by"}},
+		{command: "tools", want: []string{"Usage: catsift tools [options]", "--days", "--layer"}, omit: []string{"--group-by", "--strict"}},
+		{command: "skills", want: []string{"Usage: catsift skills [options]", "--days", "--group-by", "--strict", "--unused", "--root", "--view"}, omit: []string{"--layer"}},
 	} {
 		stdout.Reset()
 		stderr.Reset()

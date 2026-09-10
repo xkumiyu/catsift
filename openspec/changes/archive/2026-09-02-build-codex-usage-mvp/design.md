@@ -31,7 +31,7 @@ Codexの通常rollout JSONLにはmodelが選択した `FunctionCall` / `CustomTo
 
 ### 1. Go 1.27、標準library、限定した描画libraryで実装する
 
-moduleは `github.com/xkumiyu/agentstats`、実行入口は `cmd/agentstats` とする。subcommandは `flag.FlagSet`、JSONは `encoding/json` で実装する。human-readable reportにはstableな `charm.land/lipgloss/v2`、TTY判定とterminal幅取得には `golang.org/x/term` を使用する。選定時点のLip Gloss stable releaseはv2.0.6であり、実装時は互換性を確認したversionを `go.mod` / `go.sum` で固定する。
+moduleは `github.com/xkumiyu/catsift`、実行入口は `cmd/catsift` とする。subcommandは `flag.FlagSet`、JSONは `encoding/json` で実装する。human-readable reportにはstableな `charm.land/lipgloss/v2`、TTY判定とterminal幅取得には `golang.org/x/term` を使用する。選定時点のLip Gloss stable releaseはv2.0.6であり、実装時は互換性を確認したversionを `go.mod` / `go.sum` で固定する。
 
 3 commandと少数optionの解析には標準libraryで十分であり、Cobraやinteractive frameworkは追加しない。一方、ANSI、Unicode幅、color profile、table styleを独自実装すると描画bugと保守costが増えるため、その責務だけをLip Glossへ委ねる。Bubble TeaはModel-Update-Viewのevent loopを必要とするinteractive TUI向けであり、本MVPには導入しない。`text/tabwriter`だけの実装も検討したが、TTY-awareなstyleと幅別layoutを安全に扱うには不足する。
 
@@ -54,7 +54,7 @@ table / JSON renderers
 想定する境界は次のとおりとする。
 
 ```text
-cmd/agentstats       argument parsingと終了code
+cmd/catsift       argument parsingと終了code
 internal/codex      source探索、JSONL decode、turn組立
 internal/usage      共通Event、Tool/Skill検出と重複排除
 internal/aggregate  stats/tools/skills view
@@ -135,7 +135,7 @@ TerminalCapabilities
 human reportは次の情報hierarchyを共通化する。
 
 ```text
-title:    AGENTSTATS · CODEX
+title:    CatSift · CODEX
 context:  period / effective|runtime|model / strict
 body:     summary metrics または見出し付きtable
 footer:   row数 / total calls or uses
@@ -177,4 +177,4 @@ parser・normalizerにはtable-driven test、各commandにはgolden JSON/report 
 
 既存実装や永続dataがないためmigrationは不要である。実装はdomain modelとfixture、Codex ingestion、normalization、aggregation、machine renderer、human renderer、CLI wiringの順に追加し、各段階でtestを通す。release前に匿名化fixtureとread-onlyな実環境sampleの両方で、plain report・styled report・JSONを比較する。
 
-rollbackはbinaryまたはreleaseを以前の版へ戻すだけで完了する。agentstatsはCodex履歴を変更せずcacheも作らないため、user dataのrollback手順は不要である。
+rollbackはbinaryまたはreleaseを以前の版へ戻すだけで完了する。catsiftはCodex履歴を変更せずcacheも作らないため、user dataのrollback手順は不要である。

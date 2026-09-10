@@ -35,7 +35,7 @@
 
 #### Scenario: 未使用Skillをhuman-readableで表示する
 
-- **WHEN** `agentstats skills --unused` をhuman-readable modeで実行し、未使用Skillが存在する
+- **WHEN** `catsift skills --unused` をhuman-readable modeで実行し、未使用Skillが存在する
 - **THEN** システムは未使用view、source、Agent一覧、期間、strict状態、scope、Skill name、およびpathを含むstatic reportを出力する
 
 #### Scenario: ctxで同名・異PATHのSkillを表示する
@@ -45,7 +45,7 @@
 
 #### Scenario: 未使用SkillをJSONで表示する
 
-- **WHEN** userが `agentstats skills --unused --json` を実行する
+- **WHEN** userが `catsift skills --unused --json` を実行する
 - **THEN** stdoutは単独の有効なJSON documentとなり、`view` が `unused`、`rows` は未使用entryだけ、空の場合も `[]` となる
 
 #### Scenario: すべて使用済みの場合にempty stateを表示する
@@ -64,17 +64,17 @@
 
 #### Scenario: days filterをunused判定へ適用する
 
-- **WHEN** userが `agentstats skills --source ctx --unused --days 30` を実行する
+- **WHEN** userが `catsift skills --source ctx --unused --days 30` を実行する
 - **THEN** システムはctxの直近30日間の履歴だけを使用済み判定へ使い、report contextにもその期間を示す
 
 #### Scenario: source固有rootをunused viewへ適用する
 
-- **WHEN** userが `agentstats skills --source ctx --unused --ctx-data-root /path/to/ctx` を実行する
+- **WHEN** userが `catsift skills --source ctx --unused --ctx-data-root /path/to/ctx` を実行する
 - **THEN** システムは指定ctx data rootの履歴だけを使用し、Skill inventory rootは別途指定されたscopeのまま扱う
 
 #### Scenario: strict filterをunused判定へ適用する
 
-- **WHEN** userが `agentstats skills --source ctx --unused --strict` を実行する
+- **WHEN** userが `catsift skills --source ctx --unused --strict` を実行する
 - **THEN** システムはctx履歴の `confirmed` 利用だけを使用済みとして扱う
 
 #### Scenario: JSON outputのwarningを分離する

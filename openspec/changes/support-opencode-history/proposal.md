@@ -1,6 +1,6 @@
 ## Why
 
-agentstatsは現在、Codexのローカル履歴とctxのevent streamを集計できますが、OpenCodeを直接利用している場合はOpenCodeの履歴を集計できません。OpenCodeのローカル履歴を読み取り専用で取り込めるようにし、ctxを導入していない環境でも複数のAI coding agentの利用状況を同じreportで確認できるようにします。
+catsiftは現在、Codexのローカル履歴とctxのevent streamを集計できますが、OpenCodeを直接利用している場合はOpenCodeの履歴を集計できません。OpenCodeのローカル履歴を読み取り専用で取り込めるようにし、ctxを導入していない環境でも複数のAI coding agentの利用状況を同じreportで確認できるようにします。
 
 ## What Changes
 
@@ -26,7 +26,7 @@ agentstatsは現在、Codexのローカル履歴とctxのevent streamを集計�
 ## Impact
 
 - `internal/opencode`の履歴adapterとテストfixtureを追加する。
-- `internal/usage`のsource識別、共通正規化、および`cmd/agentstats`のsource選択・option validationを変更する。
+- `internal/usage`のsource識別、共通正規化、および`cmd/catsift`のsource選択・option validationを変更する。
 - `internal/cache`とreport metadataにOpenCode sourceを追加する。
 - `README.md`と`README.ja.md`へOpenCode sourceの利用方法と対応範囲を追記する。
 - OpenCodeの保存形式を読み取るための依存関係が必要な場合は、designで最小の実装方法と保守対象versionを決定する。履歴データを外部へ送信したり、OpenCode側のデータを変更したりはしない。

@@ -34,21 +34,21 @@ test("rejects unsupported targets", () => {
 test("builds raw release asset names", () => {
   assert.equal(
     assetName("1.2.3", { os: "linux", arch: "amd64" }),
-    "agentstats_1.2.3_linux_amd64",
+    "catsift_1.2.3_linux_amd64",
   );
   assert.equal(
     assetName("1.2.3", { os: "windows", arch: "amd64" }),
-    "agentstats_1.2.3_windows_amd64.exe",
+    "catsift_1.2.3_windows_amd64.exe",
   );
 });
 
 test("builds bundled native binary names", () => {
   assert.equal(
     nativeBinaryName({ os: "linux", arch: "amd64" }),
-    "agentstats-bin-linux-amd64",
+    "catsift-bin-linux-amd64",
   );
   assert.equal(
     nativeBinaryName({ os: "windows", arch: "arm64" }),
-    "agentstats-bin-windows-arm64.exe",
+    "catsift-bin-windows-arm64.exe",
   );
 });

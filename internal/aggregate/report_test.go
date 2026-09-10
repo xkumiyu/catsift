@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xkumiyu/agentstats/internal/skillinventory"
-	"github.com/xkumiyu/agentstats/internal/usage"
+	"github.com/xkumiyu/catsift/internal/skillinventory"
+	"github.com/xkumiyu/catsift/internal/usage"
 )
 
 func TestBuildOverviewAndLayerAggregation(t *testing.T) {

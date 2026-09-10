@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xkumiyu/agentstats/internal/usage"
+	"github.com/xkumiyu/catsift/internal/usage"
 )
 
 func TestTurnDTOOmitsPromptPayloadToolArgumentsAndRawSourcePosition(t *testing.T) {

@@ -18,15 +18,15 @@
 
 ## 4. CLIへ安全に接続する
 
-- [x] 4.1 `cmd/agentstats` のskills helpとflag parserへ `--unused` とrepeatable `--root` を追加し、root単独、他commandでのunused、既存optionとのvalidation errorをCLI testで確認する
+- [x] 4.1 `cmd/catsift` のskills helpとflag parserへ `--unused` とrepeatable `--root` を追加し、root単独、他commandでのunused、既存optionとのvalidation errorをCLI testで確認する
 - [x] 4.2 `skills --unused` のhistory load、inventory discovery、strict used-name比較、report contextへのroots設定、root errorとwarningの終了codeを既存pipelineへ接続し、fixtureを使ったhuman/JSON end-to-end testを通す
 - [x] 4.3 `--unused` なしの `skills`、`stats`、`tools` の既存report、row順、JSON shape、Codex home解決を変更していないことを全CLI regression testで確認する
 
 ## 5. 利用者向けdocumentationを更新する
 
-- [x] 5.1 `README.md` と `README.ja.md` のUsage/Tipsへ `agentstats skills --unused`、既定scope、repeatable `--root`、repository parentを指定する例、frontmatter nameとstrict/daysの意味を追加し、旧shell比較例と矛盾しない説明を `rg` で確認する
+- [x] 5.1 `README.md` と `README.ja.md` のUsage/Tipsへ `catsift skills --unused`、既定scope、repeatable `--root`、repository parentを指定する例、frontmatter nameとstrict/daysの意味を追加し、旧shell比較例と矛盾しない説明を `rg` で確認する
 
 ## 6. 完了検証を実施する
 
-- [x] 6.1 変更対象をgofmtし、`go test ./...`、`go vet ./...`、`go build ./cmd/agentstats` を実行して全test・静的検査・buildが成功することを確認する
+- [x] 6.1 変更対象をgofmtし、`go test ./...`、`go vet ./...`、`go build ./cmd/catsift` を実行して全test・静的検査・buildが成功することを確認する
 - [x] 6.2 fixtureと一時rootでdefault scope、all-repository scope、frontmatter mismatch、plugin namespace、strict/days、empty stateを実際のbinaryから確認し、stdout JSONのparse成功とfilesystem未変更を確認する

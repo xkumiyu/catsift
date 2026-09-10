@@ -1,6 +1,6 @@
 ## Context
 
-proposal.mdの動機と、`unused-skill-report` および `usage-statistics-cli` の外部契約を実現する設計である。現在のCLIは `cmd/agentstats` でoptionを解析し、`codex.Load` で履歴を読み、`internal/aggregate` でSkill利用を集計し、`internal/output` でhuman-readable reportまたはJSONを描画する。通常の `skills` viewは利用履歴のrowだけを返すため、filesystem上のSkill identityを表すdata modelと別viewが必要になる。
+proposal.mdの動機と、`unused-skill-report` および `usage-statistics-cli` の外部契約を実現する設計である。現在のCLIは `cmd/catsift` でoptionを解析し、`codex.Load` で履歴を読み、`internal/aggregate` でSkill利用を集計し、`internal/output` でhuman-readable reportまたはJSONを描画する。通常の `skills` viewは利用履歴のrowだけを返すため、filesystem上のSkill identityを表すdata modelと別viewが必要になる。
 
 既存の `internal/usage` には、履歴からSkill evidenceを検出する処理、既知pathからのdirectory fallback、および `SKILL.md` frontmatter nameの解決がある。履歴側の名前解決と、現在のfilesystemからinventoryを作る処理を別々に実装するとfrontmatterやplugin namespaceの規則がずれるため、共有できるresolverは再利用する。一方、履歴のpath classifierには古い履歴を復元するためのdirectory fallbackが含まれるので、それをそのままinventoryの発見条件には使わず、inventory専用の厳格なlayout判定を置く。
 
@@ -25,7 +25,7 @@ proposal.mdの動機と、`unused-skill-report` および `usage-statistics-cli`
 
 ### 1. `skills --unused` を既存commandのviewとして追加する
 
-`cmd/agentstats` に `unused` のboolean optionとrepeatableな `roots` collectionを追加し、`kind == "skills"` の場合だけ利用する。`--root` は `--unused` と同時に指定された場合だけ有効にし、明示rootがあるときは既定rootを追加しない。`--unused` がない既存のparse、aggregation、JSON shapeには分岐を入れない。
+`cmd/catsift` に `unused` のboolean optionとrepeatableな `roots` collectionを追加し、`kind == "skills"` の場合だけ利用する。`--root` は `--unused` と同時に指定された場合だけ有効にし、明示rootがあるときは既定rootを追加しない。`--unused` がない既存のparse、aggregation、JSON shapeには分岐を入れない。
 
 新しいtop-level commandや `skills inventory` ではなく同じcommandのviewにするのは、historyを使ったSkill reportと対象domainが同じで、`--days`・`--strict`・`--codex-home` を自然に共有できるためである。独立commandは履歴sourceとSkill名解決の責務を重複させ、`--inventory` を既存のusage commandへ混在させる案は、履歴を参照しないsnapshotとの意味の違いを曖昧にする。
 
@@ -63,7 +63,7 @@ scanにはGo標準libraryの `filepath.WalkDir` を使用する。指定rootがr
 このpackageを `internal/usage` へ直接追加しないのは、inventoryが履歴eventではなく現在のfilesystem snapshotだからである。`internal/aggregate` はsnapshotと履歴から作ったused-name setを比較し、`internal/output` はsnapshotのrowを描画する。一方向の依存は次のようになる。
 
 ```text
-cmd/agentstats
+cmd/catsift
   ├─ internal/codex       history source
   ├─ internal/usage       history Skill evidence/name resolver
   ├─ internal/skillinventory  filesystem snapshot
@@ -122,7 +122,7 @@ frontmatterのmissing/invalidはSkill directoryの通常状態としてwarning�
 
 新しいinventory packageには一時directoryを使うtable-driven testを置き、default root、repository parent、複数root、既知layout外、`.system`、plugin namespace、frontmatter mismatch、fallback、同名別path、symlink directory、列挙順の差を検証する。`internal/aggregate` ではall-time、`--days`、strict、grouping非依存、canonical exact match、重複installを検証する。
 
-`cmd/agentstats` では `--unused` のdispatch、`--root` のrepeat、rootなし時のdefault、既存 `skills` output不変、`stats/tools` でのinvalid option、history source error、warningと終了codeを検証する。`internal/output` ではunused JSONのfield、空array、human reportのscope/path、mismatch表示、狭幅、non-TTY、`NO_COLOR`、`--color`強制をgoldenまたはtable-driven testで固定する。既存のread-only testと合わせ、scanがfileを変更しないことも確認する。
+`cmd/catsift` では `--unused` のdispatch、`--root` のrepeat、rootなし時のdefault、既存 `skills` output不変、`stats/tools` でのinvalid option、history source error、warningと終了codeを検証する。`internal/output` ではunused JSONのfield、空array、human reportのscope/path、mismatch表示、狭幅、non-TTY、`NO_COLOR`、`--color`強制をgoldenまたはtable-driven testで固定する。既存のread-only testと合わせ、scanがfileを変更しないことも確認する。
 
 ## Risks / Trade-offs
 
@@ -136,6 +136,6 @@ frontmatterのmissing/invalidはSkill directoryの通常状態としてwarning�
 
 ## Migration Plan
 
-永続dataや履歴fileのmigrationは不要である。実装時はinventory package、name resolver共有化、aggregateのunused判定、outputのunused view、CLI wiring、test、README更新の順で追加する。既存の `agentstats skills` と他commandのsnapshotを先に固定し、`--unused` のfixtureを追加した後に全体testを実行する。
+永続dataや履歴fileのmigrationは不要である。実装時はinventory package、name resolver共有化、aggregateのunused判定、outputのunused view、CLI wiring、test、README更新の順で追加する。既存の `catsift skills` と他commandのsnapshotを先に固定し、`--unused` のfixtureを追加した後に全体testを実行する。
 
-release後に戻す場合は旧binaryへrollbackするだけでよい。agentstatsはCodex履歴とSkill fileを変更せず、inventory cacheも作成しないため、user dataのrollback手順は発生しない。
+release後に戻す場合は旧binaryへrollbackするだけでよい。catsiftはCodex履歴とSkill fileを変更せず、inventory cacheも作成しないため、user dataのrollback手順は発生しない。

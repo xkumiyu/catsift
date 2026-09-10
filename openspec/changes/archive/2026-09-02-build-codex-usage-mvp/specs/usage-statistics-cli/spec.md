@@ -5,10 +5,10 @@ Codexのsession・user prompt・Tool・Skill利用を、system logではなく�
 ## ADDED Requirements
 
 ### Requirement: overview統計を表示する
-`agentstats stats` は対象Agentと期間が分かるreport titleに続けて、Sessions、User Prompts、Tool Calls、およびSkill Usesを視覚的に区切られたsummaryとして表示しなければならない（SHALL）。Tool Callsはeffective Tool view、Skill Usesはturn単位で重複排除した全確認状態の利用を使用しなければならない（SHALL）。
+`catsift stats` は対象Agentと期間が分かるreport titleに続けて、Sessions、User Prompts、Tool Calls、およびSkill Usesを視覚的に区切られたsummaryとして表示しなければならない（SHALL）。Tool Callsはeffective Tool view、Skill Usesはturn単位で重複排除した全確認状態の利用を使用しなければならない（SHALL）。
 
 #### Scenario: 履歴が存在する
-- **WHEN** userが有効なCodex履歴に対して `agentstats stats` を実行する
+- **WHEN** userが有効なCodex履歴に対して `catsift stats` を実行する
 - **THEN** システムはCodexと対象期間を示すtitle、およびlabel付きの4つの集計値を既定のhuman-readable report形式でstdoutへ出力する
 
 #### Scenario: 対象履歴が空である
@@ -16,14 +16,14 @@ Codexのsession・user prompt・Tool・Skill利用を、system logではなく�
 - **THEN** システムは各集計値を0として出力するとともに、選択期間に利用がないことを説明するempty-state messageを表示して0で終了する
 
 ### Requirement: Tool統計を表示する
-`agentstats tools` はreport titleと選択中の期間・layerに続けて、canonical Tool名ごとのCalls、Failures、およびLast Usedを見出し付きtableとして表示し、row数と総Callsをfooterへ表示しなければならない（SHALL）。既定ではeffective layerを集計し、`--layer effective|runtime|model` により集計layerを選択できなければならない（SHALL）。
+`catsift tools` はreport titleと選択中の期間・layerに続けて、canonical Tool名ごとのCalls、Failures、およびLast Usedを見出し付きtableとして表示し、row数と総Callsをfooterへ表示しなければならない（SHALL）。既定ではeffective layerを集計し、`--layer effective|runtime|model` により集計layerを選択できなければならない（SHALL）。
 
 #### Scenario: 既定のTool統計を表示する
-- **WHEN** userがlayer指定なしで `agentstats tools` を実行する
+- **WHEN** userがlayer指定なしで `catsift tools` を実行する
 - **THEN** システムはeffective Tool利用をCalls降順、同数の場合はTool名昇順で、選択layerが分かるhuman-readable tableとして出力する
 
 #### Scenario: model layerを指定する
-- **WHEN** userが `agentstats tools --layer model` を実行する
+- **WHEN** userが `catsift tools --layer model` を実行する
 - **THEN** システムはruntime actionではなくmodel layerのTool callだけを集計する
 
 #### Scenario: 無効なlayerを指定する
@@ -31,14 +31,14 @@ Codexのsession・user prompt・Tool・Skill利用を、system logではなく�
 - **THEN** システムは引数errorをstderrへ出力し、非0の終了codeを返す
 
 ### Requirement: Skill統計を表示する
-`agentstats skills` はreport titleと選択中の期間・strict状態に続けて、Skill名ごとのExplicit、Implicit、Confirmed、Inferred、Unconfirmed、Total、およびLast Usedを集計しなければならない（SHALL）。human-readable reportは利用可能な幅に応じて内訳columnを調整できるが、Skill名とTotalを常に表示しなければならない（SHALL）。JSONはすべての集計fieldを保持しなければならない（SHALL）。`--strict` が指定された場合はstateが `confirmed` の利用だけをTotalと各mode集計の対象にしなければならない（SHALL）。
+`catsift skills` はreport titleと選択中の期間・strict状態に続けて、Skill名ごとのExplicit、Implicit、Confirmed、Inferred、Unconfirmed、Total、およびLast Usedを集計しなければならない（SHALL）。human-readable reportは利用可能な幅に応じて内訳columnを調整できるが、Skill名とTotalを常に表示しなければならない（SHALL）。JSONはすべての集計fieldを保持しなければならない（SHALL）。`--strict` が指定された場合はstateが `confirmed` の利用だけをTotalと各mode集計の対象にしなければならない（SHALL）。
 
 #### Scenario: 全Skill観測を表示する
-- **WHEN** userが `agentstats skills` を実行する
+- **WHEN** userが `catsift skills` を実行する
 - **THEN** システムは全確認状態のSkill利用をTotal降順、同数の場合はSkill名昇順で、確認状態の内訳が判別できるhuman-readable tableとして出力する
 
 #### Scenario: strict modeを使用する
-- **WHEN** userが `agentstats skills --strict` を実行する
+- **WHEN** userが `catsift skills --strict` を実行する
 - **THEN** システムは `confirmed` でないSkill利用を件数とLast Usedの算出から除外する
 
 #### Scenario: 同一利用に複数の証拠がある
@@ -49,11 +49,11 @@ Codexのsession・user prompt・Tool・Skill利用を、system logではなく�
 `stats`、`tools`、`skills` は共通して `--days`、`--codex-home`、`--color auto|always|never` を受け付けなければならない（SHALL）。filterとsource解決はすべての出力形式で同じ結果集合へ適用しなければならない（SHALL）。
 
 #### Scenario: 30日分のSkill統計を取得する
-- **WHEN** userが `agentstats skills --days 30` を実行する
+- **WHEN** userが `catsift skills --days 30` を実行する
 - **THEN** システムはcutoff以後の観測だけからSkill統計を生成する
 
 #### Scenario: 別のCodex homeを集計する
-- **WHEN** userが `agentstats stats --codex-home /tmp/codex-home` を実行する
+- **WHEN** userが `catsift stats --codex-home /tmp/codex-home` を実行する
 - **THEN** システムは指定先だけをsourceとしてoverviewを生成する
 
 ### Requirement: human-readable report・JSONを提供する
@@ -105,14 +105,14 @@ human-readable reportは取得可能なterminal幅へ収まるようにlayoutを
 `tools` または `skills` の対象rowが0件の場合、human-readable reportは空tableだけを表示せず、対象期間に該当利用がないことと適用中のfilterを説明しなければならない（SHALL）。JSONは空arrayを出力しなければならない（SHALL）。
 
 #### Scenario: 期間内にSkill利用がない
-- **WHEN** userが `agentstats skills --days 1` を実行し、対象Skill利用が0件である
+- **WHEN** userが `catsift skills --days 1` を実行し、対象Skill利用が0件である
 - **THEN** human-readable reportは選択期間にSkill利用が見つからないことを説明して0で終了する
 
 ### Requirement: CLI errorとwarningを分離する
 無効なcommand・option・値、または必須sourceを解決できない場合、システムは簡潔なerrorをstderrへ出力して非0で終了しなければならない（SHALL）。一部の履歴だけをskipして有効な結果を生成できる場合は、結果をstdout、warning要約をstderrへ出力して0で終了しなければならない（SHALL）。
 
 #### Scenario: 未知のcommandを指定する
-- **WHEN** userが `agentstats unknown` を実行する
+- **WHEN** userが `catsift unknown` を実行する
 - **THEN** システムは利用可能なcommandを示すerrorをstderrへ出力し、非0で終了する
 
 #### Scenario: machine-readable出力中にwarningが発生する

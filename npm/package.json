@@ -1,10 +1,10 @@
 {
-  "name": "@xkumiyu/agentstats",
-  "version": "0.0.0",
+  "name": "catsift",
+  "version": "0.3.0",
   "description": "CLI for inspecting Codex usage",
   "license": "MIT",
   "bin": {
-    "agentstats": "bin/agentstats.js"
+    "catsift": "bin/catsift.js"
   },
   "files": [
     "bin",
@@ -25,9 +25,9 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/xkumiyu/agentstats.git"
+    "url": "git+https://github.com/xkumiyu/catsift.git"
   },
-  "homepage": "https://github.com/xkumiyu/agentstats",
+  "homepage": "https://github.com/xkumiyu/catsift",
   "publishConfig": {
     "access": "public",
     "registry": "https://registry.npmjs.org"

@@ -27,7 +27,7 @@ func BenchmarkLoadCache(b *testing.B) {
 	now := time.Date(2026, 1, 3, 0, 0, 0, 0, time.UTC)
 	run := func(cacheDir string, days int, daysSet bool) {
 		b.Helper()
-		if _, err := Load("/tmp/agentstats-benchmark-ctx", IngestOptions{DataRoot: "/tmp/agentstats-benchmark-ctx", Now: now, Days: days, DaysSet: daysSet, CacheDir: cacheDir, Runner: runner}); err != nil {
+		if _, err := Load("/tmp/catsift-benchmark-ctx", IngestOptions{DataRoot: "/tmp/catsift-benchmark-ctx", Now: now, Days: days, DaysSet: daysSet, CacheDir: cacheDir, Runner: runner}); err != nil {
 			b.Fatal(err)
 		}
 	}

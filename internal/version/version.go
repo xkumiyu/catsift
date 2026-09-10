@@ -1,4 +1,4 @@
-// Package version resolves the version embedded in an agentstats binary.
+// Package version resolves the version embedded in a CatSift binary.
 package version
 
 import (

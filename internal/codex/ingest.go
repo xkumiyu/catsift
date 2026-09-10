@@ -14,8 +14,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/xkumiyu/agentstats/internal/cache"
-	"github.com/xkumiyu/agentstats/internal/usage"
+	"github.com/xkumiyu/catsift/internal/cache"
+	"github.com/xkumiyu/catsift/internal/usage"
 )
 
 const DefaultMaxLineBytes = 4 << 20

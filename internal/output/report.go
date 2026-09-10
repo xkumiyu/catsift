@@ -13,9 +13,9 @@ import (
 	"time"
 
 	"charm.land/lipgloss/v2"
-	"github.com/xkumiyu/agentstats/internal/aggregate"
-	"github.com/xkumiyu/agentstats/internal/skillinventory"
-	"github.com/xkumiyu/agentstats/internal/usage"
+	"github.com/xkumiyu/catsift/internal/aggregate"
+	"github.com/xkumiyu/catsift/internal/skillinventory"
+	"github.com/xkumiyu/catsift/internal/usage"
 	"golang.org/x/term"
 )
 

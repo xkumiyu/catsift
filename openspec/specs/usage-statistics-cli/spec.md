@@ -7,21 +7,21 @@ Codexのsession・user prompt・Tool・Skill利用を、system logではなく�
 ## Requirements
 
 ### Requirement: overview統計を表示する
-`agentstats stats` は内容を示す `USAGE OVERVIEW` headingに続けて、入力source、対象Agent一覧、および期間をlabel付きcontext行として表示し、Sessions、Turns、User Prompts、Tool Calls、Skill Uses (turn)、およびSkill Uses (session)を視覚的に区切られたsummaryとして表示しなければならない（SHALL）。ctx sourceで複数Agentが対象になる場合、6つの集計値は選択scope内の全Agentを合算しなければならない（SHALL）。グローバルな実行ファイル名または製品名だけのtitle（例: `AGENTSTATS`、`agentstats stats`）をreportのheadingとして表示してはならない（MUST NOT）。Tool Callsはeffective Tool view、Skill Uses (turn)はturn単位、Skill Uses (session)はsession単位で重複排除した全確認状態の利用を使用しなければならない（SHALL）。`stats` はSkill groupingを単一選択する `--group-by` optionを受け付けてはならない（MUST NOT）。
+`catsift stats` は内容を示す `USAGE OVERVIEW` headingに続けて、入力source、対象Agent一覧、および期間をlabel付きcontext行として表示し、Sessions、Turns、User Prompts、Tool Calls、Skill Uses (turn)、およびSkill Uses (session)を視覚的に区切られたsummaryとして表示しなければならない（SHALL）。ctx sourceで複数Agentが対象になる場合、6つの集計値は選択scope内の全Agentを合算しなければならない（SHALL）。グローバルな実行ファイル名または製品名だけのtitle（例: `CatSift`、`catsift stats`）をreportのheadingとして表示してはならない（MUST NOT）。Tool Callsはeffective Tool view、Skill Uses (turn)はturn単位、Skill Uses (session)はsession単位で重複排除した全確認状態の利用を使用しなければならない（SHALL）。`stats` はSkill groupingを単一選択する `--group-by` optionを受け付けてはならない（MUST NOT）。
 
 #### Scenario: 履歴が存在する
 
-- **WHEN** userが有効なCodex履歴に対して `agentstats stats` を実行する
+- **WHEN** userが有効なCodex履歴に対して `catsift stats` を実行する
 - **THEN** システムは `USAGE OVERVIEW` heading、`Source: Codex (~/.codex)`、`Agents: Codex`、対象期間、および6つの集計値を既定のhuman-readable report形式でstdoutへ出力する
 
 #### Scenario: ctx sourceに複数Agentの履歴が存在する
 
-- **WHEN** userが `agentstats stats --source ctx` を実行し、ctxの選択scopeにCodexとOpenCodeの履歴がある
+- **WHEN** userが `catsift stats --source ctx` を実行し、ctxの選択scopeにCodexとOpenCodeの履歴がある
 - **THEN** システムは `Agents: Codex, OpenCode` を表示し、両AgentのSessions、Turns、User Prompts、Tool Calls、Skill Uses (turn)、およびSkill Uses (session)を合算して出力する
 
 #### Scenario: sourceと入力pathをcompactに表示する
 
-- **WHEN** userが `agentstats stats --source ctx --ctx-data-root /path/to/ctx-data` を実行する
+- **WHEN** userが `catsift stats --source ctx --ctx-data-root /path/to/ctx-data` を実行する
 - **THEN** システムは `Source: ctx (/path/to/ctx-data)` を1行で表示し、別の `History` または `Data root` context行を追加しない
 
 #### Scenario: 対象履歴が空である
@@ -30,11 +30,11 @@ Codexのsession・user prompt・Tool・Skill利用を、system logではなく�
 - **THEN** システムは `USAGE OVERVIEW` headingと対象Agent・選択期間のcontextを表示し、各集計値を0として出力するとともに、選択期間に利用がないことを説明するempty-state messageを表示して0で終了する
 
 ### Requirement: Tool統計を表示する
-`agentstats tools` は `TOOL USAGE` headingに続けて、入力source、対象Agent一覧、選択中の期間、およびlayerをそれぞれlabel付きのcontext行として表示し、canonical Tool名ごとのCalls、Failures、およびLast Usedを見出し付きtableとして表示しなければならない（SHALL）。ctx sourceで複数Agentが対象になる場合、同じcanonical Tool名の観測はAgentをまたいで合算しなければならない（SHALL）。footerは対象Tool数と総Callsをdomain用語で表示し、`Rows`という実装用語や中点区切りを使用してはならない（MUST NOT）。既定ではeffective layerを集計し、`--layer effective|runtime|model` により集計layerを選択できなければならない（SHALL）。
+`catsift tools` は `TOOL USAGE` headingに続けて、入力source、対象Agent一覧、選択中の期間、およびlayerをそれぞれlabel付きのcontext行として表示し、canonical Tool名ごとのCalls、Failures、およびLast Usedを見出し付きtableとして表示しなければならない（SHALL）。ctx sourceで複数Agentが対象になる場合、同じcanonical Tool名の観測はAgentをまたいで合算しなければならない（SHALL）。footerは対象Tool数と総Callsをdomain用語で表示し、`Rows`という実装用語や中点区切りを使用してはならない（MUST NOT）。既定ではeffective layerを集計し、`--layer effective|runtime|model` により集計layerを選択できなければならない（SHALL）。
 
 #### Scenario: 既定のTool統計を表示する
 
-- **WHEN** userがlayer指定なしで `agentstats tools` を実行する
+- **WHEN** userがlayer指定なしで `catsift tools` を実行する
 - **THEN** システムは `TOOL USAGE` heading、Source・Agents・Period・Layerのcontext、effective Tool利用をCalls降順、同数の場合はTool名昇順で出力する
 
 #### Scenario: 複数Agentの同じcanonical Toolを合算する
@@ -44,12 +44,12 @@ Codexのsession・user prompt・Tool・Skill利用を、system logではなく�
 
 #### Scenario: Tool footerを表示する
 
-- **WHEN** userが対象Toolのあるhuman-readable `agentstats tools` reportを表示する
+- **WHEN** userが対象Toolのあるhuman-readable `catsift tools` reportを表示する
 - **THEN** システムはfooterに `N tools, M calls total` 相当の、対象Tool数と総Callsが分かる表現を表示する。1件の場合は `tool` と `call`、0件の場合は `tools` と `calls` のように自然な単数・複数形を使用する
 
 #### Scenario: model layerを指定する
 
-- **WHEN** userが `agentstats tools --layer model` を実行する
+- **WHEN** userが `catsift tools --layer model` を実行する
 - **THEN** システムはruntime actionではなくmodel layerのTool callだけを集計する
 
 #### Scenario: 無効なlayerを指定する
@@ -58,11 +58,11 @@ Codexのsession・user prompt・Tool・Skill利用を、system logではなく�
 - **THEN** システムは引数errorをstderrへ出力し、非0の終了codeを返す
 
 ### Requirement: Skill統計を表示する
-`agentstats skills` は `SKILL USAGE` headingに続けて、入力source、対象Agent一覧、選択中の期間、grouping、およびstrict状態をそれぞれlabel付きのcontext行として表示し、Skill名ごとのExplicit、Implicit、Confirmed、Inferred、Unconfirmed、Total、およびLast Usedを集計しなければならない（SHALL）。ctx sourceで複数Agentが対象になる場合、同じcanonical Skill名の利用はAgentをまたいで合算しなければならない（SHALL）。human-readable reportは利用可能な幅に応じて内訳columnを調整できるが、Skill名とTotalを常に表示しなければならない（SHALL）。footerは対象Skill数と総Usesをdomain用語で表示し、`Rows`という実装用語や中点区切りを使用してはならない（MUST NOT）。JSONはすべての集計fieldを保持しなければならない（SHALL）。`--strict` が指定された場合はstateが `confirmed` の利用だけをTotalと各mode集計の対象にしなければならない（SHALL）。
+`catsift skills` は `SKILL USAGE` headingに続けて、入力source、対象Agent一覧、選択中の期間、grouping、およびstrict状態をそれぞれlabel付きのcontext行として表示し、Skill名ごとのExplicit、Implicit、Confirmed、Inferred、Unconfirmed、Total、およびLast Usedを集計しなければならない（SHALL）。ctx sourceで複数Agentが対象になる場合、同じcanonical Skill名の利用はAgentをまたいで合算しなければならない（SHALL）。human-readable reportは利用可能な幅に応じて内訳columnを調整できるが、Skill名とTotalを常に表示しなければならない（SHALL）。footerは対象Skill数と総Usesをdomain用語で表示し、`Rows`という実装用語や中点区切りを使用してはならない（MUST NOT）。JSONはすべての集計fieldを保持しなければならない（SHALL）。`--strict` が指定された場合はstateが `confirmed` の利用だけをTotalと各mode集計の対象にしなければならない（SHALL）。
 
 #### Scenario: 全Skill観測を表示する
 
-- **WHEN** userが `agentstats skills` を実行する
+- **WHEN** userが `catsift skills` を実行する
 - **THEN** システムは `SKILL USAGE` heading、Source・Agents・Period・Group by・Strictのcontext、全確認状態のSkill利用をTotal降順、同数の場合はSkill名昇順で出力する
 
 #### Scenario: 複数Agentの同じSkillを合算する
@@ -72,12 +72,12 @@ Codexのsession・user prompt・Tool・Skill利用を、system logではなく�
 
 #### Scenario: Skill footerを表示する
 
-- **WHEN** userが対象Skillのあるhuman-readable `agentstats skills` reportを表示する
+- **WHEN** userが対象Skillのあるhuman-readable `catsift skills` reportを表示する
 - **THEN** システムはfooterに `N skills, M uses total` 相当の、対象Skill数と総Usesが分かる表現を表示する。1件の場合は `skill` と `use`、0件の場合は `skills` と `uses` のように自然な単数・複数形を使用する
 
 #### Scenario: strict modeを使用する
 
-- **WHEN** userが `agentstats skills --strict` を実行する
+- **WHEN** userが `catsift skills --strict` を実行する
 - **THEN** システムは `confirmed` でないSkill利用を件数とLast Usedの算出から除外する
 
 #### Scenario: 同一利用に複数の証拠がある
@@ -90,12 +90,12 @@ Codexのsession・user prompt・Tool・Skill利用を、system logではなく�
 
 #### Scenario: source未指定時はCodexを使用する
 
-- **WHEN** userが `agentstats stats` を実行する
+- **WHEN** userが `catsift stats` を実行する
 - **THEN** システムは既存のCodex home解決規則に従ってCodexだけを入力sourceにする
 
 #### Scenario: ctx sourceとdata rootを指定する
 
-- **WHEN** userが `agentstats stats --source ctx --ctx-data-root /path/to/ctx` を実行する
+- **WHEN** userが `catsift stats --source ctx --ctx-data-root /path/to/ctx` を実行する
 - **THEN** システムは指定されたctx data rootだけを入力scopeとして使用する
 
 #### Scenario: source固有optionを誤って組み合わせる
@@ -109,11 +109,11 @@ Codexのsession・user prompt・Tool・Skill利用を、system logではなく�
 - **THEN** システムはsource選択を拒否し、両sourceを合算したreportを生成しない
 
 #### Scenario: 30日分のSkill統計を取得する
-- **WHEN** userが `agentstats skills --days 30` を実行する
+- **WHEN** userが `catsift skills --days 30` を実行する
 - **THEN** システムはcutoff以後の観測だけからSkill統計を生成する
 
 #### Scenario: 別のCodex homeを集計する
-- **WHEN** userが `agentstats stats --codex-home /tmp/codex-home` を実行する
+- **WHEN** userが `catsift stats --codex-home /tmp/codex-home` を実行する
 - **THEN** システムは指定先だけをsourceとしてoverviewを生成する
 
 ### Requirement: human-readable report・JSONを提供する
@@ -132,7 +132,7 @@ Token usageをhuman-readable reportへ表示する場合、`Total Tokens`を親�
 
 #### Scenario: contextを読みやすく表示する
 
-- **WHEN** userが `agentstats tools` または `agentstats skills` を実行する
+- **WHEN** userが `catsift tools` または `catsift skills` を実行する
 - **THEN** システムは `Source: ...`、`Agents: ...`、`Period: ...`、およびcommand固有のfilterを別々のlabel付き行へ出力し、項目間の区切りに中点や実装用の`Rows`を使用しない
 
 #### Scenario: 複数Agentのhuman-readable reportを表示する
@@ -195,14 +195,14 @@ human-readable reportは取得可能なterminal幅へ収まるようにlayoutを
 `tools` または `skills` の対象rowが0件の場合、human-readable reportは空tableだけを表示せず、対象期間に該当利用がないことと適用中のfilterを説明しなければならない（SHALL）。JSONは空arrayを出力しなければならない（SHALL）。
 
 #### Scenario: 期間内にSkill利用がない
-- **WHEN** userが `agentstats skills --days 1` を実行し、対象Skill利用が0件である
+- **WHEN** userが `catsift skills --days 1` を実行し、対象Skill利用が0件である
 - **THEN** human-readable reportは選択期間にSkill利用が見つからないことを説明して0で終了する
 
 ### Requirement: CLI errorとwarningを分離する
 無効なcommand・option・値、または必須sourceを解決できない場合、システムは簡潔なerrorをstderrへ出力して非0で終了しなければならない（SHALL）。一部の履歴だけをskipして有効な結果を生成できる場合は、結果をstdout、warning要約をstderrへ出力して0で終了しなければならない（SHALL）。
 
 #### Scenario: 未知のcommandを指定する
-- **WHEN** userが `agentstats unknown` を実行する
+- **WHEN** userが `catsift unknown` を実行する
 - **THEN** システムは利用可能なcommandを示すerrorをstderrへ出力し、非0で終了する
 
 #### Scenario: machine-readable出力中にwarningが発生する
@@ -232,26 +232,26 @@ human-readable reportは取得可能なterminal幅へ収まるようにlayoutを
 
 ### Requirement: skills commandでunused viewを選択できる
 
-`agentstats skills` は `--unused` optionを受け付け、指定された場合は通常のSkill利用集計ではなく、`unused-skill-report` capabilityで定義された未使用Skillreportを生成しなければならない（SHALL）。`--unused` がない場合の `agentstats skills` の集計結果とoutput形式は変更してはならない（MUST NOT）。`--root` は `--unused` と同時に指定された場合だけ有効で、repeatableに受け付けなければならない（SHALL）。
+`catsift skills` は `--unused` optionを受け付け、指定された場合は通常のSkill利用集計ではなく、`unused-skill-report` capabilityで定義された未使用Skillreportを生成しなければならない（SHALL）。`--unused` がない場合の `catsift skills` の集計結果とoutput形式は変更してはならない（MUST NOT）。`--root` は `--unused` と同時に指定された場合だけ有効で、repeatableに受け付けなければならない（SHALL）。
 
 #### Scenario: unused viewを明示的に選択する
 
-- **WHEN** userが `agentstats skills --unused` を実行する
+- **WHEN** userが `catsift skills --unused` を実行する
 - **THEN** システムは通常の利用rowではなく、選択されたscopeの未使用Skillだけをreportする
 
 #### Scenario: rootを複数指定する
 
-- **WHEN** userが `agentstats skills --unused --root ~/src --root ~/work` を実行する
+- **WHEN** userが `catsift skills --unused --root ~/src --root ~/work` を実行する
 - **THEN** システムは2つのrootをscopeとして未使用Skillを判定する
 
 #### Scenario: rootをunused viewなしで指定する
 
-- **WHEN** userが `agentstats skills --root ~/src` を実行する
+- **WHEN** userが `catsift skills --root ~/src` を実行する
 - **THEN** システムは `--root` が `--unused` と共にだけ使えることを示す引数errorをstderrへ出力し、非0で終了する
 
 #### Scenario: 他の統計commandへunused optionを指定する
 
-- **WHEN** userが `agentstats stats --unused` または `agentstats tools --unused` を実行する
+- **WHEN** userが `catsift stats --unused` または `catsift tools --unused` を実行する
 - **THEN** システムはoption errorをstderrへ出力し、既存のstatsまたはtools reportを生成しない
 
 ### Requirement: unused viewが既存の履歴filterとoutput optionを継承する
@@ -260,12 +260,12 @@ human-readable reportは取得可能なterminal幅へ収まるようにlayoutを
 
 #### Scenario: days filterをunused判定へ適用する
 
-- **WHEN** userが `agentstats skills --unused --days 30` を実行する
+- **WHEN** userが `catsift skills --unused --days 30` を実行する
 - **THEN** システムは直近30日間の履歴だけを使用済み判定へ使い、report contextにもその期間を示す
 
 #### Scenario: strict filterをunused判定へ適用する
 
-- **WHEN** userが `agentstats skills --unused --strict` を実行する
+- **WHEN** userが `catsift skills --unused --strict` を実行する
 - **THEN** システムは `confirmed` の履歴だけを使用済みとして扱う
 
 #### Scenario: JSON outputのwarningを分離する

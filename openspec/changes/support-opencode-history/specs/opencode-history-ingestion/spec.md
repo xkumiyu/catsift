@@ -1,6 +1,6 @@
 ## Purpose
 
-OpenCodeがlocal machineへ保存したsession履歴を安全に読み取り、ctxを介さずにagentstatsの共通利用統計へ取り込めるようにする。
+OpenCodeがlocal machineへ保存したsession履歴を安全に読み取り、ctxを介さずにcatsiftの共通利用統計へ取り込めるようにする。
 
 ## ADDED Requirements
 

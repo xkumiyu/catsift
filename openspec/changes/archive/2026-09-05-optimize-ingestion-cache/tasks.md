@@ -1,6 +1,6 @@
 ## 1. Cache基盤
 
-- [x] 1.1 `os.UserCacheDir()`配下のversion付き`agentstats` cache directory、source namespace、hash化keyを実装し、Codexとctxの同一名scopeが衝突しないことをcache基盤のunit testで確認する
+- [x] 1.1 `os.UserCacheDir()`配下のversion付き`catsift` cache directory、source namespace、hash化keyを実装し、Codexとctxの同一名scopeが衝突しないことをcache基盤のunit testで確認する
 - [x] 1.2 cache envelopeのschema version、source kind、scope、source revision、parser version、complete markerを実装し、version・scope・revision不一致をcache missとして扱うunit testで確認する
 - [x] 1.3 temporary fileへのflush・close後のatomic rename、`0700` directory、`0600` file、破損・未完了cacheの無視を実装し、書込中断後も既存の有効cacheが残るtestで確認する
 

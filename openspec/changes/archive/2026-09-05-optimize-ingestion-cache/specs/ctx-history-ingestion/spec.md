@@ -30,7 +30,7 @@ ctx sourceで有効なgeneration cacheを利用する場合、システムはcac
 
 #### Scenario: ctxの直近1日をcacheから集計する
 
-- **WHEN** complete generation cacheが存在し、userが`agentstats stats --source ctx --days 1`を実行する
+- **WHEN** complete generation cacheが存在し、userが`catsift stats --source ctx --days 1`を実行する
 - **THEN** システムはgeneration cache全体から直近24時間のeventだけを集計し、freshな全page列挙後にfilterした場合と同じ結果を出力する
 
 #### Scenario: cacheがない状態でctxの期間指定する

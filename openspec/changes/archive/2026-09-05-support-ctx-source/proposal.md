@@ -1,6 +1,6 @@
 ## Why
 
-現在の `agentstats` はCodexのsession JSONLだけを入力源としており、複数のAgentの履歴をctxで一元管理している環境を直接集計できない。ctxの内部DBへ依存せず、ctxが提供する読み取り専用のイベント出力を入力源として選択できれば、Codexの既存利用を保ったまま複数Agentの利用状況を同じreportで確認できる。
+現在の `catsift` はCodexのsession JSONLだけを入力源としており、複数のAgentの履歴をctxで一元管理している環境を直接集計できない。ctxの内部DBへ依存せず、ctxが提供する読み取り専用のイベント出力を入力源として選択できれば、Codexの既存利用を保ったまま複数Agentの利用状況を同じreportで確認できる。
 
 ## What Changes
 

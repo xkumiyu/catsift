@@ -1,6 +1,6 @@
-name: agentstats
+name: catsift
 version: 1.0.0
-description: APM project for agentstats
+description: APM project for CatSift
 author: xkumiyu
 # Which agent platforms to deploy to.
 # Resolution order: --target flag > this field > auto-detect from filesystem.

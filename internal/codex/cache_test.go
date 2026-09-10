@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xkumiyu/agentstats/internal/aggregate"
-	"github.com/xkumiyu/agentstats/internal/cache"
-	"github.com/xkumiyu/agentstats/internal/usage"
+	"github.com/xkumiyu/catsift/internal/aggregate"
+	"github.com/xkumiyu/catsift/internal/cache"
+	"github.com/xkumiyu/catsift/internal/usage"
 )
 
 func TestLoadCachesCompleteFileSnapshotAndFiltersDaysLocally(t *testing.T) {

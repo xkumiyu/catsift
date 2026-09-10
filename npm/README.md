@@ -1,9 +1,9 @@
-# @xkumiyu/agentstats
+# CatSift
 
-Install the agentstats CLI with npm:
+Install the CatSift CLI with npm:
 
 ```sh
-npm install --global @xkumiyu/agentstats
+npm install --global catsift
 ```
 
 The package includes the native executable for each supported platform and

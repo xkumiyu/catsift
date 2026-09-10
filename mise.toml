@@ -9,7 +9,7 @@ _.path = "{{config_root}}/bin"
 
 [tasks.build]
 description = "Build the CLI"
-run = "go build -o ./bin/agentstats ./cmd/agentstats"
+run = "go build -o ./bin/catsift ./cmd/catsift"
 
 [tasks.test]
 description = "Run race-enabled tests"
@@ -38,6 +38,37 @@ run = "npm test --prefix npm"
 [tasks.npm-pack-check]
 description = "Validate npm package contents"
 run = "npm pack ./npm --dry-run --ignore-scripts"
+
+[tasks.npm-stage-publish]
+description = "Build and stage the npm package for publishing"
+tools.goreleaser = "2"
+usage = '''
+arg "<version>" help="Release version to stage (for example, 0.3.0)"
+'''
+run = '''
+set -eu
+
+version="${usage_version?}"
+release_tag="$(git describe --tags --exact-match HEAD)"
+test "$release_tag" = "v$version"
+test ! -e dist
+test ! -L dist
+test -z "$(find npm/bin -maxdepth 1 -type f -name 'catsift-bin-*' -print -quit)"
+
+temp_dir="$(mktemp -d)"
+cp npm/package.json "$temp_dir/package.json"
+cleanup() {
+  cp "$temp_dir/package.json" npm/package.json
+  find npm/bin -maxdepth 1 -type f -name 'catsift-bin-*' -delete
+  rm -rf -- "$temp_dir" dist
+}
+trap cleanup EXIT
+
+goreleaser release --clean --skip=publish
+npm pkg set version="$version" --prefix npm
+node .github/scripts/stage-npm-binaries.js "$version"
+npm stage publish ./npm
+'''
 
 [tasks.release-check]
 description = "Check GoReleaser configuration"

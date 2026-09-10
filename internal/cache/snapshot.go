@@ -3,7 +3,7 @@ package cache
 import (
 	"time"
 
-	"github.com/xkumiyu/agentstats/internal/usage"
+	"github.com/xkumiyu/catsift/internal/usage"
 )
 
 // Snapshot is the compact, source-neutral data needed by aggregate reports.

@@ -7,7 +7,7 @@ Codex のローカル履歴から「どの Tool と Skill が実際に使われ�
 - Codex のローカル session JSONL を読み取り、session・user prompt・Tool実行・Skill利用を抽出する。
 - model が選択した外側の Tool call と、実際に完了した runtime action を区別し、通常の Tool統計では runtime action を優先する。
 - 注入された `<skill>`、structured Skill tool、`SKILL.md` または Skill配下scriptへのアクセスから Skill利用を検出し、明示利用と推定利用を区別する。
-- `agentstats stats`、`agentstats tools`、`agentstats skills` を提供する。
+- `catsift stats`、`catsift tools`、`catsift skills` を提供する。
 - 期間filterと、人が集計条件・主要数値・内訳を把握しやすいstatic report・JSON出力を提供し、Skill統計には確認可能な利用証拠だけを対象にする strict mode を提供する。
 - human-readable reportはterminal capabilityに応じて見出し、整列、色、compact layoutを使い、redirect時やcolor無効時も装飾なしで読みやすく表示する。
 - source record、検出方式、観測layerを保持する共通Eventへ正規化し、未知または破損したrecordを安全に扱う。

@@ -1,12 +1,12 @@
-# agentstats
+# CatSift: Sift through Coding Agent Traces
 
-agentstats is a command-line tool for inspecting AI coding agent usage.
+CatSift is a command-line tool for inspecting AI coding agent usage.
 It aggregates local history and reports session, tool, and skill usage.
 
-[日本語版 / Japanese](README.ja.md)
+[日本語版](README.ja.md)
 
 > [!NOTE]
-> agentstats supports:
+> CatSift supports:
 > - Codex local history (default)
 > - OpenCode local history
 > - [ctx](https://github.com/ctxrs/ctx) event stream
@@ -14,7 +14,7 @@ It aggregates local history and reports session, tool, and skill usage.
 ## Quick start
 
 ```sh
-npx @xkumiyu/agentstats
+npx catsift
 ```
 
 ## Installation
@@ -22,15 +22,15 @@ npx @xkumiyu/agentstats
 Install with npm:
 
 ```sh
-npm install --global @xkumiyu/agentstats
+npm install --global catsift
 ```
 
-Or download from [GitHub Releases](https://github.com/xkumiyu/agentstats/releases).
+Or download from [GitHub Releases](https://github.com/xkumiyu/catsift/releases).
 
 Or install from source:
 
 ```sh
-go install github.com/xkumiyu/agentstats/cmd/agentstats@latest
+go install github.com/xkumiyu/catsift/cmd/catsift@latest
 ```
 
 ## Usage
@@ -40,7 +40,7 @@ go install github.com/xkumiyu/agentstats/cmd/agentstats@latest
 Show an overview of agent usage.
 
 ```sh
-agentstats stats
+catsift stats
 ```
 
 ```text
@@ -74,7 +74,7 @@ For ctx sources, token usage is not available.
 Show which skills were used and how their use was detected.
 
 ```sh
-agentstats skills --view mode
+catsift skills --view mode
 ```
 
 ```text
@@ -101,7 +101,7 @@ For more, see [Skill usage details](#skill-usage-details).
 Show calls, failures, and last-used times by canonical tool name.
 
 ```sh
-agentstats tools
+catsift tools
 ```
 
 ```text
@@ -120,8 +120,9 @@ shell          42         0  2026-09-01 12:34 JST
 
 ### Common options
 
-- `--source` selects the history source. Codex local history is the default. An
-  invocation can use only one source.
+- `--source` selects the history source. Codex local history is the default;
+  use `--source ctx` for the ctx event stream. Each invocation reads one source
+  only.
 - `--days N` limits the report to the last N days.
 - `--from YYYY-MM-DD` and `--to YYYY-MM-DD` select an inclusive UTC calendar-date range; either option may be used alone. They cannot be combined with `--days`.
 - `Period` shows the date range of the data actually included in the aggregation.
@@ -131,7 +132,7 @@ shell          42         0  2026-09-01 12:34 JST
 
 ### Skill usage fields
 
-`agentstats skills` reports the following fields:
+`catsift skills` reports the following fields:
 
 | Dimension | Field | Meaning |
 | --- | --- | --- |
@@ -150,10 +151,10 @@ Activation mode and evidence state are independent. A single usage can have evid
 Choose the Skill usage view with `--view`:
 
 ```sh
-agentstats skills --view compact  # Total only
-agentstats skills --view mode     # Activation mode
-agentstats skills --view state    # Evidence state
-agentstats skills --view all      # Both tables
+catsift skills --view compact  # Total only
+catsift skills --view mode     # Activation mode
+catsift skills --view state    # Evidence state
+catsift skills --view all      # Both tables
 ```
 
 The default `--view auto` selects `compact`, `mode`, or `all` from the terminal width.
@@ -164,7 +165,7 @@ Use `--unused` with `skills` to compare the selected history source with the
 installed skill inventory:
 
 ```sh
-agentstats skills --unused
+catsift skills --unused
 ```
 
 Inventory identity is the canonical skill name plus its absolute physical path.
@@ -179,7 +180,7 @@ subsequent runs.
 
 ## Data handling
 
-agentstats reads Codex history, ctx's public read-only event stream, or
+CatSift reads Codex history, ctx's public read-only event stream, or
 OpenCode's local read-only database and never modifies the selected data.
 It does not send history externally, and normal reports do not include prompt
 text, command text, or other raw event details.

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xkumiyu/agentstats/internal/usage"
+	"github.com/xkumiyu/catsift/internal/usage"
 	_ "modernc.org/sqlite"
 )
 

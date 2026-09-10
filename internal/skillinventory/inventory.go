@@ -8,7 +8,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/xkumiyu/agentstats/internal/usage"
+	"github.com/xkumiyu/catsift/internal/usage"
 )
 
 // NameSource identifies how an inventory entry got its canonical name.

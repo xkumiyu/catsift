@@ -6,17 +6,17 @@
 
 #### Scenario: source未指定時はCodexを使用する
 
-- **WHEN** userが`agentstats stats`を実行する
+- **WHEN** userが`catsift stats`を実行する
 - **THEN** システムは既存のCodex home解決規則に従ってCodexだけを入力sourceにする
 
 #### Scenario: ctx sourceとdata rootを指定する
 
-- **WHEN** userが`agentstats stats --source ctx --ctx-data-root /path/to/ctx`を実行する
+- **WHEN** userが`catsift stats --source ctx --ctx-data-root /path/to/ctx`を実行する
 - **THEN** システムは指定されたctx data rootだけを入力scopeとして使用する
 
 #### Scenario: OpenCode sourceとhomeを指定する
 
-- **WHEN** userが`agentstats stats --source opencode --opencode-home /path/to/opencode`を実行する
+- **WHEN** userが`catsift stats --source opencode --opencode-home /path/to/opencode`を実行する
 - **THEN** システムは指定されたOpenCode data rootだけを入力scopeとして使用する
 
 #### Scenario: source固有optionを誤って組み合わせる
@@ -31,12 +31,12 @@
 
 #### Scenario: 30日分のSkill統計を取得する
 
-- **WHEN** userが`agentstats skills --days 30`を実行する
+- **WHEN** userが`catsift skills --days 30`を実行する
 - **THEN** システムはcutoff以後の観測だけからSkill統計を生成する
 
 #### Scenario: 別のCodex homeを集計する
 
-- **WHEN** userが`agentstats stats --codex-home /tmp/codex-home`を実行する
+- **WHEN** userが`catsift stats --codex-home /tmp/codex-home`を実行する
 - **THEN** システムは指定先だけをsourceとしてoverviewを生成する
 
 ### Requirement: human-readable report・JSONを提供する
@@ -56,7 +56,7 @@ Token usageをhuman-readable reportへ表示する場合、`Total Tokens`を親�
 
 #### Scenario: contextを読みやすく表示する
 
-- **WHEN** userが`agentstats tools`または`agentstats skills`を実行する
+- **WHEN** userが`catsift tools`または`catsift skills`を実行する
 - **THEN** システムは`Source: ...`、`Agents: ...`、`Period: ...`、およびcommand固有のfilterを別々のlabel付き行へ出力し、項目間の区切りに中点や実装用の`Rows`を使用しない
 
 #### Scenario: 複数Agentのhuman-readable reportを表示する
@@ -66,7 +66,7 @@ Token usageをhuman-readable reportへ表示する場合、`Total Tokens`を親�
 
 #### Scenario: OpenCode sourceのhuman-readable reportを表示する
 
-- **WHEN** userが`agentstats stats --source opencode --opencode-home /path/to/opencode`を実行する
+- **WHEN** userが`catsift stats --source opencode --opencode-home /path/to/opencode`を実行する
 - **THEN** システムは`Source: OpenCode (/path/to/opencode)`、`Agents: OpenCode`、対象期間、およびOpenCodeから集計した値を表示する
 
 #### Scenario: JSONを出力する
@@ -85,12 +85,12 @@ Token usageをhuman-readable reportへ表示する場合、`Total Tokens`を親�
 
 #### Scenario: days filterをunused判定へ適用する
 
-- **WHEN** userが`agentstats skills --unused --days 30`を実行する
+- **WHEN** userが`catsift skills --unused --days 30`を実行する
 - **THEN** システムは直近30日間の履歴だけを使用済み判定へ使い、report contextにもその期間を示す
 
 #### Scenario: strict filterをunused判定へ適用する
 
-- **WHEN** userが`agentstats skills --unused --strict`を実行する
+- **WHEN** userが`catsift skills --unused --strict`を実行する
 - **THEN** システムは`confirmed`の履歴だけを使用済みとして扱う
 
 #### Scenario: JSON outputのwarningを分離する
@@ -100,5 +100,5 @@ Token usageをhuman-readable reportへ表示する場合、`Total Tokens`を親�
 
 #### Scenario: OpenCode sourceでunused viewを使う
 
-- **WHEN** userが`agentstats skills --source opencode --opencode-home /path/to/opencode --unused`を実行する
+- **WHEN** userが`catsift skills --source opencode --opencode-home /path/to/opencode --unused`を実行する
 - **THEN** システムは指定されたOpenCode履歴だけを使用済み判定へ使い、inventoryの既定scopeは変更しない

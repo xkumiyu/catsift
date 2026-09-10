@@ -7,6 +7,6 @@
 /apm_modules/
 
 # Local build output
-/agentstats
+/catsift
 /bin/
 /dist/

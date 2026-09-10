@@ -2,11 +2,11 @@
 
 ### Requirement: overview統計を表示する
 
-`agentstats stats` は内容を示す `USAGE OVERVIEW` headingに続けて、対象Agentと期間をラベル付きのcontext行として表示し、Sessions、User Prompts、Tool Calls、およびSkill Usesを視覚的に区切られたsummaryとして表示しなければならない（SHALL）。グローバルな実行ファイル名または製品名だけのtitle（例: `AGENTSTATS`、`agentstats stats`）をreportのheadingとして表示してはならない（MUST NOT）。Tool Callsはeffective Tool view、Skill Usesはturn単位で重複排除した全確認状態の利用を使用しなければならない（SHALL）。
+`catsift stats` は内容を示す `USAGE OVERVIEW` headingに続けて、対象Agentと期間をラベル付きのcontext行として表示し、Sessions、User Prompts、Tool Calls、およびSkill Usesを視覚的に区切られたsummaryとして表示しなければならない（SHALL）。グローバルな実行ファイル名または製品名だけのtitle（例: `CatSift`、`catsift stats`）をreportのheadingとして表示してはならない（MUST NOT）。Tool Callsはeffective Tool view、Skill Usesはturn単位で重複排除した全確認状態の利用を使用しなければならない（SHALL）。
 
 #### Scenario: 履歴が存在する
 
-- **WHEN** userが有効なCodex履歴に対して `agentstats stats` を実行する
+- **WHEN** userが有効なCodex履歴に対して `catsift stats` を実行する
 - **THEN** システムは `USAGE OVERVIEW` heading、`Agent: Codex` および対象期間を示すcontext行、label付きの4つの集計値を既定のhuman-readable report形式でstdoutへ出力する
 
 #### Scenario: 対象履歴が空である
@@ -16,21 +16,21 @@
 
 ### Requirement: Tool統計を表示する
 
-`agentstats tools` は `TOOL USAGE` headingに続けて、対象Agent、選択中の期間、およびlayerをそれぞれラベル付きのcontext行として表示し、canonical Tool名ごとのCalls、Failures、およびLast Usedを見出し付きtableとして表示しなければならない（SHALL）。footerは対象Tool数と総Callsをdomain用語で表示し、`Rows`という実装用語や中点区切りを使用してはならない（MUST NOT）。既定ではeffective layerを集計し、`--layer effective|runtime|model` により集計layerを選択できなければならない（SHALL）。
+`catsift tools` は `TOOL USAGE` headingに続けて、対象Agent、選択中の期間、およびlayerをそれぞれラベル付きのcontext行として表示し、canonical Tool名ごとのCalls、Failures、およびLast Usedを見出し付きtableとして表示しなければならない（SHALL）。footerは対象Tool数と総Callsをdomain用語で表示し、`Rows`という実装用語や中点区切りを使用してはならない（MUST NOT）。既定ではeffective layerを集計し、`--layer effective|runtime|model` により集計layerを選択できなければならない（SHALL）。
 
 #### Scenario: 既定のTool統計を表示する
 
-- **WHEN** userがlayer指定なしで `agentstats tools` を実行する
+- **WHEN** userがlayer指定なしで `catsift tools` を実行する
 - **THEN** システムは `TOOL USAGE` heading、Agent・Period・Layerのcontext、effective Tool利用をCalls降順、同数の場合はTool名昇順で、選択layerが分かるhuman-readable tableとして出力する
 
 #### Scenario: Tool footerを表示する
 
-- **WHEN** userが対象Toolのあるhuman-readable `agentstats tools` reportを表示する
+- **WHEN** userが対象Toolのあるhuman-readable `catsift tools` reportを表示する
 - **THEN** システムはfooterに `N tools, M calls total` 相当の、対象Tool数と総Callsが分かる表現を表示する。1件の場合は `tool` と `call`、0件の場合は `tools` と `calls` のように自然な単数・複数形を使用する
 
 #### Scenario: model layerを指定する
 
-- **WHEN** userが `agentstats tools --layer model` を実行する
+- **WHEN** userが `catsift tools --layer model` を実行する
 - **THEN** システムはruntime actionではなくmodel layerのTool callだけを集計する
 
 #### Scenario: 無効なlayerを指定する
@@ -40,21 +40,21 @@
 
 ### Requirement: Skill統計を表示する
 
-`agentstats skills` は `SKILL USAGE` headingに続けて、対象Agent、選択中の期間、grouping、およびstrict状態をそれぞれラベル付きのcontext行として表示し、Skill名ごとのExplicit、Implicit、Confirmed、Inferred、Unconfirmed、Total、およびLast Usedを集計しなければならない（SHALL）。human-readable reportは利用可能な幅に応じて内訳columnを調整できるが、Skill名とTotalを常に表示しなければならない（SHALL）。footerは対象Skill数と総Usesをdomain用語で表示し、`Rows`という実装用語や中点区切りを使用してはならない（MUST NOT）。JSONはすべての集計fieldを保持しなければならない（SHALL）。`--strict` が指定された場合はstateが `confirmed` の利用だけをTotalと各mode集計の対象にしなければならない（SHALL）。
+`catsift skills` は `SKILL USAGE` headingに続けて、対象Agent、選択中の期間、grouping、およびstrict状態をそれぞれラベル付きのcontext行として表示し、Skill名ごとのExplicit、Implicit、Confirmed、Inferred、Unconfirmed、Total、およびLast Usedを集計しなければならない（SHALL）。human-readable reportは利用可能な幅に応じて内訳columnを調整できるが、Skill名とTotalを常に表示しなければならない（SHALL）。footerは対象Skill数と総Usesをdomain用語で表示し、`Rows`という実装用語や中点区切りを使用してはならない（MUST NOT）。JSONはすべての集計fieldを保持しなければならない（SHALL）。`--strict` が指定された場合はstateが `confirmed` の利用だけをTotalと各mode集計の対象にしなければならない（SHALL）。
 
 #### Scenario: 全Skill観測を表示する
 
-- **WHEN** userが `agentstats skills` を実行する
+- **WHEN** userが `catsift skills` を実行する
 - **THEN** システムは `SKILL USAGE` heading、Agent・Period・Group by・Strictのcontext、全確認状態のSkill利用をTotal降順、同数の場合はSkill名昇順で、確認状態の内訳が判別できるhuman-readable tableとして出力する
 
 #### Scenario: Skill footerを表示する
 
-- **WHEN** userが対象Skillのあるhuman-readable `agentstats skills` reportを表示する
+- **WHEN** userが対象Skillのあるhuman-readable `catsift skills` reportを表示する
 - **THEN** システムはfooterに `N skills, M uses total` 相当の、対象Skill数と総Usesが分かる表現を表示する。1件の場合は `skill` と `use`、0件の場合は `skills` と `uses` のように自然な単数・複数形を使用する
 
 #### Scenario: strict modeを使用する
 
-- **WHEN** userが `agentstats skills --strict` を実行する
+- **WHEN** userが `catsift skills --strict` を実行する
 - **THEN** システムは `confirmed` でないSkill利用を件数とLast Usedの算出から除外する
 
 #### Scenario: 同一利用に複数の証拠がある
@@ -73,7 +73,7 @@
 
 #### Scenario: contextを読みやすく表示する
 
-- **WHEN** userが `agentstats tools` または `agentstats skills` を実行する
+- **WHEN** userが `catsift tools` または `catsift skills` を実行する
 - **THEN** システムは `Agent: ...`、`Period: ...`、およびcommand固有のfilterを別々のlabel付き行へ出力し、項目間の区切りに中点や実装用の`Rows`を使用しない
 
 #### Scenario: JSONを出力する

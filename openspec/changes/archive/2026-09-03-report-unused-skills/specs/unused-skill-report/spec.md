@@ -6,7 +6,7 @@
 
 ### Requirement: 指定scopeからインストール済みSkillを検出する
 
-`agentstats skills --unused` は、既定では実行ユーザーの `~/.agents/skills` をscopeとして、指定された `--root` がある場合はそのrootだけをscopeとして、配下をrecursiveに探索しなければならない（SHALL）。認識対象は `.agents/skills` または `.codex/skills` のSkill root直下にあるSkill directory、および既知の `.codex/plugins/cache/.../skills` layoutにあるSkill directoryとし、任意の場所にある同名の `SKILL.md` をSkillとして扱ってはならない（MUST NOT）。`.codex/skills/.system` はscope directoryであり、その直下をSkill directoryとして扱わなければならない（SHALL）。
+`catsift skills --unused` は、既定では実行ユーザーの `~/.agents/skills` をscopeとして、指定された `--root` がある場合はそのrootだけをscopeとして、配下をrecursiveに探索しなければならない（SHALL）。認識対象は `.agents/skills` または `.codex/skills` のSkill root直下にあるSkill directory、および既知の `.codex/plugins/cache/.../skills` layoutにあるSkill directoryとし、任意の場所にある同名の `SKILL.md` をSkillとして扱ってはならない（MUST NOT）。`.codex/skills/.system` はscope directoryであり、その直下をSkill directoryとして扱わなければならない（SHALL）。
 
 #### Scenario: 既定scopeのSkillを検出する
 
@@ -82,12 +82,12 @@
 
 #### Scenario: 未使用Skillをhuman-readableで表示する
 
-- **WHEN** `agentstats skills --unused` をhuman-readable modeで実行し、未使用Skillが存在する
+- **WHEN** `catsift skills --unused` をhuman-readable modeで実行し、未使用Skillが存在する
 - **THEN** システムは未使用view、期間、strict状態、scope、Skill name、およびpathを含むstatic reportを出力する
 
 #### Scenario: 未使用SkillをJSONで表示する
 
-- **WHEN** `agentstats skills --unused --json` を実行する
+- **WHEN** `catsift skills --unused --json` を実行する
 - **THEN** stdoutは単独の有効なJSON documentとなり、`view` が `unused`、`rows` は未使用entryだけ、空の場合も `[]` となる
 
 #### Scenario: すべて使用済みの場合にempty stateを表示する

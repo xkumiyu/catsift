@@ -1,4 +1,4 @@
-module github.com/xkumiyu/agentstats
+module github.com/xkumiyu/catsift
 
 go 1.27
 

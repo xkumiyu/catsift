@@ -1,6 +1,6 @@
 ## Purpose
 
-ctxが保持する複数Agentの履歴を、内部DB schemaに依存せず、agentstatsの利用統計へ取り込むための読み取り専用入力契約を定義する。
+ctxが保持する複数Agentの履歴を、内部DB schemaに依存せず、catsiftの利用統計へ取り込むための読み取り専用入力契約を定義する。
 
 ## ADDED Requirements
 

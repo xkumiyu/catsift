@@ -35,13 +35,13 @@ sourceを同時指定可能なunionにしないのは、同一Codex履歴が直�
 
 ctx adapterは、ctxが提供する機械向けの読み取り専用event列挙を使用する。実装上は `ctx list events --content full --format jsonl` を基本経路とし、明示されたdata rootがある場合だけ `--data-root` を付加する。ctx executableが存在しない、起動に失敗する、またはevent streamのcompletionを確認できない場合はsource errorとする。
 
-この方式を直接SQLite queryより選ぶ理由は、ctxのprovider差異とCore/Tantivyの世代・cursor・content policyをctx自身に解決させられ、内部schema変更にagentstatsが追随する必要を減らせるためである。`usage.sqlite` はctx自身のcontent-freeな利用集計であり、agentstatsのsession・prompt・Tool・Skill入力には使用しない。
+この方式を直接SQLite queryより選ぶ理由は、ctxのprovider差異とCore/Tantivyの世代・cursor・content policyをctx自身に解決させられ、内部schema変更にcatsiftが追随する必要を減らせるためである。`usage.sqlite` はctx自身のcontent-freeな利用集計であり、catsiftのsession・prompt・Tool・Skill入力には使用しない。
 
 ### 3. pageとcompletionを検証し、完全なsnapshotだけを集計する
 
 ctx event streamはbounded pageとopaque cursorを返し得るため、adapterはcompletion recordまで読み、continuation cursorが残る場合は次pageを取得する。completionがない、cursorを進められない、またはstreamが途中で終了した場合は、部分結果を完全なall-time reportとして成功させない。
 
-ctx側のimmutable generationを1回のreportのsnapshot境界とし、agentstats側でeventを再ソートして意味を変えない。Agent一覧と集計rowはcanonical IDで決定的にsortする。
+ctx側のimmutable generationを1回のreportのsnapshot境界とし、catsift側でeventを再ソートして意味を変えない。Agent一覧と集計rowはcanonical IDで決定的にsortする。
 
 ### 4. normalized modelにsource/Agent metadataを追加する
 
@@ -104,7 +104,7 @@ adapter testでは外部command runnerを差し替えてstdout/stderr、exit cod
 
 ## Risks / Trade-offs
 
-- [ctx CLIのevent contractとagentstatsの想定schemaがずれる] -> adapterにclosedな必須field検証とunknown event warningを設け、実ctx出力を更新時に確認するsynthetic contract testを維持する。
+- [ctx CLIのevent contractとcatsiftの想定schemaがずれる] -> adapterにclosedな必須field検証とunknown event warningを設け、実ctx出力を更新時に確認するsynthetic contract testを維持する。
 - [ctxのnormalized eventがCodex raw JSONLより情報を失っている] -> `--content full` を使用し、取得できるactivity/structured contentを優先する。取得不能な細部はunknown/partialとして扱い、推測で件数を増やさない。
 - [ctx event数が大きくreport実行時間が伸びる] -> ctx側のtime/provider/data-root filterを利用し、stream/page処理で全eventをmemoryへ一括展開しない。集計に不要な本文は保持しない。
 - [複数Agentの同名session・Tool・Skillが衝突する] -> normalization keyにsourceとAgentを含め、reportの合算時だけcanonical nameへ畳み込む。

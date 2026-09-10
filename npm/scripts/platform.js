@@ -23,12 +23,12 @@ function targetFor(platform, arch) {
 }
 
 function assetName(version, target) {
-  const name = `agentstats_${version}_${target.os}_${target.arch}`;
+  const name = `catsift_${version}_${target.os}_${target.arch}`;
   return target.os === "windows" ? `${name}.exe` : name;
 }
 
 function nativeBinaryName(target) {
-  const name = `agentstats-bin-${target.os}-${target.arch}`;
+  const name = `catsift-bin-${target.os}-${target.arch}`;
   return target.os === "windows" ? `${name}.exe` : name;
 }
 

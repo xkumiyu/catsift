@@ -4,8 +4,8 @@ import (
 	"sort"
 	"time"
 
-	"github.com/xkumiyu/agentstats/internal/skillinventory"
-	"github.com/xkumiyu/agentstats/internal/usage"
+	"github.com/xkumiyu/catsift/internal/skillinventory"
+	"github.com/xkumiyu/catsift/internal/usage"
 )
 
 // Input is the normalized stream consumed by all report views.

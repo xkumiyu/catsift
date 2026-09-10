@@ -16,18 +16,18 @@ function run(args) {
   try {
     nativePath = nativeBinaryPath();
   } catch (error) {
-    console.error(`agentstats: ${error.message}`);
+    console.error(`catsift: ${error.message}`);
     return 1;
   }
 
   if (!fs.existsSync(nativePath)) {
-    console.error("agentstats: bundled native binary is missing; reinstall @xkumiyu/agentstats");
+    console.error("catsift: bundled native binary is missing; reinstall catsift");
     return 1;
   }
 
   const result = spawnSync(nativePath, args, { stdio: "inherit" });
   if (result.error) {
-    console.error(`[agentstats] ${result.error.message}`);
+    console.error(`[catsift] ${result.error.message}`);
     return 1;
   }
   return result.status ?? 1;

@@ -1,6 +1,6 @@
 ## 1. Project基盤とdomain model
 
-- [x] 1.1 Go 1.27のmodule `github.com/xkumiyu/agentstats`、`cmd/agentstats`、`internal/{codex,usage,aggregate,output}` の最小構成を作成し、human-readable report用に `charm.land/lipgloss/v2@v2.0.6` と `golang.org/x/term` を追加する（Bubble Teaは導入しない）。`go test ./...`、`go build ./cmd/agentstats`、`go mod verify` が成功することを確認する
+- [x] 1.1 Go 1.27のmodule `github.com/xkumiyu/catsift`、`cmd/catsift`、`internal/{codex,usage,aggregate,output}` の最小構成を作成し、human-readable report用に `charm.land/lipgloss/v2@v2.0.6` と `golang.org/x/term` を追加する（Bubble Teaは導入しない）。`go test ./...`、`go build ./cmd/catsift`、`go mod verify` が成功することを確認する
 - [x] 1.2 SourceRef、turn、model/runtime Tool観測、SkillEvidence、SkillUse、warning、集計resultのtyped modelを定義し、constructorとzero-valueのunit testで必須fieldとenum値を確認する
 - [x] 1.3 user text・path・ID・outputを匿名化したCodex JSONL fixture群を作成し、fixture testで全fileが読取可能か、意図したmalformed lineだけが不正かを確認する
 
@@ -43,4 +43,4 @@
 - [x] 7.1 envelope decoderとSkill detectorへfuzz testを追加し、seed corpus実行でpanicしないことと通常proseをSkill利用にしないことを `go test ./...` で確認する
 - [x] 7.2 read-only integration testと実環境smoke testを実行し、Codex homeのfile metadataが変化しないこと、network依存がないこと、warning発生時もhuman report/JSONが有効であることを確認する
 - [x] 7.3 READMEへinstall/build、3 command、全option、human reportのlayout・color/`NO_COLOR`・狭いterminal対応、Tool layer、Skill state/strict、privacy、interactive TUIをMVP対象外とすることを記載し、READMEの例がbinaryの `--help` とintegration fixture上の実行結果に一致することを確認する
-- [x] 7.4 `gofmt`、`go vet ./...`、`go mod verify`、`go test -race ./...`、`go test ./...`、`go build ./cmd/agentstats`、`openspec validate build-codex-usage-mvp --strict` を実行し、すべて成功することを確認する
+- [x] 7.4 `gofmt`、`go vet ./...`、`go mod verify`、`go test -race ./...`、`go test ./...`、`go build ./cmd/catsift`、`openspec validate build-codex-usage-mvp --strict` を実行し、すべて成功することを確認する

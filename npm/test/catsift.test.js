@@ -4,12 +4,12 @@ const assert = require("node:assert/strict");
 const path = require("node:path");
 const test = require("node:test");
 
-const { nativeBinaryPath } = require("../bin/agentstats.js");
+const { nativeBinaryPath } = require("../bin/catsift.js");
 
 test("resolves the bundled native binary for the current target", () => {
   assert.equal(
     nativeBinaryPath("linux", "x64"),
-    path.join(__dirname, "../bin/agentstats-bin-linux-amd64"),
+    path.join(__dirname, "../bin/catsift-bin-linux-amd64"),
   );
 });
 

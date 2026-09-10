@@ -35,7 +35,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
@@ -49,4 +49,4 @@ jobs:
         run: node .github/scripts/stage-npm-binaries.js "${GITHUB_REF_NAME#v}"
 
       - name: Publish npm package
-        run: npm publish ./npm --access public
+        run: npm stage publish ./npm

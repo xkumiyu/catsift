@@ -25,7 +25,7 @@ See `proposal.md` for the motivation and the delta specs for the behavior contra
 
 ### 1. cacheは標準libraryのopaque JSON fileとする
 
-`internal/cache`に、user cache directoryの解決、source namespaceとkeyのhash化、schema envelopeの検証、atomic writeを集約する。既定の保存先は`os.UserCacheDir()`配下の`agentstats`とし、cache directoryは`0700`、cache fileは`0600`で作成する。
+`internal/cache`に、user cache directoryの解決、source namespaceとkeyのhash化、schema envelopeの検証、atomic writeを集約する。既定の保存先は`os.UserCacheDir()`配下の`catsift`とし、cache directoryは`0700`、cache fileは`0600`で作成する。
 
 cache fileはsource adapterが作るpayloadをopaqueに保持し、envelopeには少なくとも以下を含める。
 

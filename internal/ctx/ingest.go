@@ -16,8 +16,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/xkumiyu/agentstats/internal/cache"
-	"github.com/xkumiyu/agentstats/internal/usage"
+	"github.com/xkumiyu/catsift/internal/cache"
+	"github.com/xkumiyu/catsift/internal/usage"
 )
 
 const (
@@ -425,7 +425,7 @@ func commandError(result CommandResult, err error) error {
 
 func runCommand(args []string) (CommandResult, error) {
 	command := exec.Command("ctx", args...)
-	stdout, err := os.CreateTemp("", ".agentstats-ctx-output-*")
+	stdout, err := os.CreateTemp("", ".catsift-ctx-output-*")
 	if err != nil {
 		return CommandResult{}, fmt.Errorf("create ctx output temporary file: %w", err)
 	}

@@ -1,12 +1,12 @@
-# agentstats
+# CatSift: Sift through Coding Agent Traces
 
-agentstatsは、AIコーディングエージェントの利用状況を確認するコマンドラインツールです。
+CatSiftは、AIコーディングエージェントの利用状況を確認するコマンドラインツールです。
 ローカルの履歴を集計し、Session, Tool, Skillの利用状況を表示します。
 
 [English version](README.md)
 
 > [!NOTE]
-> agentstatsは次に対応しています。
+> CatSiftは次に対応しています。
 > - Codexのローカル履歴（デフォルト）
 > - OpenCodeのローカル履歴
 > - [ctx](https://github.com/ctxrs/ctx)のevent stream
@@ -14,7 +14,7 @@ agentstatsは、AIコーディングエージェントの利用状況を確認�
 ## クイックスタート
 
 ```sh
-npx @xkumiyu/agentstats
+npx catsift
 ```
 
 ## インストール
@@ -22,15 +22,15 @@ npx @xkumiyu/agentstats
 npmでインストールします。
 
 ```sh
-npm install --global @xkumiyu/agentstats
+npm install --global catsift
 ```
 
-または、[GitHub Releases](https://github.com/xkumiyu/agentstats/releases)からダウンロードできます。
+または、[GitHub Releases](https://github.com/xkumiyu/catsift/releases)からダウンロードできます。
 
 または、ソースからインストールできます。
 
 ```sh
-go install github.com/xkumiyu/agentstats/cmd/agentstats@latest
+go install github.com/xkumiyu/catsift/cmd/catsift@latest
 ```
 
 ## 使い方
@@ -40,7 +40,7 @@ go install github.com/xkumiyu/agentstats/cmd/agentstats@latest
 Agentの利用状況を概要として表示します。
 
 ```sh
-agentstats stats
+catsift stats
 ```
 
 ```text
@@ -74,7 +74,7 @@ ctx sourceでは、Token usageを利用できません。
 利用されたSkillと、その利用がどのように検出されたかを表示します。
 
 ```sh
-agentstats skills --view mode
+catsift skills --view mode
 ```
 
 ```text
@@ -101,7 +101,7 @@ openspec-apply-change             2         1        0      3
 canonical Tool名ごとの呼び出し数、失敗数、最後の利用時刻を表示します。
 
 ```sh
-agentstats tools
+catsift tools
 ```
 
 ```text
@@ -130,7 +130,7 @@ shell          42         0  2026-09-01 12:34 JST
 
 ### Skill利用の項目
 
-`agentstats skills`は、次の項目を表示します。
+`catsift skills`は、次の項目を表示します。
 
 | 軸 | 項目 | 意味 |
 | --- | --- | --- |
@@ -149,10 +149,10 @@ activation modeとevidence stateは独立した軸です。1つの利用に複�
 Skill利用表の表示形式は、`--view`で切り替えられます。
 
 ```sh
-agentstats skills --view compact  # Totalのみ
-agentstats skills --view mode     # activation mode
-agentstats skills --view state    # evidence state
-agentstats skills --view all      # 両方の表
+catsift skills --view compact  # Totalのみ
+catsift skills --view mode     # activation mode
+catsift skills --view state    # evidence state
+catsift skills --view all      # 両方の表
 ```
 
 デフォルトの`--view auto`は端末幅に応じて`compact`、`mode`、`all`のいずれかのviewを表示します。
@@ -163,7 +163,7 @@ agentstats skills --view all      # 両方の表
 inventoryを比較できます。
 
 ```sh
-agentstats skills --unused
+catsift skills --unused
 ```
 
 inventoryのidentityはcanonical skill nameと絶対物理PATHの組み合わせです。そのため、
