@@ -87,6 +87,14 @@ func TestLoadReadsAllPagesAndKeepsAgentSessionIdentity(t *testing.T) {
 	if len(result.Turns) != 2 || result.Turns[0].Source.Agent != "codex" || result.Turns[1].Source.Agent != "opencode" {
 		t.Fatalf("turns = %#v", result.Turns)
 	}
+	for _, session := range result.Sessions {
+		if session.Provider == "codex" && (!session.CreatedAt.Equal(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)) || !session.UpdatedAt.Equal(time.Date(2026, 1, 1, 0, 0, 1, 0, time.UTC))) {
+			t.Fatalf("codex session time range = %v to %v", session.CreatedAt, session.UpdatedAt)
+		}
+		if session.Provider == "opencode" && (!session.CreatedAt.Equal(time.Date(2026, 1, 1, 0, 0, 2, 0, time.UTC)) || !session.UpdatedAt.Equal(time.Date(2026, 1, 1, 0, 0, 3, 0, time.UTC))) {
+			t.Fatalf("opencode session time range = %v to %v", session.CreatedAt, session.UpdatedAt)
+		}
+	}
 	if result.Turns[0].SessionID == result.Turns[1].SessionID {
 		t.Fatal("same provider session ID collided across agents")
 	}
@@ -95,6 +103,46 @@ func TestLoadReadsAllPagesAndKeepsAgentSessionIdentity(t *testing.T) {
 	}
 	if got := usage.EffectiveTools(result.Turns[1])[0].Status; got != usage.StatusFailure {
 		t.Fatalf("failed tool status = %q", got)
+	}
+}
+
+func TestLoadCapturesModelFromProviderPayload(t *testing.T) {
+	data := strings.Join([]string{
+		eventLine(t, "model-event", "codex", "session", "message", "assistant", "2026-01-01T00:00:00Z", "", map[string]any{
+			"model": "gpt-example",
+		}),
+		completionLine(t, "generation-1", "", true),
+	}, "\n") + "\n"
+	runner := func([]string) (CommandResult, error) {
+		return CommandResult{Stdout: []byte(data)}, nil
+	}
+	result, err := Load("/tmp/ctx", IngestOptions{Runner: runner})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Turns) != 1 || len(result.Turns[0].ModelObservations) != 1 {
+		t.Fatalf("model observations = %#v", result.Turns)
+	}
+	want := usage.NewModelRef("codex", "gpt-example")
+	if got := result.Turns[0].ModelObservations[0].Model; got != want {
+		t.Fatalf("model = %#v, want %#v", got, want)
+	}
+}
+
+func TestFilterCtxTurnPreservesModelObservations(t *testing.T) {
+	when := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
+	model := usage.NewModelRef("ctx", "gpt-example")
+	turn := usage.NewTurn("session", "turn", 1, usage.NewCtxSourceRef("ctx://event", "ctx", "provider-session", "ctx-session", "event"))
+	turn.StartedAt = when.Add(-time.Hour)
+	turn.EndedAt = when.Add(-time.Hour + time.Second)
+	turn.ModelObservations = []usage.ModelObservation{{Model: model, Timestamp: when}}
+
+	filtered, ok := filterCtxTurn(turn, when.Add(-time.Second), when.Add(time.Second))
+	if !ok {
+		t.Fatal("model observation should keep the turn")
+	}
+	if len(filtered.ModelObservations) != 1 || filtered.ModelObservations[0].Model != model {
+		t.Fatalf("model observations = %#v", filtered.ModelObservations)
 	}
 }
 

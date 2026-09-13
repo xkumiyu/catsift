@@ -196,6 +196,26 @@ func TestRunVersionFlag(t *testing.T) {
 	}
 }
 
+func TestRunDefaultsToTUIWithoutCommand(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if code := run(nil, &stdout, &stderr); code != 1 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "interactive terminal") || !strings.Contains(stderr.String(), "catsift stats") {
+		t.Fatalf("default TUI exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := run([]string{"--json"}, &stdout, &stderr); code != 2 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "--json is not supported for the interactive view") {
+		t.Fatalf("default TUI option exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestRunRejectsRemovedTUICommand(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"tui"}, &stdout, &stderr); code != 2 || stdout.Len() != 0 || !strings.Contains(stderr.String(), `unknown command "tui"`) {
+		t.Fatalf("removed tui command exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
 func TestRunValidatesExclusiveHistorySources(t *testing.T) {
 	root := t.TempDir()
 	tests := []struct {
@@ -712,20 +732,75 @@ func TestRunHelpDocumentsHistorySourceOptions(t *testing.T) {
 	}
 }
 
+func TestRunInteractiveViewRejectsJSONAndNonInteractiveOutput(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"--json"}, &stdout, &stderr); code != 2 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "--json is not supported for the interactive view") {
+		t.Fatalf("interactive view json exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := run([]string{"--codex-home", t.TempDir()}, &stdout, &stderr); code != 1 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "interactive terminal") {
+		t.Fatalf("interactive view non-tty exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestRunInteractiveViewHelpDocumentsInteractiveScope(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"--help"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("interactive view help exit=%d stderr=%q", code, stderr.String())
+	}
+	for _, want := range []string{"catsift [options]", "model", "skill", "session", "--ctx-data-root", "--strict-input", "read-only", "interactive terminal"} {
+		if !strings.Contains(strings.ToLower(stdout.String()), strings.ToLower(want)) {
+			t.Errorf("interactive view help missing %q: %s", want, stdout.String())
+		}
+	}
+	if strings.Contains(stdout.String(), "Usage Explorer") {
+		t.Errorf("interactive view help contains obsolete product name: %s", stdout.String())
+	}
+}
+
+func TestLoadHistoryBuildsQueryInputWithSessionMetadata(t *testing.T) {
+	stamp := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	source := usage.NewCodexSourceRef("history", 1, "1")
+	session := usage.NewSession("session", source)
+	session.ProjectPath = "/workspace/project"
+	turn := usage.NewTurn("session", "turn", 1, source)
+	turn.StartedAt = stamp
+	var observedRoot string
+	history, err := loadHistory(historyLoadOptions{
+		Source:      usage.SourceCtx,
+		CtxDataRoot: "/ctx/root",
+		LoadCtx: func(root string, options ctxsource.IngestOptions) (ctxsource.IngestResult, error) {
+			observedRoot = root
+			return ctxsource.IngestResult{Turns: []usage.Turn{turn}, Sessions: []ctxsource.SessionMetadata{session}, Agents: []string{"codex"}}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if observedRoot != "/ctx/root" || len(history.Sessions) != 1 || history.Sessions[0].ProjectPath != "/workspace/project" || history.Source != usage.SourceCtx {
+		t.Fatalf("loaded query input = %#v", history)
+	}
+}
+
 func TestRunHelpIsScopedToCommand(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	if code := run([]string{"--help"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("root help exit=%d stderr=%s", code, stderr.String())
 	}
-	for _, want := range []string{"Usage:", "catsift <command> [options]", "stats", "tools", "skills", "--version"} {
+	for _, want := range []string{"Usage:", "catsift [options]", "catsift <command> [options]", "--source SOURCE", "--days N", "stats", "tools", "skills", "--version"} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Errorf("root help missing %q: %s", want, stdout.String())
 		}
 	}
-	for _, unwanted := range []string{"--days", "--layer", "--strict"} {
+	for _, unwanted := range []string{"--layer", "--strict", "--json", "catsift tui", "tui       Explore usage interactively"} {
 		if helpContainsOption(stdout.String(), unwanted) {
 			t.Errorf("root help contains command option %q: %s", unwanted, stdout.String())
 		}
+	}
+	if strings.Contains(stdout.String(), "Usage Explorer") {
+		t.Errorf("root help contains obsolete product name: %s", stdout.String())
 	}
 	if stderr.Len() != 0 {
 		t.Fatalf("root help wrote stderr: %q", stderr.String())

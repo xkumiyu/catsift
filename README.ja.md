@@ -1,23 +1,25 @@
 # CatSift: Sift through Coding Agent Traces
 
-CatSiftは、AIコーディングエージェントの利用状況を確認するコマンドラインツールです。
-ローカルの履歴を集計し、Session, Tool, Skillの利用状況を表示します。
+CatSiftは、ローカルに保存されたコーディングエージェントの履歴を解析し、
+source、Model、Skill、Sessionごとの利用状況を表示するツールです。
 
 [English version](README.md)
 
 > [!NOTE]
-> CatSiftは次に対応しています。
-> - Codexのローカル履歴（デフォルト）
+> CatSiftは次の履歴を読み取ります。
+> - Codexのローカル履歴
 > - OpenCodeのローカル履歴
 > - [ctx](https://github.com/ctxrs/ctx)のevent stream
 
-## クイックスタート
+## Quick start
+
+事前のインストールなしで試せます。
 
 ```sh
 npx catsift
 ```
 
-## インストール
+## Installation
 
 npmでインストールします。
 
@@ -33,11 +35,71 @@ npm install --global catsift
 go install github.com/xkumiyu/catsift/cmd/catsift@latest
 ```
 
-## 使い方
+## Usage
 
-### 利用状況の概要
+インタラクティブモードで起動します。
 
-Agentの利用状況を概要として表示します。
+```sh
+catsift
+```
+
+ローカルのAgent利用状況を、次の4つのviewで確認できます。
+
+| View | 表示内容 |
+| --- | --- |
+| Overview | 利用状況の合計と日別activity |
+| Models | providerおよびModelごとの利用状況と関連Session |
+| Skills | [Skill usage](#skill-usage-fields)、evidence state、関連Session |
+| Sessions | Session metadataと時系列のTurn詳細 |
+
+必要に応じてsourceと期間を指定します。
+
+```sh
+catsift --source codex --days 30
+catsift --source ctx --ctx-data-root /path/to/ctx --days 30
+catsift --source opencode --opencode-home /path/to/opencode --days 30
+```
+
+1回の実行で読み取るsourceは1つです。
+
+## Common options
+
+これらのoptionは、[interactive mode](#usage)と[CLI mode](#cli-usage)の両方で利用できます。
+
+- `--source`で履歴source（`codex`、`ctx`、`opencode`）を選択します。
+- `--days N`で対象を直近N日間に制限します。
+- `--from YYYY-MM-DD`と`--to YYYY-MM-DD`でUTCの暦日範囲（指定日を含む）を指定します。どちらか一方だけでも指定できます。`--days`とは併用できません。
+- `--strict-input`で入力recordがskipされた場合にnon-zeroで終了します。
+- `--verbose`で入力とcacheの診断情報を表示します。
+
+## Skill usage fields
+
+Skill usageはactivation modeとevidence stateで分類します。
+
+| Dimension | Field | Meaning |
+| --- | --- | --- |
+| Activation mode | `Explicit` | `$skill-name`のような明示的なSkill requestまたはinvocation、または構造化されたSkill callが記録されている。 |
+| Activation mode | `Implicit` | 明示的なrequestなしで、Skillの`SKILL.md`やscriptsへのruntime accessから利用を推定している。 |
+| Activation mode | `Unknown` | Skill利用の証拠はあるが、明示的・暗黙的のどちらで起動されたか履歴から判別できない。 |
+| Evidence state | `Confirmed` | Skillの指示やSkill item/toolが読み込まれた、または呼び出されたことを履歴が直接示している。 |
+| Evidence state | `Inferred` | runtimeでのfileやscriptへのaccessから利用を推定している。 |
+| Evidence state | `Unconfirmed` | 明示的なrequestが記録されているが、確認できる証拠がない。 |
+
+activation modeとevidence stateは独立した軸です。1つの利用に複数のactivation modeの証拠が含まれる場合があるため、modeの内訳の合計が`Total`と一致しないことがあります。
+
+## CLI usage
+
+サブコマンドを指定すると、CLIモードで実行します。
+
+| Command | Description |
+| --- | --- |
+| `catsift stats` | Agent利用状況の概要を表示 |
+| `catsift tools` | canonical Tool名ごとの利用状況を表示 |
+| `catsift skills` | Skillの利用状況とevidence stateを表示 |
+
+CLI専用の`--json`でmachine-readableな出力を生成します。
+
+### Usage overview
 
 ```sh
 catsift stats
@@ -63,15 +125,15 @@ Token Usage
   Total Tokens                3.16B
     Input Tokens              3.14B
       Cached Tokens           3.06B
-    Output Tokens             13.3M
+    Output Tokens              13.3M
       Reasoning Tokens        6.40M
 ```
 
-ctx sourceでは、Token usageを利用できません。
+`Period`は、集計に含まれるdataの期間を表示します。
 
-### Skillの利用状況
+ctx sourceではtoken usageを利用できません。
 
-利用されたSkillと、その利用がどのように検出されたかを表示します。
+### Skill usage
 
 ```sh
 catsift skills --view mode
@@ -94,11 +156,7 @@ openspec-apply-change             2         1        0      3
 2 skills, 9 uses total
 ```
 
-詳しくは[Skill集計の詳細](#skill集計の詳細)を参照してください。
-
-### Toolの利用状況
-
-canonical Tool名ごとの呼び出し数、失敗数、最後の利用時刻を表示します。
+### Tool usage
 
 ```sh
 catsift tools
@@ -118,64 +176,43 @@ shell          42         0  2026-09-01 12:34 JST
 1 tool, 42 calls total
 ```
 
-### 共通オプション
+### Skill command options
 
-- `--source`で履歴sourceを選択します。デフォルトはCodexのローカル履歴です。1回の実行で利用できるsourceは1つだけです。
-- `--days N`でレポートの対象を直近N日間に制限します。
-- `--from YYYY-MM-DD`と`--to YYYY-MM-DD`でUTCの暦日範囲（指定日を含む）を指定します。どちらか一方だけでも指定できます。`--days`とは併用できません。
-- `Period`は、実際に集計されたデータの期間を表示します。
-- `--json`で機械可読な出力を生成します。
+#### Skill usage view
 
-## Skill集計の詳細
-
-### Skill利用の項目
-
-`catsift skills`は、次の項目を表示します。
-
-| 軸 | 項目 | 意味 |
-| --- | --- | --- |
-| activation mode | `Explicit` | `$skill-name`のような明示的なSkill指定、または構造化されたSkill呼び出しが記録されている。 |
-| activation mode | `Implicit` | 明示指定なしで、Skillの`SKILL.md`やscriptsへのruntime accessから利用を推定している。 |
-| activation mode | `Unknown` | Skill利用の証拠はあるが、明示的・暗黙的のどちらで起動されたか履歴から判別できない。 |
-| evidence state | `Confirmed` | Skillの指示やSkill item/toolが読み込まれた、または呼び出されたことを直接示す履歴がある。 |
-| evidence state | `Inferred` | ファイルやスクリプトへのruntime accessから利用を推定している。 |
-| evidence state | `Unconfirmed` | 明示的な指定はあるが、利用を確認できる証拠がない。 |
-| 集計 | `Total` | 重複を除いた利用回数。既定ではturn単位、`--group-by session`指定時はsession単位で数える。 |
-
-activation modeとevidence stateは独立した軸です。1つの利用に複数のactivation modeの証拠が含まれる場合があるため、内訳の合計が`Total`と一致しないことがあります。`--strict`を指定すると`Confirmed`だけを集計します。
-
-### Skill利用表の表示方法
-
-Skill利用表の表示形式は、`--view`で切り替えられます。
+`--view`でSkill usage viewを選択します。
 
 ```sh
-catsift skills --view compact  # Totalのみ
-catsift skills --view mode     # activation mode
-catsift skills --view state    # evidence state
-catsift skills --view all      # 両方の表
+catsift skills --view compact  # Total only
+catsift skills --view mode     # Activation mode
+catsift skills --view state    # Evidence state
+catsift skills --view all      # Both tables
 ```
 
-デフォルトの`--view auto`は端末幅に応じて`compact`、`mode`、`all`のいずれかのviewを表示します。
+デフォルトの`--view auto`は、terminal幅に応じて`compact`、`mode`、`all`のいずれかを選択します。
 
-### 未使用Skillの確認
+`--group-by`でturn単位またはsession単位に集計し、`--strict`で`Confirmed`の利用だけを集計します。
 
-`skills`に`--unused`を指定すると、選択した履歴ソースとインストール済みSkillの
-inventoryを比較できます。
+#### Unused skills
+
+`skills`に`--unused`を指定すると、選択した履歴sourceとインストール済みSkill inventoryを比較できます。
 
 ```sh
 catsift skills --unused
 ```
 
-inventoryのidentityはcanonical skill nameと絶対物理PATHの組み合わせです。そのため、
-異なるPATHに同名Skillがある場合、その名前が未使用なら別々の行として表示されます。
-使用済み判定はcanonical name単位のままです。選択したctxのいずれかのAgentがその名前を
-使用していれば、その名前のinventory行はすべて使用済みとみなします。
+inventoryのidentityはcanonical skill nameと絶対physical pathの組み合わせです。
+そのため、異なるpathに同名Skillがある場合、その名前が未使用なら別々のrowとして表示されます。
+使用済み判定はcanonical name単位のままです。
+選択したctx agentのいずれかがその名前を使用していれば、その名前のinventory rowはすべて使用済みとみなします。
 
-## キャッシュ
+## Cache
 
-解析結果は、次回以降の実行を高速化するためOS標準のユーザーキャッシュ領域に保存されます。
+解析結果は、次回以降の実行を高速化するためOS標準のuser cache directoryに保存されます。
 
-## データの扱い
+## Data handling
 
-Codexの履歴、ctxの公開された読み取り専用event stream、またはOpenCodeのローカルread-only databaseだけを読み取り、選択したデータを変更しません。
-履歴を外部へ送信せず、通常の出力にユーザー本文、コマンド本文、その他のraw event詳細を含めません。
+CatSiftはCodexの履歴、ctxの公開されたevent stream、またはOpenCodeのlocal databaseだけを
+読み取り、選択したdataを変更しません。履歴を外部へ送信しません。
+TUIとreportには、prompt本文、command本文、Tool arguments、Skill bodies、
+provider payload、その他のraw event detailsを表示・含めません。

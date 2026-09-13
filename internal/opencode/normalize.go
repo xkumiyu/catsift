@@ -43,6 +43,8 @@ type textObservation struct {
 type tokenObservation struct {
 	timestamp time.Time
 	usage     usage.TokenUsage
+	model     usage.ModelRef
+	hasModel  bool
 }
 
 type pendingTool struct {
@@ -54,6 +56,8 @@ type messageState struct {
 	row       MessageRow
 	raw       map[string]any
 	role      string
+	model     usage.ModelRef
+	hasModel  bool
 	texts     []textObservation
 	tools     []pendingTool
 	tokens    []tokenObservation
@@ -86,6 +90,7 @@ func (n *normalizer) consumeSession(row SessionRow) {
 	}
 	session := n.session(row.ID)
 	session.meta.ProjectPath = row.Directory
+	session.meta.Title = strings.TrimSpace(row.Title)
 	session.meta.CLIVersion = row.Version
 	session.meta.CreatedAt = row.CreatedAt
 	session.meta.UpdatedAt = row.UpdatedAt
@@ -99,11 +104,14 @@ func (n *normalizer) startMessage(row MessageRow) {
 		n.currentMessage = &messageState{row: row}
 		return
 	}
+	model, hasModel := usage.ModelFromMap(raw, "opencode")
 	n.currentMessage = &messageState{
-		row:   row,
-		raw:   raw,
-		role:  strings.ToLower(strings.TrimSpace(firstString(raw, "role", "author"))),
-		valid: true,
+		row:      row,
+		raw:      raw,
+		role:     strings.ToLower(strings.TrimSpace(firstString(raw, "role", "author"))),
+		model:    model,
+		hasModel: hasModel,
+		valid:    true,
 	}
 }
 
@@ -143,7 +151,11 @@ func (n *normalizer) consumePart(row PartRow) {
 			if when.IsZero() {
 				when = message.row.CreatedAt
 			}
-			message.tokens = append(message.tokens, tokenObservation{timestamp: when, usage: tokenUsage})
+			model, hasModel := usage.ModelFromMap(raw, "opencode")
+			if !hasModel {
+				model, hasModel = message.model, message.hasModel
+			}
+			message.tokens = append(message.tokens, tokenObservation{timestamp: when, usage: tokenUsage, model: model, hasModel: hasModel})
 		}
 	case "reasoning", "stepstart", "patch", "snapshot", "compaction", "subtask", "agent", "retry":
 		// These parts do not add an observation to the current aggregate.
@@ -171,12 +183,23 @@ func (n *normalizer) finishMessage() {
 		n.finishUserMessage(session, message)
 	case "assistant":
 		turn := n.ensureTurn(session, "", message.row.CreatedAt)
+		if message.hasModel {
+			turn.turn.ObserveModelAt(message.model, message.row.CreatedAt, turn.turn.Source)
+		}
 		if tokenUsage, ok := tokenUsageFromMessage(message.raw); ok {
-			turn.turn.AddTokenUsageAt(message.row.CreatedAt, tokenUsage)
+			if message.hasModel {
+				turn.turn.AddTokenUsageForModelAt(message.model, message.row.CreatedAt, tokenUsage)
+			} else {
+				turn.turn.AddTokenUsageAt(message.row.CreatedAt, tokenUsage)
+			}
 			turn.touch(message.row.CreatedAt)
 		} else {
 			for _, token := range message.tokens {
-				turn.turn.AddTokenUsageAt(token.timestamp, token.usage)
+				if token.hasModel {
+					turn.turn.AddTokenUsageForModelAt(token.model, token.timestamp, token.usage)
+				} else {
+					turn.turn.AddTokenUsageAt(token.timestamp, token.usage)
+				}
 				turn.touch(token.timestamp)
 			}
 		}
@@ -198,6 +221,9 @@ func (n *normalizer) finishUserMessage(session *sessionState, message *messageSt
 		n.finishTurn(session)
 	}
 	turn := n.ensureTurn(session, message.row.ID, message.row.CreatedAt)
+	if message.hasModel {
+		turn.turn.ObserveModelAt(message.model, message.row.CreatedAt, turn.turn.Source)
+	}
 	if !injectedOnly {
 		turn.turn.UserPrompts++
 		turn.turn.UserPromptTimes = append(turn.turn.UserPromptTimes, message.row.CreatedAt)
@@ -344,7 +370,7 @@ func (n *normalizer) ensureTurn(session *sessionState, id string, timestamp time
 	if strings.TrimSpace(id) == "" {
 		id = "turn-" + strconv.Itoa(session.ordinal)
 	}
-	turn := usage.NewTurn(session.meta.ID, id, session.ordinal, session.meta.Source)
+	turn := usage.NewTurn(openCodeSessionID(session.rawID), id, session.ordinal, session.meta.Source)
 	current := &turnState{turn: turn, toolIndex: make(map[string]int), evidence: make(map[string]struct{})}
 	session.current = current
 	current.touch(timestamp)
@@ -373,7 +399,7 @@ func (n *normalizer) session(rawID string) *sessionState {
 		return session
 	}
 	source := n.source(rawID, "")
-	session := &sessionState{rawID: rawID, meta: SessionMetadata{ID: key, Source: source}}
+	session := &sessionState{rawID: rawID, meta: usage.NewSession(rawID, source)}
 	n.sessions[key] = session
 	return session
 }

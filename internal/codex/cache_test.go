@@ -56,6 +56,29 @@ func TestLoadCachesCompleteFileSnapshotAndFiltersDaysLocally(t *testing.T) {
 	}
 }
 
+func TestLoadDoesNotReusePreModelAttributionParserCache(t *testing.T) {
+	cacheDir := t.TempDir()
+	path := filepath.Join(t.TempDir(), "sessions", "one.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cache.New(cacheDir).Write("codex", path, fileRevision(info), "codex-normalizer-v2", cache.Snapshot{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, hit, err := cache.New(cacheDir).Read("codex", path, fileRevision(info), codexParserVersion); err != nil {
+		t.Fatal(err)
+	} else if hit {
+		t.Fatal("pre-model-attribution parser cache must be a miss")
+	}
+}
+
 func TestLoadFiltersSessionsByDaysForFreshAndCachedResults(t *testing.T) {
 	home := t.TempDir()
 	sessionsDir := filepath.Join(home, "sessions")

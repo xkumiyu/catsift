@@ -1,6 +1,7 @@
 package usage
 
 import (
+	"sort"
 	"strings"
 	"time"
 	"unicode"
@@ -86,6 +87,230 @@ type SourceRef struct {
 	EventID           string     `json:"event_id,omitempty"`
 }
 
+// ModelRef identifies the model reported by a history source. The values are
+// canonicalized so model rows can be grouped without relying on display text.
+type ModelRef struct {
+	Provider string `json:"provider"`
+	Name     string `json:"name"`
+}
+
+const unknownModelPart = "unknown"
+
+// NewModelRef returns a stable model identity. Unknown provider or name is
+// retained explicitly instead of dropping usage from model aggregates.
+func NewModelRef(provider, name string) ModelRef {
+	provider = canonicalModelPart(provider)
+	name = canonicalModelPart(name)
+	if provider == "" {
+		provider = unknownModelPart
+	}
+	if name == "" {
+		name = unknownModelPart
+	}
+	return ModelRef{Provider: provider, Name: name}
+}
+
+func UnknownModel() ModelRef { return ModelRef{Provider: unknownModelPart, Name: unknownModelPart} }
+
+func (model ModelRef) Key() string {
+	model = NewModelRef(model.Provider, model.Name)
+	return model.Provider + "\x00" + model.Name
+}
+
+func canonicalModelPart(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
+}
+
+// ModelFromValues finds a model in source payload values without exposing the
+// payload itself to downstream consumers. Nested provider payloads are
+// inspected because adapters receive both wrapper and provider-native shapes.
+func ModelFromValues(values []any, fallbackProvider string) (ModelRef, bool) {
+	for _, value := range values {
+		if object, ok := value.(map[string]any); ok {
+			if model, found := ModelFromMap(object, fallbackProvider); found {
+				return model, true
+			}
+		}
+	}
+	return ModelRef{}, false
+}
+
+func ModelFromMap(value map[string]any, fallbackProvider string) (ModelRef, bool) {
+	if len(value) == 0 {
+		return ModelRef{}, false
+	}
+	provider := firstModelString(value, "provider", "provider_name", "providerName", "provider_id", "providerId", "model_provider", "modelProvider", "model_provider_id", "modelProviderId", "vendor")
+	for _, key := range []string{"model", "model_name", "modelName", "model_id", "modelId"} {
+		raw, ok := value[key]
+		if !ok {
+			continue
+		}
+		name, nestedProvider := modelValue(raw)
+		if name != "" {
+			if provider == "" {
+				provider = nestedProvider
+			}
+			if provider == "" {
+				provider = fallbackProvider
+			}
+			return NewModelRef(provider, name), true
+		}
+	}
+	keys := make([]string, 0, len(value))
+	for key := range value {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		switch typed := value[key].(type) {
+		case map[string]any:
+			if model, found := ModelFromMap(typed, fallbackProvider); found {
+				return model, true
+			}
+		case []any:
+			if model, found := ModelFromValues(typed, fallbackProvider); found {
+				return model, true
+			}
+		}
+	}
+	return ModelRef{}, false
+}
+
+func firstModelString(value map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if text, ok := value[key].(string); ok && strings.TrimSpace(text) != "" {
+			return text
+		}
+	}
+	return ""
+}
+
+func modelValue(value any) (name, provider string) {
+	switch typed := value.(type) {
+	case string:
+		return typed, ""
+	case map[string]any:
+		return firstModelString(typed, "name", "id", "model", "model_name", "modelName"), firstModelString(typed, "provider", "provider_name", "providerName", "provider_id", "providerId", "model_provider", "modelProvider", "model_provider_id", "modelProviderId", "vendor")
+	default:
+		return "", ""
+	}
+}
+
+// Session is the source-neutral metadata used to identify a conversation in
+// detail views and cache snapshots.
+type Session struct {
+	ID                string    `json:"id"`
+	Title             string    `json:"title,omitempty"`
+	Key               string    `json:"key,omitempty"`
+	ProjectPath       string    `json:"project_path,omitempty"`
+	CLIVersion        string    `json:"cli_version,omitempty"`
+	Agent             string    `json:"agent,omitempty"`
+	Provider          string    `json:"provider,omitempty"`
+	ProviderSessionID string    `json:"provider_session_id,omitempty"`
+	CtxSessionID      string    `json:"ctx_session_id,omitempty"`
+	CreatedAt         time.Time `json:"created_at,omitempty"`
+	UpdatedAt         time.Time `json:"updated_at,omitempty"`
+	Source            SourceRef `json:"source"`
+}
+
+func NewSession(id string, source SourceRef) Session {
+	session := Session{
+		ID:                strings.TrimSpace(id),
+		ProjectPath:       "",
+		CLIVersion:        source.CLIVersion,
+		Agent:             CanonicalAgentID(source.Agent),
+		Provider:          canonicalModelPart(source.Provider),
+		ProviderSessionID: strings.TrimSpace(source.ProviderSessionID),
+		CtxSessionID:      strings.TrimSpace(source.CtxSessionID),
+		Source:            source,
+	}
+	if session.ID == "" {
+		session.ID = "unknown"
+	}
+	if session.Agent == "" {
+		session.Agent = unknownModelPart
+	}
+	if session.Provider == "" {
+		session.Provider = unknownModelPart
+	}
+	session.Key = NewSessionKey(source, session.ID)
+	return session
+}
+
+// NewSessionKey uses source-native IDs when available and falls back to the
+// normalized display ID. Source and Agent are always part of the identity.
+func NewSessionKey(source SourceRef, id string) string {
+	sourceName := strings.TrimSpace(string(source.Source))
+	if sourceName == "" {
+		sourceName = unknownModelPart
+	}
+	agent := CanonicalAgentID(source.Agent)
+	provider := canonicalModelPart(source.Provider)
+	if provider == "" {
+		provider = unknownModelPart
+	}
+	identity := strings.TrimSpace(id)
+	if source.ProviderSessionID != "" || source.CtxSessionID != "" {
+		identity = strings.Join([]string{strings.TrimSpace(source.ProviderSessionID), strings.TrimSpace(source.CtxSessionID)}, "\x00")
+	}
+	if identity == "" {
+		identity = strings.TrimSpace(source.EventID)
+	}
+	if identity == "" {
+		identity = unknownModelPart
+	}
+	return strings.Join([]string{sourceName, agent, provider, identity}, "\x00")
+}
+
+func (session Session) QualifiedKey() string {
+	if strings.TrimSpace(session.Key) != "" {
+		return session.Key
+	}
+	return NewSessionKey(session.Source, session.ID)
+}
+
+// SessionTimeRange returns the best available time range for a session. When
+// source metadata is incomplete, observation times from its turns fill the
+// missing bounds.
+func SessionTimeRange(session Session, turns []Turn) (from, to time.Time) {
+	add := func(timestamp time.Time) {
+		if timestamp.IsZero() {
+			return
+		}
+		if from.IsZero() || timestamp.Before(from) {
+			from = timestamp
+		}
+		if to.IsZero() || timestamp.After(to) {
+			to = timestamp
+		}
+	}
+	add(session.CreatedAt)
+	add(session.UpdatedAt)
+	for _, turn := range turns {
+		if NewSessionKey(turn.Source, turn.SessionID) != session.QualifiedKey() {
+			continue
+		}
+		add(turn.StartedAt)
+		add(turn.EndedAt)
+		for _, timestamp := range turn.UserPromptTimes {
+			add(timestamp)
+		}
+		for _, model := range turn.ModelObservations {
+			add(model.Timestamp)
+		}
+		for _, tool := range append(append([]ToolObservation{}, turn.ModelTools...), turn.RuntimeTools...) {
+			add(tool.Timestamp)
+		}
+		for _, skill := range turn.SkillEvidence {
+			add(skill.Timestamp)
+		}
+		for _, event := range turn.TokenUsageEvents {
+			add(event.Timestamp)
+		}
+	}
+	return from, to
+}
+
 // ToolLayer identifies where a tool observation was made.
 type ToolLayer string
 
@@ -131,25 +356,45 @@ func (usage *TokenUsage) Add(value TokenUsage) {
 // turn has been written to the cache.
 type TokenUsageEvent struct {
 	Timestamp time.Time  `json:"timestamp"`
+	Model     ModelRef   `json:"model"`
 	Usage     TokenUsage `json:"usage"`
+}
+
+// ModelObservation records a model seen in a turn, including observations
+// that did not carry token usage.
+type ModelObservation struct {
+	Model     ModelRef  `json:"model"`
+	Timestamp time.Time `json:"timestamp"`
+	Source    SourceRef `json:"source"`
 }
 
 // Turn is the bounded normalization unit for a conversation turn.
 type Turn struct {
-	SessionID        string            `json:"session_id"`
-	ID               string            `json:"id"`
-	Ordinal          int               `json:"ordinal"`
-	StartedAt        time.Time         `json:"started_at,omitempty"`
-	EndedAt          time.Time         `json:"ended_at,omitempty"`
-	Aborted          bool              `json:"aborted,omitempty"`
-	Source           SourceRef         `json:"source"`
-	UserPrompts      int               `json:"user_prompts,omitempty"`
-	UserPromptTimes  []time.Time       `json:"-"`
-	ModelTools       []ToolObservation `json:"model_tools,omitempty"`
-	RuntimeTools     []ToolObservation `json:"runtime_tools,omitempty"`
-	SkillEvidence    []SkillEvidence   `json:"skill_evidence,omitempty"`
-	TokenUsage       *TokenUsage       `json:"token_usage,omitempty"`
-	TokenUsageEvents []TokenUsageEvent `json:"-"`
+	SessionID         string             `json:"session_id"`
+	ID                string             `json:"id"`
+	Ordinal           int                `json:"ordinal"`
+	StartedAt         time.Time          `json:"started_at,omitempty"`
+	EndedAt           time.Time          `json:"ended_at,omitempty"`
+	Aborted           bool               `json:"aborted,omitempty"`
+	Source            SourceRef          `json:"source"`
+	ModelObservations []ModelObservation `json:"model_observations,omitempty"`
+	UserPrompts       int                `json:"user_prompts,omitempty"`
+	UserPromptTimes   []time.Time        `json:"-"`
+	ModelTools        []ToolObservation  `json:"model_tools,omitempty"`
+	RuntimeTools      []ToolObservation  `json:"runtime_tools,omitempty"`
+	SkillEvidence     []SkillEvidence    `json:"skill_evidence,omitempty"`
+	TokenUsage        *TokenUsage        `json:"token_usage,omitempty"`
+	TokenUsageEvents  []TokenUsageEvent  `json:"-"`
+}
+
+func (turn *Turn) ObserveModelAt(model ModelRef, timestamp time.Time, source SourceRef) {
+	if turn == nil {
+		return
+	}
+	if model == (ModelRef{}) {
+		model = UnknownModel()
+	}
+	turn.ModelObservations = append(turn.ModelObservations, ModelObservation{Model: model, Timestamp: timestamp, Source: source})
 }
 
 func (turn *Turn) AddTokenUsage(value TokenUsage) {
@@ -160,8 +405,16 @@ func (turn *Turn) AddTokenUsage(value TokenUsage) {
 }
 
 func (turn *Turn) AddTokenUsageAt(timestamp time.Time, value TokenUsage) {
+	turn.AddTokenUsageForModelAt(UnknownModel(), timestamp, value)
+}
+
+func (turn *Turn) AddTokenUsageForModelAt(model ModelRef, timestamp time.Time, value TokenUsage) {
 	turn.AddTokenUsage(value)
-	turn.TokenUsageEvents = append(turn.TokenUsageEvents, TokenUsageEvent{Timestamp: timestamp, Usage: value})
+	if model == (ModelRef{}) {
+		model = UnknownModel()
+	}
+	turn.ObserveModelAt(model, timestamp, turn.Source)
+	turn.TokenUsageEvents = append(turn.TokenUsageEvents, TokenUsageEvent{Timestamp: timestamp, Model: model, Usage: value})
 }
 
 // ToolObservation is a model or runtime observation of one tool invocation.
@@ -240,6 +493,64 @@ type Warning struct {
 	Path   string `json:"path,omitempty"`
 	Line   int    `json:"line,omitempty"`
 	Count  int    `json:"count"`
+}
+
+// WarningDiagnosticLevel returns the human-facing diagnostic level for a
+// recoverable input problem.
+func WarningDiagnosticLevel(warning Warning) string {
+	switch strings.TrimSpace(warning.Reason) {
+	case "large_line", "empty_line":
+		return "info"
+	default:
+		return "warning"
+	}
+}
+
+// WarningDescription returns a human-readable description for a known input
+// problem. An empty result means the reason is source-specific or unknown.
+func WarningDescription(reason string) string {
+	switch strings.TrimSpace(reason) {
+	case "large_line":
+		return "skipped oversized history record"
+	case "empty_line":
+		return "skipped empty history line"
+	case "malformed_json":
+		return "skipped malformed JSON record"
+	case "ctx_malformed_json":
+		return "skipped malformed ctx event record"
+	case "ctx_invalid_event":
+		return "skipped invalid ctx event"
+	case "ctx_unknown_record":
+		return "skipped unknown ctx stream record"
+	case "ctx_unknown_event":
+		return "skipped unknown ctx event"
+	case "ctx_invalid_timestamp":
+		return "ctx event has an invalid timestamp"
+	case "ctx_large_line":
+		return "skipped oversized ctx event record"
+	case "ctx_missing_agent":
+		return "ctx event has no agent identity"
+	case "unknown_type":
+		return "skipped unknown record type"
+	case "invalid_timestamp":
+		return "record has an invalid timestamp"
+	case "read_file":
+		return "could not read file"
+	case "opencode_invalid_session":
+		return "skipped invalid OpenCode session"
+	case "opencode_malformed_message":
+		return "skipped malformed OpenCode message"
+	case "opencode_orphan_part":
+		return "skipped orphan OpenCode part"
+	case "opencode_malformed_part":
+		return "skipped malformed OpenCode part"
+	case "opencode_unknown_part":
+		return "skipped unknown OpenCode part"
+	case "cannot read skill inventory path":
+		return "could not read skill inventory path"
+	default:
+		return ""
+	}
 }
 
 // Result is the typed aggregate input shared by renderers.

@@ -34,6 +34,7 @@ type Row struct {
 
 type SessionRow struct {
 	ID        string
+	Title     string
 	Directory string
 	Version   string
 	CreatedAt time.Time
@@ -173,21 +174,39 @@ type queryer interface {
 }
 
 func (r *Reader) readSessions(db queryer, consume func(Row) error) error {
-	rows, err := db.Query(`
+	hasTitle, err := sessionHasTitleColumn(db)
+	if err != nil {
+		return fmt.Errorf("inspect OpenCode session columns: %w", err)
+	}
+	query := `
 		SELECT id, directory, version, CAST(time_created AS TEXT), CAST(time_updated AS TEXT)
 		FROM session
-		ORDER BY id`)
+		ORDER BY id`
+	if hasTitle {
+		query = `
+			SELECT id, directory, title, version, CAST(time_created AS TEXT), CAST(time_updated AS TEXT)
+			FROM session
+			ORDER BY id`
+	}
+	rows, err := db.Query(query)
 	if err != nil {
 		return fmt.Errorf("read OpenCode sessions: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
-		var id, directory, version, created, updated sql.NullString
-		if err := rows.Scan(&id, &directory, &version, &created, &updated); err != nil {
-			return fmt.Errorf("read OpenCode session row: %w", err)
+		var id, title, directory, version, created, updated sql.NullString
+		var scanErr error
+		if hasTitle {
+			scanErr = rows.Scan(&id, &directory, &title, &version, &created, &updated)
+		} else {
+			scanErr = rows.Scan(&id, &directory, &version, &created, &updated)
+		}
+		if scanErr != nil {
+			return fmt.Errorf("read OpenCode session row: %w", scanErr)
 		}
 		row := Row{Kind: RowSession, Session: SessionRow{
 			ID:        id.String,
+			Title:     title.String,
 			Directory: directory.String,
 			Version:   version.String,
 			CreatedAt: parseDatabaseTime(created.String),
@@ -198,6 +217,26 @@ func (r *Reader) readSessions(db queryer, consume func(Row) error) error {
 		}
 	}
 	return rows.Err()
+}
+
+func sessionHasTitleColumn(db queryer) (bool, error) {
+	rows, err := db.Query(`PRAGMA table_info(session)`)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return false, err
+		}
+		if strings.EqualFold(name, "title") {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 func (r *Reader) readMessagesAndParts(db queryer, consume func(Row) error) error {

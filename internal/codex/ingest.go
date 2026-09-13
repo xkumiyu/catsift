@@ -3,6 +3,7 @@ package codex
 import (
 	"bufio"
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,7 +21,7 @@ import (
 
 const DefaultMaxLineBytes = 4 << 20
 
-const codexParserVersion = "codex-normalizer-v2"
+const codexParserVersion = "codex-normalizer-v4"
 
 // ResolveHome applies the Codex home precedence rule.
 func ResolveHome(explicit string) (string, error) {
@@ -182,7 +183,7 @@ func DecodeFile(path string, opts DecodeOptions, fn func(Envelope)) (err error) 
 
 func knownType(kind string) bool {
 	switch strings.ToLower(strings.TrimSpace(kind)) {
-	case "session_meta", "task_started", "task_complete", "turn_aborted", "event_msg", "response_item", "response", "user_message", "turn_started", "turn_complete":
+	case "session_meta", "turn_context", "task_started", "task_complete", "turn_aborted", "event_msg", "response_item", "response", "user_message", "turn_started", "turn_complete", "token_usage_record":
 		return true
 	default:
 		return false
@@ -191,7 +192,7 @@ func knownType(kind string) bool {
 
 func ignoredType(kind string) bool {
 	switch strings.ToLower(strings.TrimSpace(kind)) {
-	case "turn_context", "world_state", "compacted", "inter_agent_communication_metadata":
+	case "world_state", "compacted", "inter_agent_communication_metadata":
 		return true
 	default:
 		return false
@@ -340,11 +341,11 @@ type IngestResult struct {
 	Warnings []usage.Warning
 }
 
-type SessionMetadata struct {
-	ID          string          `json:"id"`
-	ProjectPath string          `json:"project_path,omitempty"`
-	CLIVersion  string          `json:"cli_version,omitempty"`
-	Source      usage.SourceRef `json:"source"`
+type SessionMetadata = usage.Session
+
+type sessionIndexRecord struct {
+	ID         string `json:"id"`
+	ThreadName string `json:"thread_name"`
 }
 
 // Stream discovers history and emits each completed turn as soon as it is
@@ -383,7 +384,10 @@ func Stream(home string, opts IngestOptions, consume func(usage.Turn)) (sessions
 	if selectedSessionIDs != nil {
 		sessions = filterCodexSessions(sessions, selectedSessionIDs)
 	}
-	return sessions, collector.Warnings(), nil
+	warnings = collector.Warnings()
+	sessions, indexWarnings := enrichSessionTitles(home, sessions)
+	warnings = append(warnings, indexWarnings...)
+	return sessions, warnings, nil
 }
 
 // Load is the collecting convenience wrapper around Stream.
@@ -427,7 +431,7 @@ func loadCached(home string, opts IngestOptions) (IngestResult, error) {
 			if unmarshalErr := json.Unmarshal(data, &snapshot); unmarshalErr != nil {
 				hit = false
 			} else {
-				fileResult = resultFromSnapshot(snapshot)
+				fileResult = resultFromSnapshot(snapshot, path)
 			}
 		}
 		if !hit {
@@ -470,7 +474,53 @@ func loadCached(home string, opts IngestOptions) (IngestResult, error) {
 	for _, id := range sessionIDs {
 		resultSessions = append(resultSessions, sessions[id])
 	}
+	resultSessions, indexWarnings := enrichSessionTitles(home, resultSessions)
+	warnings = append(warnings, indexWarnings...)
 	return IngestResult{Turns: turns, Sessions: resultSessions, Warnings: warnings}, nil
+}
+
+func enrichSessionTitles(home string, sessions []SessionMetadata) ([]SessionMetadata, []usage.Warning) {
+	path := filepath.Join(home, "session_index.jsonl")
+	file, err := os.Open(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return sessions, nil
+	}
+	if err != nil {
+		return sessions, []usage.Warning{{Reason: "read_session_index", Path: path, Count: 1}}
+	}
+	defer func() { _ = file.Close() }()
+
+	names := make(map[string]string)
+	warnings := make([]usage.Warning, 0)
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 64<<10), DefaultMaxLineBytes)
+	lineNo := 0
+	for scanner.Scan() {
+		lineNo++
+		if len(bytes.TrimSpace(scanner.Bytes())) == 0 {
+			continue
+		}
+		var record sessionIndexRecord
+		if err := json.Unmarshal(scanner.Bytes(), &record); err != nil {
+			warnings = append(warnings, usage.Warning{Reason: "malformed_session_index", Path: path, Line: lineNo, Count: 1})
+			continue
+		}
+		id := strings.TrimSpace(record.ID)
+		name := strings.TrimSpace(record.ThreadName)
+		if id != "" && name != "" {
+			// The index is append-only. The last non-empty name is current.
+			names[id] = name
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		warnings = append(warnings, usage.Warning{Reason: "read_session_index", Path: path, Line: lineNo, Count: 1})
+	}
+	for i := range sessions {
+		if name := names[sessions[i].ID]; name != "" {
+			sessions[i].Title = name
+		}
+	}
+	return sessions, warnings
 }
 
 func filterCodexSessions(sessions []SessionMetadata, selected map[string]struct{}) []SessionMetadata {
@@ -484,11 +534,7 @@ func filterCodexSessions(sessions []SessionMetadata, selected map[string]struct{
 }
 
 func filterCodexTurn(turn usage.Turn, filter TimestampFilter) (usage.Turn, bool) {
-	when := turn.EndedAt
-	if when.IsZero() {
-		when = turn.StartedAt
-	}
-	if !filter.Accept(when) {
+	if !codexTurnHasAcceptedTimestamp(turn, filter) {
 		return usage.Turn{}, false
 	}
 	filtered := turn
@@ -503,18 +549,73 @@ func filterCodexTurn(turn usage.Turn, filter TimestampFilter) (usage.Turn, bool)
 	}
 	filtered.ModelTools = filterCodexTools(turn.ModelTools, filter)
 	filtered.RuntimeTools = filterCodexTools(turn.RuntimeTools, filter)
+	filtered.ModelObservations = filterCodexModels(turn.ModelObservations, filter)
 	filtered.SkillEvidence = filterCodexSkills(turn.SkillEvidence, filter)
 	if len(turn.TokenUsageEvents) > 0 {
 		filtered.TokenUsage = nil
 		filtered.TokenUsageEvents = nil
+		var total usage.TokenUsage
+		included := false
 		for _, event := range turn.TokenUsageEvents {
 			if !filter.Accept(event.Timestamp) {
 				continue
 			}
-			filtered.AddTokenUsageAt(event.Timestamp, event.Usage)
+			filtered.TokenUsageEvents = append(filtered.TokenUsageEvents, event)
+			total.Add(event.Usage)
+			included = true
+		}
+		if included {
+			filtered.TokenUsage = &total
 		}
 	}
 	return filtered, true
+}
+
+func codexTurnHasAcceptedTimestamp(turn usage.Turn, filter TimestampFilter) bool {
+	if filter.Accept(turn.StartedAt) || filter.Accept(turn.EndedAt) {
+		return true
+	}
+	for _, timestamp := range turn.UserPromptTimes {
+		if filter.Accept(timestamp) {
+			return true
+		}
+	}
+	for _, observation := range turn.ModelObservations {
+		if filter.Accept(observation.Timestamp) {
+			return true
+		}
+	}
+	for _, tool := range append(append([]usage.ToolObservation{}, turn.ModelTools...), turn.RuntimeTools...) {
+		if filter.Accept(tool.Timestamp) {
+			return true
+		}
+	}
+	for _, evidence := range turn.SkillEvidence {
+		if filter.Accept(evidence.Timestamp) {
+			return true
+		}
+	}
+	for _, event := range turn.TokenUsageEvents {
+		if filter.Accept(event.Timestamp) {
+			return true
+		}
+	}
+	return false
+}
+
+func fallbackSessionID(path string) string {
+	digest := sha256.Sum256([]byte(path))
+	return fmt.Sprintf("unknown-%x", digest[:8])
+}
+
+func filterCodexModels(values []usage.ModelObservation, filter TimestampFilter) []usage.ModelObservation {
+	filtered := values[:0]
+	for _, value := range values {
+		if filter.Accept(value.Timestamp) {
+			filtered = append(filtered, value)
+		}
+	}
+	return filtered
 }
 
 func filterCodexTools(values []usage.ToolObservation, filter TimestampFilter) []usage.ToolObservation {
@@ -547,33 +648,23 @@ func parseFileSnapshot(path string, opts IngestOptions) (cache.Snapshot, IngestR
 	}
 	a.flush()
 	result := IngestResult{Turns: turns, Sessions: a.sessions(), Warnings: collector.Warnings()}
-	snapshot := cache.Snapshot{Warnings: result.Warnings}
+	snapshot := cache.Snapshot{Warnings: cache.WarningsFromUsage(result.Warnings)}
 	for _, turn := range turns {
 		snapshot.Turns = append(snapshot.Turns, cache.TurnFromUsage(turn))
 	}
 	for _, session := range result.Sessions {
-		snapshot.Sessions = append(snapshot.Sessions, cache.Session{
-			ID:          session.ID,
-			ProjectPath: session.ProjectPath,
-			CLIVersion:  session.CLIVersion,
-			Source:      cache.SourceRefFromUsage(session.Source),
-		})
+		snapshot.Sessions = append(snapshot.Sessions, cache.SessionFromUsage(session))
 	}
 	return snapshot, result, err == nil
 }
 
-func resultFromSnapshot(snapshot cache.Snapshot) IngestResult {
-	result := IngestResult{Warnings: append([]usage.Warning(nil), snapshot.Warnings...)}
+func resultFromSnapshot(snapshot cache.Snapshot, path string) IngestResult {
+	result := IngestResult{Warnings: cache.WarningsToUsage(snapshot.Warnings, path)}
 	for _, turn := range snapshot.Turns {
 		result.Turns = append(result.Turns, turn.Usage())
 	}
 	for _, session := range snapshot.Sessions {
-		result.Sessions = append(result.Sessions, SessionMetadata{
-			ID:          session.ID,
-			ProjectPath: session.ProjectPath,
-			CLIVersion:  session.CLIVersion,
-			Source:      session.Source.Usage(),
-		})
+		result.Sessions = append(result.Sessions, session.Usage())
 	}
 	return result
 }
@@ -591,17 +682,21 @@ type assembler struct {
 	metadata             map[string]SessionMetadata
 	pathToSID            map[string]string
 	versions             map[string]string
+	sessionModels        map[string]usage.ModelRef
 	cumulativeTokenUsage map[string]usage.TokenUsage
+	seenTokenUsageRecord map[string]struct{}
 }
 
 type turnState struct {
-	turn       usage.Turn
-	hasContent bool
-	lastTime   time.Time
+	turn              usage.Turn
+	hasContent        bool
+	lastTime          time.Time
+	tokenUsageRecords []usage.TokenUsageEvent
+	tokenCountEvents  []usage.TokenUsageEvent
 }
 
 func newAssembler(filter TimestampFilter, warnings *WarningCollector, out func(usage.Turn)) *assembler {
-	return &assembler{filter: filter, warnings: warnings, out: out, current: make(map[string]*turnState), ordinals: make(map[string]int), metadata: make(map[string]SessionMetadata), pathToSID: make(map[string]string), versions: make(map[string]string), cumulativeTokenUsage: make(map[string]usage.TokenUsage)}
+	return &assembler{filter: filter, warnings: warnings, out: out, current: make(map[string]*turnState), ordinals: make(map[string]int), metadata: make(map[string]SessionMetadata), pathToSID: make(map[string]string), versions: make(map[string]string), sessionModels: make(map[string]usage.ModelRef), cumulativeTokenUsage: make(map[string]usage.TokenUsage), seenTokenUsageRecord: make(map[string]struct{})}
 }
 
 func (a *assembler) consume(env Envelope) {
@@ -620,23 +715,31 @@ func (a *assembler) consume(env Envelope) {
 			a.pathToSID[env.Source.Path] = sid
 		}
 		if sid == "" {
-			sid = env.Source.Path
+			sid = fallbackSessionID(env.Source.Path)
+			a.pathToSID[env.Source.Path] = sid
 		}
 		version := firstString(payload, "cli_version", "version")
 		if version != "" {
 			a.versions[sid] = version
 		}
 		env.Source.CLIVersion = version
-		meta := SessionMetadata{ID: sid, ProjectPath: firstString(payload, "project_path", "cwd", "projectPath"), CLIVersion: version, Source: env.Source}
+		meta := usage.NewSession(sid, env.Source)
+		meta.Title = firstString(payload, "title", "session_title", "sessionTitle", "session_name", "sessionName", "thread_name", "threadName")
+		meta.ProjectPath = firstString(payload, "project_path", "cwd", "projectPath")
+		meta.CLIVersion = version
+		meta.CreatedAt = env.Timestamp
+		meta.UpdatedAt = env.Timestamp
 		a.metadata[sid] = meta
 		return
 	}
 	if sid == "" {
-		sid = env.Source.Path
+		sid = fallbackSessionID(env.Source.Path)
+		a.pathToSID[env.Source.Path] = sid
 	}
 	if sid != env.Source.Path {
 		a.pathToSID[env.Source.Path] = sid
 	}
+	a.touchSessionMetadata(sid, env.Timestamp)
 	if version := a.versions[sid]; version != "" {
 		env.Source.CLIVersion = version
 	}
@@ -650,6 +753,15 @@ func (a *assembler) consume(env Envelope) {
 	}
 	if id == "" && isTurnBoundary(env.Type, kind) {
 		id = firstString(payload, "id")
+	}
+	if env.Type == "event_msg" && sameRecordType(kind, "thread_settings_applied") {
+		if model, ok := usage.ModelFromValues([]any{payload}, env.Source.Provider); ok {
+			a.sessionModels[sid] = model
+			if cur := a.current[sid]; cur != nil {
+				cur.turn.ObserveModelAt(model, env.Timestamp, env.Source)
+			}
+		}
+		return
 	}
 	if strings.EqualFold(kind, "user_message") || strings.EqualFold(kind, "user_input") || (strings.EqualFold(kind, "message") && strings.EqualFold(firstString(payload, "role", "author"), "user")) || (env.Type == "user_message") {
 		text := rawValueText(payload, "text", "message", "content")
@@ -700,6 +812,23 @@ func (a *assembler) consume(env Envelope) {
 	a.observe(cur, env, payload)
 }
 
+func (a *assembler) touchSessionMetadata(sid string, timestamp time.Time) {
+	if timestamp.IsZero() {
+		return
+	}
+	meta, ok := a.metadata[sid]
+	if !ok {
+		return
+	}
+	if meta.CreatedAt.IsZero() || timestamp.Before(meta.CreatedAt) {
+		meta.CreatedAt = timestamp
+	}
+	if meta.UpdatedAt.IsZero() || timestamp.After(meta.UpdatedAt) {
+		meta.UpdatedAt = timestamp
+	}
+	a.metadata[sid] = meta
+}
+
 func isTurnBoundary(envelopeType, payloadType string) bool {
 	for _, value := range []string{envelopeType, payloadType} {
 		switch strings.ToLower(strings.TrimSpace(value)) {
@@ -726,6 +855,9 @@ func (a *assembler) ensure(sid, explicitID string, env Envelope) *turnState {
 	if version := a.versions[sid]; version != "" {
 		turn.Source.CLIVersion = version
 	}
+	if model, ok := a.sessionModels[sid]; ok {
+		turn.ObserveModelAt(model, env.Timestamp, env.Source)
+	}
 	a.current[sid] = &turnState{turn: turn}
 	return a.current[sid]
 }
@@ -751,8 +883,19 @@ func (a *assembler) finish(sid string, _ bool) {
 	if cur.turn.EndedAt.IsZero() {
 		cur.turn.EndedAt = cur.lastTime
 	}
+	a.applyTokenUsage(cur)
 	a.out(cur.turn)
 	delete(a.current, sid)
+}
+
+func (a *assembler) applyTokenUsage(cur *turnState) {
+	events := cur.tokenCountEvents
+	if len(cur.tokenUsageRecords) > 0 {
+		events = cur.tokenUsageRecords
+	}
+	for _, event := range events {
+		cur.turn.AddTokenUsageForModelAt(event.Model, event.Timestamp, event.Usage)
+	}
 }
 
 func (a *assembler) flush() {
@@ -806,6 +949,27 @@ func (a *assembler) observe(cur *turnState, env Envelope, payload map[string]any
 	if nested, ok := payload["item"].(map[string]any); ok {
 		item = nested
 	}
+	model, hasModel := usage.ModelFromValues([]any{payload, item}, env.Source.Provider)
+	if hasModel {
+		cur.turn.ObserveModelAt(model, env.Timestamp, env.Source)
+	}
+	eventModel := model
+	if !hasModel {
+		eventModel, _ = latestModelAt(cur.turn, env.Timestamp)
+	}
+	if strings.EqualFold(env.Type, "token_usage_record") {
+		if tokenUsage, ok := parseTokenUsageRecord(payload); ok {
+			if responseID := firstString(payload, "response_id", "responseId"); responseID != "" {
+				key := cur.turn.SessionID + "\x00" + responseID
+				if _, seen := a.seenTokenUsageRecord[key]; seen {
+					return
+				}
+				a.seenTokenUsageRecord[key] = struct{}{}
+			}
+			cur.tokenUsageRecords = append(cur.tokenUsageRecords, usage.TokenUsageEvent{Timestamp: env.Timestamp, Model: eventModel, Usage: tokenUsage})
+		}
+		return
+	}
 	if env.Type == "event_msg" && sameRecordType(firstString(payload, "type", "event_type"), "token_count") {
 		if tokenUsage, ok, cumulative := parseTokenUsage(payload); ok {
 			if cumulative {
@@ -815,7 +979,7 @@ func (a *assembler) observe(cur *turnState, env Envelope, payload map[string]any
 				}
 				a.cumulativeTokenUsage[cur.turn.SessionID] = current
 			}
-			cur.turn.AddTokenUsageAt(env.Timestamp, tokenUsage)
+			cur.tokenCountEvents = append(cur.tokenCountEvents, usage.TokenUsageEvent{Timestamp: env.Timestamp, Model: eventModel, Usage: tokenUsage})
 		}
 		return
 	}
@@ -853,6 +1017,24 @@ func (a *assembler) observe(cur *turnState, env Envelope, payload map[string]any
 	}
 }
 
+func latestModelAt(turn usage.Turn, timestamp time.Time) (usage.ModelRef, bool) {
+	var latest usage.ModelObservation
+	found := false
+	for _, observation := range turn.ModelObservations {
+		if !timestamp.IsZero() && !observation.Timestamp.IsZero() && observation.Timestamp.After(timestamp) {
+			continue
+		}
+		if !found || latest.Timestamp.IsZero() || (!observation.Timestamp.IsZero() && !observation.Timestamp.Before(latest.Timestamp)) {
+			latest = observation
+			found = true
+		}
+	}
+	if !found {
+		return usage.ModelRef{}, false
+	}
+	return latest.Model, true
+}
+
 func parseTokenUsage(payload map[string]any) (usage.TokenUsage, bool, bool) {
 	info, _ := payload["info"].(map[string]any)
 	last, _ := info["last_token_usage"].(map[string]any)
@@ -862,17 +1044,27 @@ func parseTokenUsage(payload map[string]any) (usage.TokenUsage, bool, bool) {
 	if len(last) == 0 {
 		last, _ = info["usage"].(map[string]any)
 	}
-	if len(last) == 0 {
-		last, _ = info["total_token_usage"].(map[string]any)
-		if len(last) == 0 {
-			last, _ = payload["total_token_usage"].(map[string]any)
-		}
-		if len(last) == 0 {
-			return usage.TokenUsage{}, false, false
-		}
-		return tokenUsageFromMap(last), true, true
+	if tokenUsage := tokenUsageFromMap(last); hasTokenUsageBreakdown(tokenUsage) {
+		return tokenUsage, true, false
 	}
-	return tokenUsageFromMap(last), true, false
+	last, _ = info["total_token_usage"].(map[string]any)
+	if len(last) == 0 {
+		last, _ = payload["total_token_usage"].(map[string]any)
+	}
+	if tokenUsage := tokenUsageFromMap(last); tokenUsage != (usage.TokenUsage{}) {
+		return tokenUsage, true, true
+	}
+	return usage.TokenUsage{}, false, false
+}
+
+func parseTokenUsageRecord(payload map[string]any) (usage.TokenUsage, bool) {
+	value, _ := payload["usage"].(map[string]any)
+	tokenUsage := tokenUsageFromMap(value)
+	return tokenUsage, tokenUsage != (usage.TokenUsage{})
+}
+
+func hasTokenUsageBreakdown(value usage.TokenUsage) bool {
+	return value.InputTokens != 0 || value.CachedInputTokens != 0 || value.CacheWriteInputTokens != 0 || value.OutputTokens != 0 || value.ReasoningOutputTokens != 0
 }
 
 func tokenUsageFromMap(value map[string]any) usage.TokenUsage {

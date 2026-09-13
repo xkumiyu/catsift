@@ -16,9 +16,9 @@ import (
 )
 
 const (
-	SchemaVersion = 1
+	SchemaVersion = 2
 	cacheDirName  = "catsift"
-	cacheVersion  = "v1"
+	cacheVersion  = "v2"
 )
 
 // Envelope wraps an opaque normalized snapshot with the information required

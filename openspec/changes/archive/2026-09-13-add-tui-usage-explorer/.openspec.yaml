@@ -1,0 +1,3 @@
+schema: spec-driven
+created: 2026-09-12
+goal: Model情報、利用状況、個別Skill詳細、Session詳細をCLIと将来のTUIから利用できる設計を定義する

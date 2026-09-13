@@ -108,6 +108,12 @@ type ReportContext struct {
 	Location       *time.Location
 }
 
+// FormatSourceContext returns the source display name and its configured path
+// using the same formatting as human-readable reports.
+func FormatSourceContext(source usage.SourceKind, sourcePath string) string {
+	return (ReportContext{Source: source, SourcePath: sourcePath}).sourceContext()
+}
+
 func (c ReportContext) sourceKind() usage.SourceKind {
 	if c.Source.Valid() {
 		return c.Source
@@ -274,7 +280,7 @@ func reportHeading(kind string, ctx ReportContext) string {
 }
 
 func contextLines(kind string, ctx ReportContext, effectiveSkillUsageView SkillUsageView, styled bool) []string {
-	parts := []string{"Source: " + ctx.sourceContext(), "Agents: " + ctx.agent(), "Period: " + ctx.period()}
+	parts := []string{"Source: " + FormatSourceContext(ctx.Source, ctx.SourcePath), "Agents: " + ctx.agent(), "Period: " + ctx.period()}
 	switch kind {
 	case "tools":
 		layer := ctx.Layer

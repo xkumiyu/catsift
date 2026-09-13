@@ -47,6 +47,16 @@ func TestStoreSeparatesSourceNamespacesAndValidatesEnvelope(t *testing.T) {
 	}
 }
 
+func TestDefaultDirUsesNewSnapshotCacheNamespace(t *testing.T) {
+	directory, err := DefaultDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := filepath.Base(directory); got != "v2" {
+		t.Fatalf("cache namespace = %q, want v2", got)
+	}
+}
+
 func TestStoreIgnoresCorruptAndIncompleteFiles(t *testing.T) {
 	store := New(t.TempDir())
 	scope := "/history/shared"

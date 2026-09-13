@@ -23,7 +23,8 @@ import (
 const (
 	pageLimit        = 100_000
 	probePageLimit   = 1
-	ctxParserVersion = "ctx-normalizer-v1"
+	ctxMaxLineBytes  = 4 << 20
+	ctxParserVersion = "ctx-normalizer-v3"
 )
 
 // CommandResult is the result of one ctx invocation. The runner is injectable
@@ -57,14 +58,7 @@ type IngestResult struct {
 	Warnings []usage.Warning
 }
 
-type SessionMetadata struct {
-	ID                string          `json:"id"`
-	Agent             string          `json:"agent"`
-	Provider          string          `json:"provider,omitempty"`
-	ProviderSessionID string          `json:"provider_session_id,omitempty"`
-	CtxSessionID      string          `json:"ctx_session_id,omitempty"`
-	Source            usage.SourceRef `json:"source"`
-}
+type SessionMetadata = usage.Session
 
 type event struct {
 	PayloadValues     []any
@@ -83,6 +77,8 @@ type event struct {
 	Sequence          int64
 	Ordinal           int64
 	Line              int
+	Model             usage.ModelRef
+	HasModel          bool
 }
 
 type page struct {
@@ -282,20 +278,13 @@ func probeGeneration(options IngestOptions, runner CommandRunner, now time.Time)
 func snapshotFromResult(result IngestResult) cache.Snapshot {
 	snapshot := cache.Snapshot{
 		Agents:   append([]string(nil), result.Agents...),
-		Warnings: append([]usage.Warning(nil), result.Warnings...),
+		Warnings: cache.WarningsFromUsage(result.Warnings),
 	}
 	for _, turn := range result.Turns {
 		snapshot.Turns = append(snapshot.Turns, cache.TurnFromUsage(turn))
 	}
 	for _, session := range result.Sessions {
-		snapshot.Sessions = append(snapshot.Sessions, cache.Session{
-			ID:                session.ID,
-			Agent:             session.Agent,
-			Provider:          session.Provider,
-			ProviderSessionID: session.ProviderSessionID,
-			CtxSessionID:      session.CtxSessionID,
-			Source:            cache.SourceRefFromUsage(session.Source),
-		})
+		snapshot.Sessions = append(snapshot.Sessions, cache.SessionFromUsage(session))
 	}
 	return snapshot
 }
@@ -303,20 +292,13 @@ func snapshotFromResult(result IngestResult) cache.Snapshot {
 func resultFromSnapshot(snapshot cache.Snapshot) IngestResult {
 	result := IngestResult{
 		Agents:   append([]string(nil), snapshot.Agents...),
-		Warnings: append([]usage.Warning(nil), snapshot.Warnings...),
+		Warnings: cache.WarningsToUsage(snapshot.Warnings, "ctx"),
 	}
 	for _, turn := range snapshot.Turns {
 		result.Turns = append(result.Turns, turn.Usage())
 	}
 	for _, session := range snapshot.Sessions {
-		result.Sessions = append(result.Sessions, SessionMetadata{
-			ID:                session.ID,
-			Agent:             session.Agent,
-			Provider:          session.Provider,
-			ProviderSessionID: session.ProviderSessionID,
-			CtxSessionID:      session.CtxSessionID,
-			Source:            session.Source.Usage(),
-		})
+		result.Sessions = append(result.Sessions, session.Usage())
 	}
 	return result
 }
@@ -336,14 +318,14 @@ func filterCachedResult(result IngestResult, options IngestOptions, now time.Tim
 			continue
 		}
 		filtered.Turns = append(filtered.Turns, filteredTurn)
-		selectedSessions[turn.SessionID] = struct{}{}
+		selectedSessions[usage.NewSessionKey(turn.Source, turn.SessionID)] = struct{}{}
 		if turn.Source.Agent != "" {
 			selectedAgents[turn.Source.Agent] = struct{}{}
 		}
 	}
 	filtered.Sessions = nil
 	for _, session := range result.Sessions {
-		if _, ok := selectedSessions[session.ID]; ok {
+		if _, ok := selectedSessions[session.QualifiedKey()]; ok {
 			filtered.Sessions = append(filtered.Sessions, session)
 		}
 	}
@@ -357,11 +339,7 @@ func filterCachedResult(result IngestResult, options IngestOptions, now time.Tim
 }
 
 func filterCtxTurn(turn usage.Turn, cutoff, until time.Time) (usage.Turn, bool) {
-	when := turn.EndedAt
-	if when.IsZero() {
-		when = turn.StartedAt
-	}
-	if !accept(when, cutoff, until) {
+	if !ctxTurnHasAcceptedTimestamp(turn, cutoff, until) {
 		return usage.Turn{}, false
 	}
 	filtered := turn
@@ -374,10 +352,70 @@ func filterCtxTurn(turn usage.Turn, cutoff, until time.Time) (usage.Turn, bool) 
 		}
 		filtered.UserPrompts = len(filtered.UserPromptTimes)
 	}
+	filtered.ModelObservations = filterCtxModels(turn.ModelObservations, cutoff, until)
 	filtered.ModelTools = filterCtxTools(turn.ModelTools, cutoff, until)
 	filtered.RuntimeTools = filterCtxTools(turn.RuntimeTools, cutoff, until)
 	filtered.SkillEvidence = filterCtxSkills(turn.SkillEvidence, cutoff, until)
+	if len(turn.TokenUsageEvents) > 0 {
+		filtered.TokenUsage = nil
+		filtered.TokenUsageEvents = nil
+		var total usage.TokenUsage
+		included := false
+		for _, event := range turn.TokenUsageEvents {
+			if !accept(event.Timestamp, cutoff, until) {
+				continue
+			}
+			filtered.TokenUsageEvents = append(filtered.TokenUsageEvents, event)
+			total.Add(event.Usage)
+			included = true
+		}
+		if included {
+			filtered.TokenUsage = &total
+		}
+	}
 	return filtered, true
+}
+
+func ctxTurnHasAcceptedTimestamp(turn usage.Turn, cutoff, until time.Time) bool {
+	if accept(turn.StartedAt, cutoff, until) || accept(turn.EndedAt, cutoff, until) {
+		return true
+	}
+	for _, timestamp := range turn.UserPromptTimes {
+		if accept(timestamp, cutoff, until) {
+			return true
+		}
+	}
+	for _, model := range turn.ModelObservations {
+		if accept(model.Timestamp, cutoff, until) {
+			return true
+		}
+	}
+	for _, tool := range append(append([]usage.ToolObservation{}, turn.ModelTools...), turn.RuntimeTools...) {
+		if accept(tool.Timestamp, cutoff, until) {
+			return true
+		}
+	}
+	for _, skill := range turn.SkillEvidence {
+		if accept(skill.Timestamp, cutoff, until) {
+			return true
+		}
+	}
+	for _, event := range turn.TokenUsageEvents {
+		if accept(event.Timestamp, cutoff, until) {
+			return true
+		}
+	}
+	return false
+}
+
+func filterCtxModels(values []usage.ModelObservation, cutoff, until time.Time) []usage.ModelObservation {
+	filtered := make([]usage.ModelObservation, 0, len(values))
+	for _, value := range values {
+		if accept(value.Timestamp, cutoff, until) {
+			filtered = append(filtered, value)
+		}
+	}
+	return filtered
 }
 
 func filterCtxTools(values []usage.ToolObservation, cutoff, until time.Time) []usage.ToolObservation {
@@ -478,39 +516,43 @@ func parsePageReader(input io.Reader, consume func(event)) (page, error) {
 	reader := bufio.NewReaderSize(input, 64<<10)
 	lineNo := 0
 	for {
-		line, readErr := reader.ReadBytes('\n')
-		if len(bytes.TrimSpace(line)) > 0 {
+		line, tooLarge, readErr := readCtxLine(reader, ctxMaxLineBytes)
+		if len(line) > 0 || tooLarge {
 			lineNo++
-			var raw map[string]any
-			if err := json.Unmarshal(bytes.TrimSpace(line), &raw); err != nil {
-				result.Warnings = append(result.Warnings, warning("ctx_malformed_json", "", lineNo))
+			if tooLarge {
+				result.Warnings = append(result.Warnings, warning("ctx_large_line", "", lineNo))
 			} else {
-				switch strings.ToLower(strings.TrimSpace(stringValue(raw, "record_type"))) {
-				case "event_range_event":
-					itemRaw := raw["event"]
-					item, ok := itemRaw.(map[string]any)
-					if !ok {
-						result.Warnings = append(result.Warnings, warning("ctx_invalid_event", "", lineNo))
-					} else {
-						event := eventFromMap(item, lineNo)
-						if event.TimestampInvalid {
-							result.Warnings = append(result.Warnings, warning("ctx_invalid_timestamp", event.EventType, lineNo))
+				var raw map[string]any
+				if err := json.Unmarshal(bytes.TrimSpace(line), &raw); err != nil {
+					result.Warnings = append(result.Warnings, warning("ctx_malformed_json", "", lineNo))
+				} else {
+					switch strings.ToLower(strings.TrimSpace(stringValue(raw, "record_type"))) {
+					case "event_range_event":
+						itemRaw := raw["event"]
+						item, ok := itemRaw.(map[string]any)
+						if !ok {
+							result.Warnings = append(result.Warnings, warning("ctx_invalid_event", "", lineNo))
+						} else {
+							event := eventFromMap(item, lineNo)
+							if event.TimestampInvalid {
+								result.Warnings = append(result.Warnings, warning("ctx_invalid_timestamp", event.EventType, lineNo))
+							}
+							if consume != nil {
+								consume(event)
+							}
 						}
-						if consume != nil {
-							consume(event)
+					case "event_range_completion":
+						if result.Complete {
+							return page{}, errors.New("ctx event stream returned multiple completion records")
 						}
+						result.Complete = true
+						result.NextCursor = stringValue(raw, "next_cursor")
+						result.Terminal = boolValue(raw, "terminal")
+						result.Truncated = boolValue(raw, "truncated")
+						result.GenerationID = stringValue(raw, "generation_id")
+					default:
+						result.Warnings = append(result.Warnings, warning("ctx_unknown_record", stringValue(raw, "record_type"), lineNo))
 					}
-				case "event_range_completion":
-					if result.Complete {
-						return page{}, errors.New("ctx event stream returned multiple completion records")
-					}
-					result.Complete = true
-					result.NextCursor = stringValue(raw, "next_cursor")
-					result.Terminal = boolValue(raw, "terminal")
-					result.Truncated = boolValue(raw, "truncated")
-					result.GenerationID = stringValue(raw, "generation_id")
-				default:
-					result.Warnings = append(result.Warnings, warning("ctx_unknown_record", stringValue(raw, "record_type"), lineNo))
 				}
 			}
 		}
@@ -525,6 +567,29 @@ func parsePageReader(input io.Reader, consume func(event)) (page, error) {
 		return page{}, errors.New("ctx event stream has no completion record")
 	}
 	return result, nil
+}
+
+func readCtxLine(reader *bufio.Reader, max int) ([]byte, bool, error) {
+	var line []byte
+	tooLarge := false
+	for {
+		part, err := reader.ReadSlice('\n')
+		if !tooLarge {
+			if len(line)+len(part) > max {
+				tooLarge = true
+				line = nil
+			} else {
+				line = append(line, part...)
+			}
+		}
+		if err == nil {
+			return bytes.TrimSuffix(line, []byte{'\n'}), tooLarge, nil
+		}
+		if errors.Is(err, bufio.ErrBufferFull) {
+			continue
+		}
+		return bytes.TrimSuffix(line, []byte{'\n'}), tooLarge, err
+	}
 }
 
 func eventFromMap(raw map[string]any, line int) event {
@@ -548,6 +613,10 @@ func eventFromMap(raw map[string]any, line int) event {
 		Line:              line,
 	}
 	item.PayloadValues = eventPayloadValues(raw)
+	item.Model, item.HasModel = usage.ModelFromMap(raw, provider)
+	if !item.HasModel {
+		item.Model, item.HasModel = usage.ModelFromValues(item.PayloadValues, provider)
+	}
 	item.Text = eventTextValues(item.PayloadValues)
 	item.SkillTexts = eventSkillTextsValues(item.PayloadValues)
 	item.SelectedSkill = hasSelectedSkillInstructionsValues(item.PayloadValues)
@@ -594,10 +663,13 @@ func timeBounds(options IngestOptions, now time.Time) (time.Time, time.Time, err
 }
 
 func accept(timestamp, cutoff, until time.Time) bool {
-	if !cutoff.IsZero() && (timestamp.IsZero() || timestamp.Before(cutoff)) {
+	if cutoff.IsZero() && until.IsZero() {
+		return true
+	}
+	if timestamp.IsZero() || (!cutoff.IsZero() && timestamp.Before(cutoff)) {
 		return false
 	}
-	return until.IsZero() || timestamp.IsZero() || timestamp.Before(until)
+	return until.IsZero() || timestamp.Before(until)
 }
 
 func warning(reason, typ string, line int) usage.Warning {
@@ -648,15 +720,17 @@ func (a *assembler) consume(item event) {
 		a.warnings = append(a.warnings, warning("ctx_missing_agent", item.EventType, item.Line))
 	}
 	if _, ok := a.sessions[sessionID]; !ok {
-		a.sessions[sessionID] = SessionMetadata{
-			ID:                sessionID,
-			Agent:             agent,
-			Provider:          item.Provider,
-			ProviderSessionID: item.ProviderSessionID,
-			CtxSessionID:      item.CtxSessionID,
-			Source:            source,
-		}
+		session := usage.NewSession(sessionDisplayID(item, sessionID), source)
+		session.Agent = agent
+		session.Provider = strings.TrimSpace(item.Provider)
+		session.ProviderSessionID = strings.TrimSpace(item.ProviderSessionID)
+		session.CtxSessionID = strings.TrimSpace(item.CtxSessionID)
+		session.CreatedAt = item.Timestamp
+		session.UpdatedAt = item.Timestamp
+		session.Key = usage.NewSessionKey(source, sessionID)
+		a.sessions[sessionID] = session
 	}
+	a.touchSession(sessionID, item.Timestamp)
 	turnID := item.turnID()
 	if isUserMessage(item) {
 		if current := a.current[sessionID]; current != nil && current.turn.UserPrompts > 0 && (turnID == "" || current.turn.ID != turnID) {
@@ -675,6 +749,23 @@ func (a *assembler) consume(item event) {
 		current.turn.EndedAt = item.Timestamp
 		a.finish(sessionID)
 	}
+}
+
+func (a *assembler) touchSession(sessionID string, timestamp time.Time) {
+	if timestamp.IsZero() {
+		return
+	}
+	session, ok := a.sessions[sessionID]
+	if !ok {
+		return
+	}
+	if session.CreatedAt.IsZero() || timestamp.Before(session.CreatedAt) {
+		session.CreatedAt = timestamp
+	}
+	if session.UpdatedAt.IsZero() || timestamp.After(session.UpdatedAt) {
+		session.UpdatedAt = timestamp
+	}
+	a.sessions[sessionID] = session
 }
 
 func (a *assembler) ensure(sessionID, explicitID string, item event) *turnState {
@@ -766,6 +857,9 @@ func (a *assembler) result() IngestResult {
 }
 
 func (a *assembler) observe(current *turnState, item event) {
+	if item.HasModel {
+		current.turn.ObserveModelAt(item.Model, item.Timestamp, item.source())
+	}
 	text := item.Text
 	if isUserMessage(item) {
 		injected := onlyInjectedSkill(text)
@@ -1391,6 +1485,15 @@ func (item event) sessionID() string {
 		parts = append(parts, item.ID)
 	}
 	return strings.Join(parts, "\x00")
+}
+
+func sessionDisplayID(item event, fallback string) string {
+	for _, value := range []string{item.ProviderSessionID, item.CtxSessionID, item.ID} {
+		if value = strings.TrimSpace(value); value != "" {
+			return value
+		}
+	}
+	return fallback
 }
 
 func (item event) turnID() string {

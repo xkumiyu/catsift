@@ -84,3 +84,65 @@ func TestOpenCodeSourceRefPreservesIdentity(t *testing.T) {
 		t.Fatalf("OpenCode source metadata = %#v", source)
 	}
 }
+
+func TestModelAttributionKeepsModelSwitchesAndUnknownUsage(t *testing.T) {
+	source := NewCodexSourceRef("fixture.jsonl", 1, "")
+	turn := NewTurn("session-001", "turn-001", 1, source)
+	first := NewModelRef("OpenAI", " gpt-example ")
+	second := NewModelRef("OpenAI", "other-model")
+	when := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+
+	turn.AddTokenUsageForModelAt(first, when, TokenUsage{InputTokens: 10, TotalTokens: 10})
+	turn.ObserveModelAt(second, when.Add(time.Second), source)
+	turn.AddTokenUsageAt(when.Add(2*time.Second), TokenUsage{OutputTokens: 5, TotalTokens: 5})
+
+	if len(turn.ModelObservations) != 3 {
+		t.Fatalf("model observations = %#v", turn.ModelObservations)
+	}
+	if turn.ModelObservations[0].Model != first || turn.ModelObservations[1].Model != second || turn.ModelObservations[2].Model != UnknownModel() {
+		t.Fatalf("model observations = %#v", turn.ModelObservations)
+	}
+	if len(turn.TokenUsageEvents) != 2 || turn.TokenUsageEvents[0].Model != first {
+		t.Fatalf("token usage events = %#v", turn.TokenUsageEvents)
+	}
+	if turn.TokenUsageEvents[1].Model != UnknownModel() {
+		t.Fatalf("unknown token usage model = %#v", turn.TokenUsageEvents[1].Model)
+	}
+}
+
+func TestNewModelRefNormalizesMissingIdentity(t *testing.T) {
+	if got := NewModelRef(" Provider ", " Model "); got != (ModelRef{Provider: "provider", Name: "model"}) {
+		t.Fatalf("normalized model = %#v", got)
+	}
+	if got := NewModelRef("", ""); got != UnknownModel() {
+		t.Fatalf("unknown model = %#v", got)
+	}
+}
+
+func TestSessionKeySeparatesSourcesWithTheSameProviderID(t *testing.T) {
+	codex := NewCodexSourceRef("codex.jsonl", 1, "")
+	codex.ProviderSessionID = "shared"
+	openCode := NewOpenCodeSourceRef("opencode.db", "")
+	openCode.ProviderSessionID = "shared"
+
+	first := NewSession("shared", codex)
+	second := NewSession("shared", openCode)
+	if first.QualifiedKey() == second.QualifiedKey() {
+		t.Fatalf("session keys collided: %q", first.QualifiedKey())
+	}
+	if first.Agent != "codex" || first.Provider != "codex" || second.Agent != "opencode" {
+		t.Fatalf("session metadata = %#v / %#v", first, second)
+	}
+}
+
+func TestSessionTimeRangeFallsBackToTurnObservations(t *testing.T) {
+	source := NewCodexSourceRef("fixture.jsonl", 1, "")
+	session := NewSession("session-001", source)
+	turn := NewTurn("session-001", "turn-001", 1, source)
+	turn.StartedAt = time.Date(2026, 1, 2, 3, 0, 0, 0, time.UTC)
+	turn.EndedAt = time.Date(2026, 1, 2, 3, 5, 0, 0, time.UTC)
+	from, to := SessionTimeRange(session, []Turn{turn})
+	if !from.Equal(turn.StartedAt) || !to.Equal(turn.EndedAt) {
+		t.Fatalf("session range = %s to %s", from, to)
+	}
+}

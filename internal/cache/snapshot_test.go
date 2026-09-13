@@ -112,3 +112,68 @@ func TestSnapshotRoundTripPreservesOpenCodeSource(t *testing.T) {
 		t.Fatalf("OpenCode source was not preserved: %#v", restored.Source)
 	}
 }
+
+func TestSnapshotRoundTripPreservesModelsAndSessionMetadataWithoutRawSource(t *testing.T) {
+	when := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	source := usage.NewCodexSourceRef("/private/history.jsonl", 42, "1")
+	turn := usage.NewTurn("session", "turn", 1, source)
+	turn.ObserveModelAt(usage.NewModelRef("codex", "gpt-example"), when, source)
+	turn.AddTokenUsageForModelAt(usage.NewModelRef("codex", "gpt-example"), when, usage.TokenUsage{TotalTokens: 7})
+	turn.ModelTools = []usage.ToolObservation{{
+		Arguments: `{"cmd":"cat /private/secret"}`,
+	}}
+	session := usage.NewSession("session", source)
+	session.Title = "Implement usage explorer"
+	session.ProjectPath = "/workspace/project"
+	session.CreatedAt = when
+	session.UpdatedAt = when.Add(time.Minute)
+
+	snapshot := Snapshot{
+		Turns:    []Turn{TurnFromUsage(turn)},
+		Sessions: []Session{SessionFromUsage(session)},
+	}
+	data, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serialized := string(data)
+	for _, forbidden := range []string{"/private/history.jsonl", "/private/secret", "arguments", "prompt text"} {
+		if strings.Contains(serialized, forbidden) {
+			t.Fatalf("cache snapshot contains %q: %s", forbidden, serialized)
+		}
+	}
+
+	var decoded Snapshot
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	restored := decoded.Turns[0].Usage()
+	if len(restored.ModelObservations) != 2 || restored.ModelObservations[0].Model.Name != "gpt-example" {
+		t.Fatalf("models were not restored: %#v", restored.ModelObservations)
+	}
+	if len(restored.TokenUsageEvents) != 1 || restored.TokenUsageEvents[0].Model.Name != "gpt-example" {
+		t.Fatalf("token model was not restored: %#v", restored.TokenUsageEvents)
+	}
+	restoredSession := decoded.Sessions[0].Usage()
+	if restoredSession.QualifiedKey() != session.QualifiedKey() || restoredSession.Title != session.Title || !restoredSession.CreatedAt.Equal(session.CreatedAt) || restoredSession.ProjectPath != session.ProjectPath {
+		t.Fatalf("session metadata changed: %#v", restoredSession)
+	}
+	if restored.ModelObservations[0].Source.Path != "" || restored.ModelObservations[0].Source.Line != 0 {
+		t.Fatalf("raw model source survived cache: %#v", restored.ModelObservations[0].Source)
+	}
+}
+
+func TestWarningsFromUsageOmitsRawSourcePosition(t *testing.T) {
+	warnings := WarningsFromUsage([]usage.Warning{{Reason: "malformed_json", Type: "future", Path: "/private/history.jsonl", Line: 42, Count: 1}})
+	data, err := json.Marshal(warnings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serialized := string(data)
+	if strings.Contains(serialized, "private/history.jsonl") || strings.Contains(serialized, "42") || strings.Contains(serialized, "path") || strings.Contains(serialized, "line") {
+		t.Fatalf("sanitized warnings contain source position: %s", serialized)
+	}
+	if len(warnings) != 1 || warnings[0].Reason != "malformed_json" || warnings[0].Type != "future" || warnings[0].Count != 1 {
+		t.Fatalf("warning facts changed: %#v", warnings)
+	}
+}

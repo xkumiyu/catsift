@@ -256,6 +256,17 @@ func TestParsePageReaderStreamsEventsToCallback(t *testing.T) {
 	}
 }
 
+func TestParsePageReaderSkipsOversizedLineAndContinues(t *testing.T) {
+	input := strings.Repeat("x", ctxMaxLineBytes+1) + "\n" + completionLine(t, "generation-1", "", true) + "\n"
+	page, err := parsePageReader(strings.NewReader(input), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !page.Complete || len(page.Warnings) != 1 || page.Warnings[0].Reason != "ctx_large_line" {
+		t.Fatalf("oversized line handling = %#v", page)
+	}
+}
+
 func TestLoadUsesBoundedHundredThousandEventPageLimit(t *testing.T) {
 	var args []string
 	runner := func(value []string) (CommandResult, error) {

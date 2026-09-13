@@ -20,8 +20,11 @@ func TestLoadNormalizesSessionsTurnsToolsSkillsAndTokens(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Sessions) != 1 || result.Sessions[0].ID != "opencode\x00s1" {
+	if len(result.Sessions) != 1 || result.Sessions[0].ID != "s1" {
 		t.Fatalf("sessions = %#v", result.Sessions)
+	}
+	if result.Sessions[0].QualifiedKey() == result.Sessions[0].ID {
+		t.Fatalf("session display ID and key were not separated: %#v", result.Sessions[0])
 	}
 	if result.Sessions[0].ProjectPath != "/workspace/project" || result.Sessions[0].CLIVersion != "1.18.27" {
 		t.Fatalf("session metadata = %#v", result.Sessions[0])
@@ -45,6 +48,9 @@ func TestLoadNormalizesSessionsTurnsToolsSkillsAndTokens(t *testing.T) {
 	if first.TokenUsage == nil || *first.TokenUsage != (usage.TokenUsage{InputTokens: 110, CachedInputTokens: 40, OutputTokens: 25, ReasoningOutputTokens: 3, TotalTokens: 135}) {
 		t.Fatalf("token usage = %#v", first.TokenUsage)
 	}
+	if len(first.TokenUsageEvents) == 0 || first.TokenUsageEvents[0].Model != usage.NewModelRef("opencode", "gpt-example") {
+		t.Fatalf("token usage model = %#v", first.TokenUsageEvents)
+	}
 	if len(first.SkillEvidence) != 4 {
 		t.Fatalf("skill evidence = %#v", first.SkillEvidence)
 	}
@@ -54,6 +60,17 @@ func TestLoadNormalizesSessionsTurnsToolsSkillsAndTokens(t *testing.T) {
 	}
 	if len(result.Warnings) != 1 || result.Warnings[0].Reason != "opencode_malformed_part" {
 		t.Fatalf("warnings = %#v", result.Warnings)
+	}
+}
+
+func TestNormalizerPreservesSessionTitle(t *testing.T) {
+	normalizer := newNormalizer("/tmp/opencode.db")
+	if err := normalizer.consume(Row{Kind: RowSession, Session: SessionRow{ID: "s1", Title: "Implement usage explorer"}}); err != nil {
+		t.Fatal(err)
+	}
+	result := normalizer.result()
+	if len(result.Sessions) != 1 || result.Sessions[0].Title != "Implement usage explorer" {
+		t.Fatalf("session metadata = %#v", result.Sessions)
 	}
 }
 
@@ -90,6 +107,25 @@ func TestLoadAppliesPeriodFilterToEveryObservation(t *testing.T) {
 	}
 	if len(result.Turns[0].RuntimeTools) != 0 || result.Turns[0].TokenUsage != nil {
 		t.Fatalf("out-of-range observations survived: %#v", result.Turns[0])
+	}
+}
+
+func TestFilterTurnPreservesModelAttribution(t *testing.T) {
+	when := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
+	model := usage.NewModelRef("opencode", "gpt-example")
+	turn := usage.NewTurn("session", "turn", 1, usage.NewOpenCodeSourceRef("/tmp/opencode.db", "1"))
+	turn.ModelObservations = []usage.ModelObservation{{Model: model, Timestamp: when}}
+	turn.TokenUsageEvents = []usage.TokenUsageEvent{{Model: model, Timestamp: when, Usage: usage.TokenUsage{TotalTokens: 7}}}
+
+	filtered, ok := filterTurn(turn, timestampFilter{cutoff: when.Add(-time.Second), until: when.Add(time.Second)})
+	if !ok {
+		t.Fatal("model observation should keep the turn")
+	}
+	if len(filtered.ModelObservations) != 1 || filtered.ModelObservations[0].Model != model {
+		t.Fatalf("model observations = %#v", filtered.ModelObservations)
+	}
+	if len(filtered.TokenUsageEvents) != 1 || filtered.TokenUsageEvents[0].Model != model {
+		t.Fatalf("token usage events = %#v", filtered.TokenUsageEvents)
 	}
 }
 
@@ -311,7 +347,7 @@ func normalizerFixtureRows() []fixtureRow {
 		{kind: "part", query: `INSERT INTO part VALUES (?, ?, ?, ?, ?, ?)`, args: []any{"p3", "m1", "s1", int64(1_700_000_002_100), int64(1_700_000_002_100), `{"type":"tool","tool":"bash","callID":"call-1","state":{"status":"completed","input":{"command":"cat /workspace/.agents/skills/review/SKILL.md"}}}`}},
 		{kind: "part", query: `INSERT INTO part VALUES (?, ?, ?, ?, ?, ?)`, args: []any{"p4", "m1", "s1", int64(1_700_000_003_000), int64(1_700_000_003_000), `{"type":"tool","tool":"read","callID":"call-2","state":{"status":"error","input":{"path":"/workspace/.agents/skills/review/SKILL.md"}}}`}},
 		{kind: "part", query: `INSERT INTO part VALUES (?, ?, ?, ?, ?, ?)`, args: []any{"p5", "m1", "s1", int64(1_700_000_003_500), int64(1_700_000_003_500), `{not-json}`}},
-		{kind: "message", query: `INSERT INTO message VALUES (?, ?, ?, ?, ?)`, args: []any{"m2", "s1", int64(1_700_000_004_000), int64(1_700_000_004_000), `{"role":"assistant","tokens":{"total":120,"input":100,"output":20,"reasoning":3,"cache":{"read":40,"write":0}},"unknown_field":"ignored"}`}},
+		{kind: "message", query: `INSERT INTO message VALUES (?, ?, ?, ?, ?)`, args: []any{"m2", "s1", int64(1_700_000_004_000), int64(1_700_000_004_000), `{"role":"assistant","model":"gpt-example","tokens":{"total":120,"input":100,"output":20,"reasoning":3,"cache":{"read":40,"write":0}},"unknown_field":"ignored"}`}},
 		{kind: "part", query: `INSERT INTO part VALUES (?, ?, ?, ?, ?, ?)`, args: []any{"p6", "m2", "s1", int64(1_700_000_004_000), int64(1_700_000_004_000), `{"type":"text","text":"done"}`}},
 		{kind: "message", query: `INSERT INTO message VALUES (?, ?, ?, ?, ?)`, args: []any{"m3", "s1", int64(1_700_000_005_000), int64(1_700_000_005_000), `{"role":"user"}`}},
 		{kind: "part", query: `INSERT INTO part VALUES (?, ?, ?, ?, ?, ?)`, args: []any{"p7", "m3", "s1", int64(1_700_000_005_000), int64(1_700_000_005_000), `{"type":"text","text":"<skill name=\"review\">instructions</skill>"}`}},
@@ -373,6 +409,9 @@ func stripSourcePaths(result IngestResult) IngestResult {
 	}
 	for i := range copy.Turns {
 		copy.Turns[i].Source.Path = "fixture"
+		for j := range copy.Turns[i].ModelObservations {
+			copy.Turns[i].ModelObservations[j].Source.Path = "fixture"
+		}
 		for j := range copy.Turns[i].RuntimeTools {
 			copy.Turns[i].RuntimeTools[j].Source.Path = "fixture"
 			copy.Turns[i].RuntimeTools[j].Arguments = ""

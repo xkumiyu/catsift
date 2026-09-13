@@ -14,7 +14,7 @@ import (
 	"github.com/xkumiyu/catsift/internal/usage"
 )
 
-const ParserVersion = "opencode-normalizer-v2"
+const ParserVersion = "opencode-normalizer-v4"
 
 type IngestOptions struct {
 	Days       int
@@ -33,14 +33,7 @@ type IngestResult struct {
 	Warnings []usage.Warning
 }
 
-type SessionMetadata struct {
-	ID          string          `json:"id"`
-	ProjectPath string          `json:"project_path,omitempty"`
-	CLIVersion  string          `json:"cli_version,omitempty"`
-	CreatedAt   time.Time       `json:"created_at,omitempty"`
-	UpdatedAt   time.Time       `json:"updated_at,omitempty"`
-	Source      usage.SourceRef `json:"source"`
-}
+type SessionMetadata = usage.Session
 
 // Load discovers the OpenCode database below dataRoot. A root without a
 // database is a normal empty source; root errors are source errors.
@@ -76,7 +69,7 @@ func Load(dataRoot string, options IngestOptions) (IngestResult, error) {
 			var snapshot cache.Snapshot
 			if err := json.Unmarshal(data, &snapshot); err == nil {
 				diagnose(options, "opencode cache hit; applying selected period locally")
-				result := resultFromSnapshot(snapshot)
+				result := resultFromSnapshot(snapshot, database)
 				if filter.active() {
 					result = filterResult(result, filter)
 				}
@@ -145,26 +138,21 @@ func diagnose(options IngestOptions, message string) {
 func snapshotFromResult(result IngestResult) cache.Snapshot {
 	snapshot := cache.Snapshot{
 		Agents:   append([]string(nil), result.Agents...),
-		Warnings: append([]usage.Warning(nil), result.Warnings...),
+		Warnings: cache.WarningsFromUsage(result.Warnings),
 	}
 	for _, turn := range result.Turns {
 		snapshot.Turns = append(snapshot.Turns, cache.TurnFromUsage(turn))
 	}
 	for _, session := range result.Sessions {
-		snapshot.Sessions = append(snapshot.Sessions, cache.Session{
-			ID:          session.ID,
-			ProjectPath: session.ProjectPath,
-			CLIVersion:  session.CLIVersion,
-			Source:      cache.SourceRefFromUsage(session.Source),
-		})
+		snapshot.Sessions = append(snapshot.Sessions, cache.SessionFromUsage(session))
 	}
 	return snapshot
 }
 
-func resultFromSnapshot(snapshot cache.Snapshot) IngestResult {
+func resultFromSnapshot(snapshot cache.Snapshot, database string) IngestResult {
 	result := IngestResult{
 		Agents:   append([]string(nil), snapshot.Agents...),
-		Warnings: append([]usage.Warning(nil), snapshot.Warnings...),
+		Warnings: cache.WarningsToUsage(snapshot.Warnings, database),
 	}
 	if len(result.Agents) == 0 {
 		result.Agents = []string{"opencode"}
@@ -173,12 +161,7 @@ func resultFromSnapshot(snapshot cache.Snapshot) IngestResult {
 		result.Turns = append(result.Turns, turn.Usage())
 	}
 	for _, session := range snapshot.Sessions {
-		result.Sessions = append(result.Sessions, SessionMetadata{
-			ID:          session.ID,
-			ProjectPath: session.ProjectPath,
-			CLIVersion:  session.CLIVersion,
-			Source:      session.Source.Usage(),
-		})
+		result.Sessions = append(result.Sessions, session.Usage())
 	}
 	return result
 }
@@ -232,11 +215,11 @@ func filterResult(result IngestResult, filter timestampFilter) IngestResult {
 			continue
 		}
 		filtered.Turns = append(filtered.Turns, value)
-		selectedSessions[turn.SessionID] = struct{}{}
+		selectedSessions[usage.NewSessionKey(turn.Source, turn.SessionID)] = struct{}{}
 	}
 	filtered.Sessions = nil
 	for _, session := range result.Sessions {
-		if _, ok := selectedSessions[session.ID]; ok {
+		if _, ok := selectedSessions[session.QualifiedKey()]; ok {
 			filtered.Sessions = append(filtered.Sessions, session)
 		}
 	}
@@ -262,14 +245,23 @@ func filterTurn(turn usage.Turn, filter timestampFilter) (usage.Turn, bool) {
 	}
 	filtered.ModelTools = filterTools(turn.ModelTools, filter)
 	filtered.RuntimeTools = filterTools(turn.RuntimeTools, filter)
+	filtered.ModelObservations = filterModels(turn.ModelObservations, filter)
 	filtered.SkillEvidence = filterSkills(turn.SkillEvidence, filter)
 	if len(turn.TokenUsageEvents) > 0 {
 		filtered.TokenUsage = nil
 		filtered.TokenUsageEvents = nil
+		var total usage.TokenUsage
+		included := false
 		for _, event := range turn.TokenUsageEvents {
-			if filter.accept(event.Timestamp) {
-				filtered.AddTokenUsageAt(event.Timestamp, event.Usage)
+			if !filter.accept(event.Timestamp) {
+				continue
 			}
+			filtered.TokenUsageEvents = append(filtered.TokenUsageEvents, event)
+			total.Add(event.Usage)
+			included = true
+		}
+		if included {
+			filtered.TokenUsage = &total
 		}
 	}
 	return filtered, true
@@ -294,12 +286,27 @@ func turnHasAcceptedTimestamp(turn usage.Turn, filter timestampFilter) bool {
 			return true
 		}
 	}
+	for _, model := range turn.ModelObservations {
+		if filter.accept(model.Timestamp) {
+			return true
+		}
+	}
 	for _, event := range turn.TokenUsageEvents {
 		if filter.accept(event.Timestamp) {
 			return true
 		}
 	}
 	return false
+}
+
+func filterModels(values []usage.ModelObservation, filter timestampFilter) []usage.ModelObservation {
+	filtered := make([]usage.ModelObservation, 0, len(values))
+	for _, value := range values {
+		if filter.accept(value.Timestamp) {
+			filtered = append(filtered, value)
+		}
+	}
+	return filtered
 }
 
 func filterTimes(values []time.Time, filter timestampFilter) []time.Time {

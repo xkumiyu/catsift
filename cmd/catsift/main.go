@@ -17,20 +17,39 @@ import (
 	ctxsource "github.com/xkumiyu/catsift/internal/ctx"
 	"github.com/xkumiyu/catsift/internal/opencode"
 	"github.com/xkumiyu/catsift/internal/output"
+	"github.com/xkumiyu/catsift/internal/query"
 	"github.com/xkumiyu/catsift/internal/skillinventory"
+	"github.com/xkumiyu/catsift/internal/tui"
 	"github.com/xkumiyu/catsift/internal/usage"
 	appversion "github.com/xkumiyu/catsift/internal/version"
 )
 
 const usageText = `Usage:
+  catsift [options]
   catsift <command> [options]
   catsift --help
   catsift --version
+
+Default:
+  In an interactive terminal, catsift opens the read-only TUI.
+  Explore model, skill, and session details from the Overview.
+  Use stats, tools, or skills for non-interactive reports.
 
 Commands:
   stats     Show an overview of agent usage
   tools     Show tool usage by canonical name
   skills    Show skill usage and evidence state
+
+Usage options:
+  --source SOURCE   codex, ctx, or opencode (default: codex)
+  --days N          Include the last N days (N >= 1; default: all time)
+  --from DATE       Include records on or after DATE (YYYY-MM-DD)
+  --to DATE         Include records before the day after DATE (YYYY-MM-DD)
+  --codex-home PATH Override CODEX_HOME for this invocation
+  --ctx-data-root PATH Read a specific ctx data root
+  --opencode-home PATH Override OpenCode data root for this invocation
+  --verbose         Show input and cache diagnostic details
+  --strict-input    Exit non-zero when input records are skipped
 
 Options:
   --help       Show this help
@@ -102,7 +121,39 @@ Options:
   --help            Show this help
 `
 
+const explorerUsageText = `Usage: catsift [options]
+
+Explore model, usage, skill, and session details in an interactive terminal.
+The TUI is read-only and does not display prompt text, tool arguments, or skill bodies.
+
+Options:
+  --source SOURCE   codex, ctx, or opencode (default: codex)
+  --days N          Include the last N days (N >= 1; default: all time)
+  --from DATE       Include records on or after DATE (YYYY-MM-DD)
+  --to DATE         Include records before the day after DATE (YYYY-MM-DD)
+  --codex-home PATH Override CODEX_HOME for this invocation (default: CODEX_HOME or ~/.codex)
+  --ctx-data-root PATH Read a specific ctx data root (default: ctx default)
+  --opencode-home PATH Override OpenCode data root for this invocation (default: XDG_DATA_HOME/opencode or ~/.local/share/opencode)
+  --verbose         Show input and cache diagnostic details
+  --strict-input    Exit non-zero when input records are skipped
+  --help            Show this help
+
+Keys:
+  1/2/3/4           Overview, Models, Skills, Sessions
+  Tab/Shift+Tab      Move to the next/previous view
+  Enter             Open detail; b/Esc returns to the previous view
+  /                 Search safe metadata
+  f                 Filter the selected model or skill
+  a                 Filter Sessions by selected agent
+  p                 Filter Sessions by selected project
+  r                 Reload the source snapshot
+  c                 Clear TUI filters
+  ?                 Show help
+  q                 Quit
+`
+
 const dateLayout = "2006-01-02"
+const usageExplorerKind = "__usage_explorer__"
 
 func commandUsage(kind string) string {
 	switch kind {
@@ -112,6 +163,8 @@ func commandUsage(kind string) string {
 		return toolsUsageText
 	case "skills":
 		return skillsUsageText
+	case usageExplorerKind:
+		return explorerUsageText
 	default:
 		return usageText
 	}
@@ -234,6 +287,16 @@ func (values *stringList) Set(value string) error {
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
 
+func defaultExplorerArgs(args []string) []string {
+	if len(args) == 0 {
+		return []string{usageExplorerKind}
+	}
+	if strings.HasPrefix(args[0], "-") && args[0] != "--help" && args[0] != "-h" && args[0] != "--version" {
+		return append([]string{usageExplorerKind}, args...)
+	}
+	return args
+}
+
 func legacyAgentValue(agents []string) string {
 	if len(agents) == 0 {
 		return ""
@@ -243,17 +306,86 @@ func legacyAgentValue(agents []string) string {
 
 type ctxHistoryLoader func(string, ctxsource.IngestOptions) (ctxsource.IngestResult, error)
 
+type loadedHistory struct {
+	query.Input
+	SourcePath string
+}
+
+type historyLoadOptions struct {
+	Source       usage.SourceKind
+	CodexHome    string
+	CtxDataRoot  string
+	OpenCodeHome string
+	Days         int
+	DaysSet      bool
+	From         time.Time
+	To           time.Time
+	Now          time.Time
+	CacheDir     string
+	Verbose      bool
+	Diagnostics  diagnosticWriter
+	LoadCtx      ctxHistoryLoader
+}
+
+func loadHistory(options historyLoadOptions) (loadedHistory, error) {
+	result := loadedHistory{Input: query.Input{Source: options.Source, From: options.From, To: options.To}}
+	switch options.Source {
+	case usage.SourceCtx:
+		result.SourcePath = strings.TrimSpace(options.CtxDataRoot)
+		ctxOptions := ctxsource.IngestOptions{DataRoot: options.CtxDataRoot, Days: options.Days, DaysSet: options.DaysSet, From: options.From, To: options.To, Now: options.Now, CacheDir: options.CacheDir}
+		if options.Verbose {
+			ctxOptions.Diagnostic = func(message string) { options.Diagnostics.write("debug", message) }
+		}
+		loader := options.LoadCtx
+		if loader == nil {
+			loader = ctxsource.Load
+		}
+		input, err := loader(options.CtxDataRoot, ctxOptions)
+		if err != nil {
+			return loadedHistory{}, fmt.Errorf("read ctx history: %w", err)
+		}
+		result.Input = query.Input{Turns: input.Turns, Sessions: input.Sessions, Warnings: input.Warnings, Agents: input.Agents, Source: options.Source, From: options.From, To: options.To}
+	case usage.SourceOpenCode:
+		home, err := opencode.ResolveHome(options.OpenCodeHome)
+		if err != nil {
+			return loadedHistory{}, fmt.Errorf("resolve OpenCode data root: %w", err)
+		}
+		result.SourcePath = home
+		input, err := opencode.Load(home, opencode.IngestOptions{Days: options.Days, DaysSet: options.DaysSet, From: options.From, To: options.To, Now: options.Now, CacheDir: options.CacheDir, Diagnostic: func(message string) {
+			if options.Verbose {
+				options.Diagnostics.write("debug", message)
+			}
+		}})
+		if err != nil {
+			return loadedHistory{}, fmt.Errorf("read OpenCode history %q: %w", home, err)
+		}
+		result.SourcePath = home
+		result.Input = query.Input{Turns: input.Turns, Sessions: input.Sessions, Warnings: input.Warnings, Agents: input.Agents, Source: options.Source, From: options.From, To: options.To}
+	case usage.SourceCodex:
+		home, err := codex.ResolveHome(options.CodexHome)
+		if err != nil {
+			return loadedHistory{}, fmt.Errorf("resolve Codex home: %w", err)
+		}
+		result.SourcePath = home
+		input, err := codex.Load(home, codex.IngestOptions{Days: options.Days, DaysSet: options.DaysSet, From: options.From, To: options.To, Now: options.Now, CacheDir: options.CacheDir})
+		if err != nil {
+			return loadedHistory{}, fmt.Errorf("read Codex history %q: %w", home, err)
+		}
+		result.Input = query.Input{Turns: input.Turns, Sessions: input.Sessions, Warnings: input.Warnings, Agents: []string{"codex"}, Source: options.Source, From: options.From, To: options.To}
+	default:
+		return loadedHistory{}, fmt.Errorf("unsupported history source %q", options.Source)
+	}
+	return result, nil
+}
+
 func run(args []string, stdout, stderr io.Writer) int {
 	return runWithCtxLoader(args, stdout, stderr, ctxsource.Load)
 }
 
 func runWithCtxLoader(args []string, stdout, stderr io.Writer, loadCtx ctxHistoryLoader) int {
+	args = defaultExplorerArgs(args)
 	_, noColor := os.LookupEnv("NO_COLOR")
 	diagnostics := newDiagnosticWriter(stderr, output.ColorAuto, noColor)
-	if len(args) == 0 {
-		_, _ = io.WriteString(stderr, usageText)
-		return 2
-	}
 	kind := strings.ToLower(args[0])
 	if kind == "help" || kind == "--help" || kind == "-h" {
 		if kind == "help" && len(args) > 1 {
@@ -270,7 +402,7 @@ func runWithCtxLoader(args []string, stdout, stderr io.Writer, loadCtx ctxHistor
 		_, _ = fmt.Fprintf(stdout, "catsift %s\n", appversion.String())
 		return 0
 	}
-	if kind != "stats" && kind != "tools" && kind != "skills" {
+	if kind != "stats" && kind != "tools" && kind != "skills" && kind != usageExplorerKind {
 		diagnostics.errorf("unknown command %q", args[0])
 		_, _ = io.WriteString(stderr, "\n"+usageText)
 		return 2
@@ -320,6 +452,10 @@ func runWithCtxLoader(args []string, stdout, stderr io.Writer, loadCtx ctxHistor
 	}
 	if extra := flags.Args(); len(extra) > 0 {
 		diagnostics.errorf("unexpected argument %q", extra[0])
+		return 2
+	}
+	if kind == usageExplorerKind && *jsonOutput {
+		diagnostics.errorf("--json is not supported for the interactive view")
 		return 2
 	}
 	selectedSource := usage.SourceKind(strings.ToLower(strings.TrimSpace(*source)))
@@ -452,71 +588,72 @@ func runWithCtxLoader(args []string, stdout, stderr io.Writer, loadCtx ctxHistor
 
 	now := time.Now().UTC()
 	cacheDir, _ := cache.DefaultDir()
+	if kind == usageExplorerKind && !tui.IsInteractive(os.Stdin, stdout) {
+		diagnostics.errorf("%v; use catsift stats, catsift tools, or catsift skills for non-interactive reports", tui.ErrNotInteractive)
+		return 1
+	}
 	progress := newSpinner(stderr, !*jsonOutput && !*verbose && diagnostics.capabilities.IsTTY, diagnostics.capabilities.ColorsEnabled())
 	var (
-		turns        []usage.Turn
-		sessionCount int
-		warnings     []usage.Warning
-		agents       []string
-		sourcePath   string
+		history      loadedHistory
 		stopProgress func()
 	)
+	label := "Reading history"
 	switch selectedSource {
 	case usage.SourceCtx:
-		sourcePath = strings.TrimSpace(*ctxDataRoot)
-		stopProgress = progress.Start("Reading ctx history")
-		ctxOptions := ctxsource.IngestOptions{DataRoot: *ctxDataRoot, Days: *days, DaysSet: daysSet, From: fromDate, To: toDate, Now: now, CacheDir: cacheDir}
-		if *verbose {
-			ctxOptions.Diagnostic = func(message string) {
-				diagnostics.write("debug", message)
-			}
-		}
-		input, loadErr := loadCtx(*ctxDataRoot, ctxOptions)
-		if loadErr != nil {
-			stopProgress()
-			diagnostics.errorf("read ctx history: %v", loadErr)
-			return 1
-		}
-		turns, sessionCount, warnings, agents = input.Turns, len(input.Sessions), input.Warnings, input.Agents
+		label = "Reading ctx history"
 	case usage.SourceOpenCode:
-		home, resolveErr := opencode.ResolveHome(*opencodeHome)
-		if resolveErr != nil {
-			diagnostics.errorf("resolve OpenCode data root: %v", resolveErr)
-			return 1
-		}
-		sourcePath = home
-		stopProgress = progress.Start("Reading OpenCode history")
-		opencodeOptions := opencode.IngestOptions{Days: *days, DaysSet: daysSet, From: fromDate, To: toDate, Now: now, CacheDir: cacheDir}
-		if *verbose {
-			opencodeOptions.Diagnostic = func(message string) {
-				diagnostics.write("debug", message)
-			}
-		}
-		input, loadErr := opencode.Load(home, opencodeOptions)
-		if loadErr != nil {
-			stopProgress()
-			diagnostics.errorf("read OpenCode history %q: %v", home, loadErr)
-			return 1
-		}
-		turns, sessionCount, warnings, agents = input.Turns, len(input.Sessions), input.Warnings, input.Agents
+		label = "Reading OpenCode history"
 	case usage.SourceCodex:
-		home, resolveErr := codex.ResolveHome(*codexHome)
-		if resolveErr != nil {
-			diagnostics.errorf("resolve Codex home: %v", resolveErr)
-			return 1
-		}
-		sourcePath = home
-		stopProgress = progress.Start("Reading Codex history")
-		input, loadErr := codex.Load(home, codex.IngestOptions{Days: *days, DaysSet: daysSet, From: fromDate, To: toDate, Now: now, CacheDir: cacheDir})
-		if loadErr != nil {
-			stopProgress()
-			diagnostics.errorf("read Codex history %q: %v", home, loadErr)
-			return 1
-		}
-		turns, sessionCount, warnings = input.Turns, len(input.Sessions), input.Warnings
-		agents = []string{"codex"}
+		label = "Reading Codex history"
 	}
-	aggregateInput := aggregate.Input{Turns: turns, SessionCount: sessionCount, Warnings: warnings, Source: selectedSource, Agents: agents}
+	stopProgress = progress.Start(label)
+	history, loadErr := loadHistory(historyLoadOptions{
+		Source: selectedSource, CodexHome: *codexHome, CtxDataRoot: *ctxDataRoot, OpenCodeHome: *opencodeHome,
+		Days: *days, DaysSet: daysSet, From: fromDate, To: toDate, Now: now, CacheDir: cacheDir, Verbose: *verbose, Diagnostics: diagnostics, LoadCtx: loadCtx,
+	})
+	if loadErr != nil {
+		stopProgress()
+		diagnostics.errorf("%v", loadErr)
+		return 1
+	}
+	if kind == usageExplorerKind {
+		stopProgress()
+		filter := query.Filter{Source: selectedSource, From: fromDate, To: toDate}
+		if daysSet {
+			filter.From = now.Add(-time.Duration(*days) * 24 * time.Hour)
+			filter.To = now
+		}
+		reload := func() (query.Input, error) {
+			reloadNow := time.Now().UTC()
+			if daysSet {
+				// Keep the originally selected relative window stable while the
+				// source snapshot is refreshed.
+				reloadNow = filter.To
+			}
+			refreshed, err := loadHistory(historyLoadOptions{
+				Source: selectedSource, CodexHome: *codexHome, CtxDataRoot: *ctxDataRoot, OpenCodeHome: *opencodeHome,
+				Days: *days, DaysSet: daysSet, From: fromDate, To: toDate, Now: reloadNow, CacheDir: cacheDir, Verbose: *verbose, Diagnostics: diagnostics, LoadCtx: loadCtx,
+			})
+			if err != nil {
+				return query.Input{}, err
+			}
+			return refreshed.Input, nil
+		}
+		if err := tui.Run(tui.RunOptions{Input: history.Input, Filter: filter, SourcePath: history.SourcePath, Reload: reload, Stdin: os.Stdin, Stdout: stdout}); err != nil {
+			diagnostics.errorf("run interactive view: %v", err)
+			return 1
+		}
+		if *strictInput && len(history.Warnings) > 0 {
+			diagnostics.errorf("input diagnostics encountered (--strict-input)")
+			return 1
+		}
+		return 0
+	}
+	turns := history.Turns
+	warnings := history.Warnings
+	agents := history.Agents
+	sourcePath := history.SourcePath
+	aggregateInput := aggregate.Input{Turns: turns, SessionCount: len(history.Sessions), Warnings: warnings, Source: selectedSource, Agents: agents}
 	report := aggregate.Report{}
 	var inventorySnapshot skillinventory.InventorySnapshot
 	if *unused {
@@ -708,43 +845,14 @@ func warningsForDiagnosticLevel(warnings []usage.Warning, level string) []usage.
 }
 
 func warningDiagnosticLevel(warning usage.Warning) string {
-	switch strings.TrimSpace(warning.Reason) {
-	case "large_line", "empty_line":
-		return "info"
-	default:
-		return "warning"
-	}
+	return usage.WarningDiagnosticLevel(warning)
 }
 
 func warningDescription(reason string) string {
-	switch strings.TrimSpace(reason) {
-	case "large_line":
-		return "skipped oversized history record"
-	case "empty_line":
-		return "skipped empty history line"
-	case "malformed_json":
-		return "skipped malformed JSON record"
-	case "ctx_malformed_json":
-		return "skipped malformed ctx event record"
-	case "ctx_invalid_event":
-		return "skipped invalid ctx event"
-	case "ctx_unknown_record":
-		return "skipped unknown ctx stream record"
-	case "ctx_unknown_event":
-		return "skipped unknown ctx event"
-	case "ctx_invalid_timestamp":
-		return "ctx event has an invalid timestamp"
-	case "ctx_missing_agent":
-		return "ctx event has no agent identity"
-	case "unknown_type":
-		return "skipped unknown record type"
-	case "invalid_timestamp":
-		return "record has an invalid timestamp"
-	case "read_file":
-		return "could not read file"
-	default:
-		return cleanWarningValue(reason)
+	if description := usage.WarningDescription(reason); description != "" {
+		return description
 	}
+	return cleanWarningValue(reason)
 }
 
 func warningRecordLabel(count int) string {
