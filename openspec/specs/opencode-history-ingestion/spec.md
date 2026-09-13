@@ -8,26 +8,21 @@ OpenCodeがlocal machineへ保存したsession履歴を安全に読み取り、c
 
 ### Requirement: OpenCode data rootを解決する
 
-システムは、`--opencode-home`、`OPENCODE_HOME`、OpenCodeが使用する`xdg-basedir`既定data directoryの優先順でOpenCode data rootを解決しなければならない（SHALL）。明示された値または環境変数が空の場合は次の候補を使用しなければならない（SHALL）。`XDG_DATA_HOME`が空の場合の既定値はuser home配下の`.local/share/opencode`とする。
+システムは、`OPENCODE_HOME`、OpenCodeが使用する`xdg-basedir`既定data directoryの順でOpenCode data rootを解決しなければならない（SHALL）。環境変数が空の場合は次の候補を使用しなければならない（SHALL）。`XDG_DATA_HOME`が空の場合の既定値はuser home配下の`.local/share/opencode`とする。
 
-#### Scenario: CLIでOpenCode data rootを指定する
+#### Scenario: OPENCODE_HOMEを使用する
 
-- **WHEN** userが`--source opencode --opencode-home /path/to/opencode`を指定する
-- **THEN** システムは環境変数や既定値ではなく`/path/to/opencode`だけを読み取り対象にする
-
-#### Scenario: 環境変数を使用する
-
-- **WHEN** `--opencode-home`がなく、`OPENCODE_HOME`が空でない
+- **WHEN** `OPENCODE_HOME`が空でない
 - **THEN** システムは`OPENCODE_HOME`の値を読み取り対象にする
 
 #### Scenario: OpenCodeの既定data rootを使用する
 
-- **WHEN** CLI指定と`OPENCODE_HOME`のどちらもない
+- **WHEN** `OPENCODE_HOME`が空である
 - **THEN** システムはOpenCodeの`xdg-basedir`に対応する既定data directoryを読み取り対象にする
 
 ### Requirement: OpenCodeの永続履歴をread-onlyで発見する
 
-システムは解決したOpenCode data rootにあるOpenCodeの永続session履歴を入力として発見しなければならない（SHALL）。既定の`opencode.db`がない場合は、channel suffixを持つ`opencode-<channel>.db`も候補として扱わなければならない（SHALL）。履歴の存在しないdata rootは空入力として扱えるが、指定されたdata rootが存在しない、directoryでない、または読み取り不能な場合はsource errorとして扱わなければならない（MUST）。OpenCodeの診断用`log`だけを利用統計の入力として解釈してはならない（MUST NOT）。
+システムは解決したOpenCode data rootにあるOpenCodeの永続session履歴を入力として発見しなければならない（SHALL）。既定の`opencode.db`がない場合は、channel suffixを持つ`opencode-<channel>.db`も候補として扱わなければならない（SHALL）。履歴の存在しないdata rootは空入力として扱えるが、解決したdata rootが存在しない、directoryでない、または読み取り不能な場合はsource errorとして扱わなければならない（MUST）。OpenCodeの診断用`log`だけを利用統計の入力として解釈してはならない（MUST NOT）。
 
 #### Scenario: OpenCodeの履歴が存在する
 
@@ -39,9 +34,9 @@ OpenCodeがlocal machineへ保存したsession履歴を安全に読み取り、c
 - **WHEN** 解決したdata rootは読み取り可能だが利用統計へ変換可能な履歴が存在しない
 - **THEN** システムは空のsession、turn、Tool、Skill入力として正常終了する
 
-#### Scenario: OpenCode data rootを読めない
+#### Scenario: 解決したOpenCode data rootを読めない
 
-- **WHEN** userが指定したdata rootが存在しない、directoryでない、または読み取り不能である
+- **WHEN** 解決したOpenCode data rootが存在しない、directoryでない、または読み取り不能である
 - **THEN** システムは対象pathを含むerrorをstderrへ出力し、非0の終了codeを返す
 
 #### Scenario: 診断logだけが存在する

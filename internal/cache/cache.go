@@ -13,12 +13,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 const (
 	SchemaVersion = 2
 	cacheDirName  = "catsift"
-	cacheVersion  = "v2"
+	Version       = "v2"
 )
 
 // Envelope wraps an opaque normalized snapshot with the information required
@@ -31,6 +32,15 @@ type Envelope struct {
 	ParserVersion string          `json:"parser_version"`
 	Complete      bool            `json:"complete"`
 	Snapshot      json.RawMessage `json:"snapshot"`
+}
+
+// Entry is a validated complete cache entry, including its source revision
+// and publication time. Callers may use it as a stale fallback when the
+// current source revision cannot be checked.
+type Entry struct {
+	Snapshot json.RawMessage
+	Revision string
+	StoredAt time.Time
 }
 
 // Store addresses one versioned CatSift cache directory.
@@ -57,7 +67,7 @@ func DefaultDir() (string, error) {
 	if strings.TrimSpace(root) == "" {
 		return "", errors.New("user cache directory is empty")
 	}
-	return filepath.Join(root, cacheDirName, cacheVersion), nil
+	return filepath.Join(root, cacheDirName, Version), nil
 }
 
 // Path returns the deterministic path for a source and canonical scope.
@@ -77,31 +87,53 @@ func (s Store) Path(source, scope string) string {
 // returned so callers may optionally record diagnostics, but callers should
 // continue with source ingestion.
 func (s Store) Read(source, scope, revision, parserVersion string) (json.RawMessage, bool, error) {
+	entry, hit, err := s.ReadEntry(source, scope, parserVersion)
+	if err != nil || !hit || entry.Revision != revision {
+		return nil, false, err
+	}
+	return entry.Snapshot, true, nil
+}
+
+// ReadEntry returns the latest validated complete cache entry, regardless of
+// source revision. Invalid, incomplete, or source/scope/parser-mismatched
+// files are misses.
+func (s Store) ReadEntry(source, scope, parserVersion string) (Entry, bool, error) {
 	path := s.Path(source, scope)
 	if path == "" {
-		return nil, false, errors.New("cache directory is empty")
+		return Entry{}, false, errors.New("cache directory is empty")
+	}
+	info, err := os.Stat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return Entry{}, false, nil
+	}
+	if err != nil {
+		return Entry{}, false, err
 	}
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, false, nil
+		return Entry{}, false, nil
 	}
 	if err != nil {
-		return nil, false, err
+		return Entry{}, false, err
 	}
 	var envelope Envelope
 	if err := json.Unmarshal(data, &envelope); err != nil {
-		return nil, false, nil
+		return Entry{}, false, nil
 	}
 	if envelope.SchemaVersion != SchemaVersion ||
 		envelope.Source != source ||
 		envelope.Scope != scope ||
-		envelope.Revision != revision ||
+		strings.TrimSpace(envelope.Revision) == "" ||
 		envelope.ParserVersion != parserVersion ||
 		!envelope.Complete ||
 		len(envelope.Snapshot) == 0 || string(envelope.Snapshot) == "null" {
-		return nil, false, nil
+		return Entry{}, false, nil
 	}
-	return append(json.RawMessage(nil), envelope.Snapshot...), true, nil
+	return Entry{
+		Snapshot: append(json.RawMessage(nil), envelope.Snapshot...),
+		Revision: envelope.Revision,
+		StoredAt: info.ModTime().UTC(),
+	}, true, nil
 }
 
 // Write serializes and atomically publishes a complete snapshot. A failed

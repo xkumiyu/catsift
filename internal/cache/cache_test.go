@@ -45,6 +45,13 @@ func TestStoreSeparatesSourceNamespacesAndValidatesEnvelope(t *testing.T) {
 			}
 		})
 	}
+	entry, hit, err := store.ReadEntry("codex", "/history/shared", "parser-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hit || entry.Revision != "revision-1" || entry.StoredAt.IsZero() {
+		t.Fatalf("cache entry = %#v, hit=%v", entry, hit)
+	}
 }
 
 func TestDefaultDirUsesNewSnapshotCacheNamespace(t *testing.T) {

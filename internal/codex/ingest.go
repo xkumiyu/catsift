@@ -21,7 +21,7 @@ import (
 
 const DefaultMaxLineBytes = 4 << 20
 
-const codexParserVersion = "codex-normalizer-v4"
+const codexParserVersion = "codex-normalizer-v3"
 
 // ResolveHome applies the Codex home precedence rule.
 func ResolveHome(explicit string) (string, error) {
@@ -333,6 +333,7 @@ type IngestOptions struct {
 	To           time.Time
 	Now          time.Time
 	CacheDir     string
+	Diagnostic   func(string)
 }
 
 type IngestResult struct {
@@ -363,6 +364,7 @@ func Stream(home string, opts IngestOptions, consume func(usage.Turn)) (sessions
 	if err != nil {
 		return nil, nil, err
 	}
+	diagnose(opts, fmt.Sprintf("codex source: root=%q files=%d parser=%s", filepath.Clean(home), len(files), codexParserVersion))
 	collector := &WarningCollector{}
 	var selectedSessionIDs map[string]struct{}
 	if filter.Active() {
@@ -375,6 +377,7 @@ func Stream(home string, opts IngestOptions, consume func(usage.Turn)) (sessions
 		consume(turn)
 	})
 	for _, path := range files {
+		diagnose(opts, fmt.Sprintf("codex source: reading path=%q", path))
 		if err := DecodeFile(path, DecodeOptions{MaxLineBytes: opts.MaxLineBytes, Warnings: collector}, a.consume); err != nil {
 			collector.AddFile("read_file", path)
 		}
@@ -414,9 +417,11 @@ func loadCached(home string, opts IngestOptions) (IngestResult, error) {
 		return IngestResult{}, err
 	}
 	store := cache.New(opts.CacheDir)
+	diagnose(opts, fmt.Sprintf("codex source: root=%q files=%d parser=%s", filepath.Clean(home), len(files), codexParserVersion))
 	var turns []usage.Turn
 	var warnings []usage.Warning
 	sessions := make(map[string]SessionMetadata)
+	cacheHits, cacheMisses := 0, 0
 	for _, path := range files {
 		before, statErr := os.Stat(path)
 		if statErr != nil {
@@ -424,24 +429,41 @@ func loadCached(home string, opts IngestOptions) (IngestResult, error) {
 			continue
 		}
 		revision := fileRevision(before)
-		data, hit, _ := store.Read("codex", path, revision, codexParserVersion)
+		cachePath := store.Path("codex", path)
+		data, hit, readErr := store.Read("codex", path, revision, codexParserVersion)
+		if readErr != nil {
+			diagnose(opts, fmt.Sprintf("codex cache: read failed path=%q: %v", cachePath, readErr))
+		}
 		var snapshot cache.Snapshot
 		var fileResult IngestResult
 		if hit {
 			if unmarshalErr := json.Unmarshal(data, &snapshot); unmarshalErr != nil {
+				diagnose(opts, fmt.Sprintf("codex cache: invalid snapshot path=%q: %v", cachePath, unmarshalErr))
 				hit = false
 			} else {
 				fileResult = resultFromSnapshot(snapshot, path)
 			}
 		}
 		if !hit {
+			cacheMisses++
+			diagnose(opts, fmt.Sprintf("codex cache: miss source=%q cache=%q revision=%q parser=%s; reading source", path, cachePath, revision, codexParserVersion))
 			var complete bool
 			snapshot, fileResult, complete = parseFileSnapshot(path, opts)
 			if complete {
 				if after, afterErr := os.Stat(path); afterErr == nil && fileRevision(after) == revision {
-					_ = store.Write("codex", path, revision, codexParserVersion, snapshot)
+					if writeErr := store.Write("codex", path, revision, codexParserVersion, snapshot); writeErr != nil {
+						diagnose(opts, fmt.Sprintf("codex cache: write failed path=%q: %v", cachePath, writeErr))
+					} else {
+						diagnose(opts, fmt.Sprintf("codex cache: stored path=%q", cachePath))
+					}
+				} else if afterErr != nil {
+					diagnose(opts, fmt.Sprintf("codex cache: skipped path=%q; source stat failed after read: %v", path, afterErr))
+				} else {
+					diagnose(opts, fmt.Sprintf("codex cache: skipped path=%q; source revision changed from %q to %q", path, revision, fileRevision(after)))
 				}
 			}
+		} else {
+			cacheHits++
 		}
 		turns = append(turns, fileResult.Turns...)
 		for _, value := range fileResult.Sessions {
@@ -449,6 +471,7 @@ func loadCached(home string, opts IngestOptions) (IngestResult, error) {
 		}
 		warnings = append(warnings, fileResult.Warnings...)
 	}
+	diagnose(opts, fmt.Sprintf("codex cache: summary files=%d hits=%d misses=%d", len(files), cacheHits, cacheMisses))
 	if filter.Active() {
 		filtered := turns[:0]
 		selectedSessionIDs := make(map[string]struct{})
@@ -477,6 +500,12 @@ func loadCached(home string, opts IngestOptions) (IngestResult, error) {
 	resultSessions, indexWarnings := enrichSessionTitles(home, resultSessions)
 	warnings = append(warnings, indexWarnings...)
 	return IngestResult{Turns: turns, Sessions: resultSessions, Warnings: warnings}, nil
+}
+
+func diagnose(opts IngestOptions, message string) {
+	if opts.Diagnostic != nil {
+		opts.Diagnostic(message)
+	}
 }
 
 func enrichSessionTitles(home string, sessions []SessionMetadata) ([]SessionMetadata, []usage.Warning) {
@@ -682,6 +711,7 @@ type assembler struct {
 	metadata             map[string]SessionMetadata
 	pathToSID            map[string]string
 	versions             map[string]string
+	sessionProviders     map[string]string
 	sessionModels        map[string]usage.ModelRef
 	cumulativeTokenUsage map[string]usage.TokenUsage
 	seenTokenUsageRecord map[string]struct{}
@@ -696,17 +726,19 @@ type turnState struct {
 }
 
 func newAssembler(filter TimestampFilter, warnings *WarningCollector, out func(usage.Turn)) *assembler {
-	return &assembler{filter: filter, warnings: warnings, out: out, current: make(map[string]*turnState), ordinals: make(map[string]int), metadata: make(map[string]SessionMetadata), pathToSID: make(map[string]string), versions: make(map[string]string), sessionModels: make(map[string]usage.ModelRef), cumulativeTokenUsage: make(map[string]usage.TokenUsage), seenTokenUsageRecord: make(map[string]struct{})}
+	return &assembler{filter: filter, warnings: warnings, out: out, current: make(map[string]*turnState), ordinals: make(map[string]int), metadata: make(map[string]SessionMetadata), pathToSID: make(map[string]string), versions: make(map[string]string), sessionProviders: make(map[string]string), sessionModels: make(map[string]usage.ModelRef), cumulativeTokenUsage: make(map[string]usage.TokenUsage), seenTokenUsageRecord: make(map[string]struct{})}
 }
 
 func (a *assembler) consume(env Envelope) {
 	payload := object(env.Payload)
 	sid := env.SessionID
 	if sid == "" {
-		sid = stringValue(payload, "session_id")
+		// Keep one history file bound to its own session. Some fork records
+		// carry the parent session ID in payload.session_id.
+		sid = a.pathToSID[env.Source.Path]
 	}
 	if sid == "" {
-		sid = a.pathToSID[env.Source.Path]
+		sid = stringValue(payload, "session_id")
 	}
 	if env.Type == "session_meta" {
 		metaID := firstString(payload, "id", "session_id", "sessionId")
@@ -721,6 +753,9 @@ func (a *assembler) consume(env Envelope) {
 		version := firstString(payload, "cli_version", "version")
 		if version != "" {
 			a.versions[sid] = version
+		}
+		if provider := firstString(payload, "model_provider", "model_provider_id", "provider", "provider_id"); provider != "" {
+			a.sessionProviders[sid] = provider
 		}
 		env.Source.CLIVersion = version
 		meta := usage.NewSession(sid, env.Source)
@@ -755,8 +790,9 @@ func (a *assembler) consume(env Envelope) {
 		id = firstString(payload, "id")
 	}
 	if env.Type == "event_msg" && sameRecordType(kind, "thread_settings_applied") {
-		if model, ok := usage.ModelFromValues([]any{payload}, env.Source.Provider); ok {
+		if model, ok := usage.ModelFromValues([]any{payload}, a.modelFallbackProvider(sid, env.Source.Provider)); ok {
 			a.sessionModels[sid] = model
+			a.sessionProviders[sid] = model.Provider
 			if cur := a.current[sid]; cur != nil {
 				cur.turn.ObserveModelAt(model, env.Timestamp, env.Source)
 			}
@@ -827,6 +863,13 @@ func (a *assembler) touchSessionMetadata(sid string, timestamp time.Time) {
 		meta.UpdatedAt = timestamp
 	}
 	a.metadata[sid] = meta
+}
+
+func (a *assembler) modelFallbackProvider(sid, fallback string) string {
+	if provider := strings.TrimSpace(a.sessionProviders[sid]); provider != "" {
+		return provider
+	}
+	return fallback
 }
 
 func isTurnBoundary(envelopeType, payloadType string) bool {
@@ -949,7 +992,7 @@ func (a *assembler) observe(cur *turnState, env Envelope, payload map[string]any
 	if nested, ok := payload["item"].(map[string]any); ok {
 		item = nested
 	}
-	model, hasModel := usage.ModelFromValues([]any{payload, item}, env.Source.Provider)
+	model, hasModel := usage.ModelFromValues([]any{payload, item}, a.modelFallbackProvider(cur.turn.SessionID, env.Source.Provider))
 	if hasModel {
 		cur.turn.ObserveModelAt(model, env.Timestamp, env.Source)
 	}

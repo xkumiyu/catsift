@@ -204,6 +204,41 @@ func TestRenderHumanDisplaysSourceAndSortedAgents(t *testing.T) {
 	}
 }
 
+func TestRenderHumanDisplaysMultipleSources(t *testing.T) {
+	ctx := ReportContext{
+		Sources: []usage.SourceKind{usage.SourceCodex, usage.SourceOpenCode},
+		SourcePaths: map[usage.SourceKind]string{
+			usage.SourceCodex:    "/codex/root",
+			usage.SourceOpenCode: "/opencode/root",
+		},
+		Agents: []string{"codex", "opencode"},
+		Period: "all time",
+	}
+	got := RenderHuman("stats", ctx, aggregate.Report{}, TerminalCapabilities{Width: 120, ColorMode: ColorNever})
+	if !strings.Contains(got, "Source: Codex (/codex/root), OpenCode (/opencode/root)") {
+		t.Fatalf("multiple source context missing: %s", got)
+	}
+}
+
+func TestRenderJSONIncludesMultipleSources(t *testing.T) {
+	ctx := ReportContext{Sources: []usage.SourceKind{usage.SourceCodex, usage.SourceOpenCode}, Agents: []string{"codex", "opencode"}, Period: "all time"}
+	data, err := RenderJSON("stats", ctx, aggregate.Report{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var value struct {
+		Source  string             `json:"source"`
+		Sources []usage.SourceKind `json:"sources"`
+	}
+	if err := json.Unmarshal(data, &value); err != nil {
+		t.Fatal(err)
+	}
+	want := []usage.SourceKind{usage.SourceCodex, usage.SourceOpenCode}
+	if value.Source != "" || !reflect.DeepEqual(value.Sources, want) {
+		t.Fatalf("multiple source metadata = %#v", value)
+	}
+}
+
 func TestRenderHumanShortensCodexHomeToTilde(t *testing.T) {
 	home, err := os.UserHomeDir()
 	if err != nil {

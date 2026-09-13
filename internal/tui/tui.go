@@ -37,20 +37,36 @@ const (
 	RouteSessionDetail      Route = "session-detail"
 	RouteTurnDetail         Route = "turn-detail"
 	timeColumnWidth               = 18
-	relativeTimeColumnWidth       = 10
+	relativeTimeColumnWidth       = 12
 )
+
+type sortMode uint8
+
+const (
+	sortDefault sortMode = iota
+	sortLastUsed
+	sortName
+	sortTurns
+	sortFirstUsed
+)
+
+type sortOption struct {
+	mode  sortMode
+	label string
+}
 
 // ReloadFunc reloads the source snapshot. The current view remains visible
 // until the returned input has been rebuilt into a read model.
 type ReloadFunc func() (query.Input, error)
 
 type RunOptions struct {
-	Input      query.Input
-	Filter     query.Filter
-	SourcePath string
-	Reload     ReloadFunc
-	Stdin      io.Reader
-	Stdout     io.Writer
+	Input       query.Input
+	Filter      query.Filter
+	SourcePath  string
+	SourcePaths map[usage.SourceKind]string
+	Reload      ReloadFunc
+	Stdin       io.Reader
+	Stdout      io.Writer
 }
 
 // Run starts the interactive program after verifying both streams are TTYs.
@@ -69,6 +85,7 @@ func Run(options RunOptions) error {
 	}
 	state := NewState(options.Input, options.Filter, options.Reload)
 	state.sourcePath = options.SourcePath
+	state.sourcePaths = cloneSourcePaths(options.SourcePaths)
 	program := tea.NewProgram(state, tea.WithAltScreen(), tea.WithInput(stdin), tea.WithOutput(stdout))
 	_, err := program.Run()
 	return err
@@ -111,6 +128,9 @@ type State struct {
 
 	searching         bool
 	searchInput       string
+	periodEditing     bool
+	periodInput       string
+	periodNotice      string
 	selectedKey       string
 	selectedTurnIndex int
 	parentSelected    int
@@ -118,8 +138,14 @@ type State struct {
 	reload            ReloadFunc
 	pendingReload     tea.Cmd
 	help              bool
+	sortMode          sortMode
 	history           []navigationContext
 	sourcePath        string
+	sourcePaths       map[usage.SourceKind]string
+	sourceFilterOpen  bool
+	sourceSelected    int
+	sourceOriginal    []usage.SourceKind
+	now               time.Time
 }
 
 type navigationContext struct {
@@ -128,6 +154,7 @@ type navigationContext struct {
 	selected    int
 	offset      int
 	search      string
+	sortMode    sortMode
 }
 
 var (
@@ -148,7 +175,14 @@ const (
 
 func NewState(input query.Input, filter query.Filter, reload ReloadFunc) *State {
 	input = query.SanitizeInput(input)
-	if filter.Source == "" {
+	if filter.Sources == nil {
+		if filter.Source != "" {
+			filter.Sources = []usage.SourceKind{filter.Source}
+		} else {
+			filter.Sources = inputSources(input)
+		}
+	}
+	if filter.Source == "" && len(filter.Sources) == 1 {
 		filter.Source = input.Source
 	}
 	state := &State{
@@ -159,6 +193,7 @@ func NewState(input query.Input, filter query.Filter, reload ReloadFunc) *State 
 		Height:            30,
 		selectedTurnIndex: -1,
 		reload:            reload,
+		now:               time.Now().UTC(),
 	}
 	state.rebuildReadModel()
 	return state
@@ -179,6 +214,7 @@ func (state *State) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		state.clampSelection()
 		return state, nil
 	case ReloadResultMsg:
+		state.clearPeriodNotice()
 		state.Loading = false
 		state.pendingReload = nil
 		if message.Err != nil {
@@ -201,7 +237,10 @@ func (state *State) updateKey(message tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if message.Type == tea.KeyCtrlC || message.String() == "ctrl+c" {
 		return state, tea.Quit
 	}
-	if !state.searching && message.String() == "q" {
+	if state.sourceFilterOpen {
+		return state.updateSourceFilter(message)
+	}
+	if !state.searching && !state.periodEditing && message.String() == "q" {
 		return state, tea.Quit
 	}
 	if state.help {
@@ -213,6 +252,9 @@ func (state *State) updateKey(message tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	if state.searching {
 		return state.updateSearch(message)
+	}
+	if state.periodEditing {
+		return state.updatePeriod(message)
 	}
 	if message.Type == tea.KeyEscape || message.String() == "esc" {
 		state.back()
@@ -234,9 +276,22 @@ func (state *State) updateKey(message tea.KeyMsg) (tea.Model, tea.Cmd) {
 			state.searching = true
 			state.searchInput = state.Filter.Search
 		}
+	case "d":
+		state.periodEditing = true
+		state.periodInput = ""
+		state.Status = ""
+		state.clearPeriodNotice()
 	case "r":
 		return state, state.startReload()
+	case "o":
+		state.openSourceFilter()
+	case "s":
+		if isSortableRoute(state.Route) {
+			state.cycleSort()
+		}
 	case "c":
+		state.Filter.Source = ""
+		state.Filter.Sources = state.sourceOptions()
 		state.Filter.Agent = ""
 		state.Filter.Project = ""
 		state.Filter.Model = usage.ModelRef{}
@@ -245,6 +300,10 @@ func (state *State) updateKey(message tea.KeyMsg) (tea.Model, tea.Cmd) {
 		state.Filter.ModelName = ""
 		state.Filter.Skill = ""
 		state.Filter.Search = ""
+		state.Filter.From = time.Time{}
+		state.Filter.To = time.Time{}
+		state.Status = ""
+		state.clearPeriodNotice()
 		state.rebuildReadModel()
 		state.setRoute(RouteOverview)
 	case "f":
@@ -294,6 +353,76 @@ func (state *State) updateKey(message tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return state, nil
 }
 
+func (state *State) openSourceFilter() {
+	options := state.sourceOptions()
+	if len(options) == 0 {
+		state.Status = "source filter unavailable"
+		return
+	}
+	state.sourceFilterOpen = true
+	state.sourceSelected = 0
+	state.sourceOriginal = append([]usage.SourceKind(nil), state.Filter.Sources...)
+}
+
+func (state *State) updateSourceFilter(message tea.KeyMsg) (tea.Model, tea.Cmd) {
+	options := state.sourceOptions()
+	if len(options) == 0 {
+		state.sourceFilterOpen = false
+		return state, nil
+	}
+	switch message.String() {
+	case "esc", "b":
+		state.Filter.Sources = append([]usage.SourceKind(nil), state.sourceOriginal...)
+		state.sourceFilterOpen = false
+		state.sourceOriginal = nil
+		state.rebuildReadModel()
+		state.clampSelection()
+	case "enter":
+		state.sourceFilterOpen = false
+		state.sourceOriginal = nil
+	case "up", "k":
+		if state.sourceSelected > 0 {
+			state.sourceSelected--
+		}
+	case "down", "j":
+		if state.sourceSelected < len(options)-1 {
+			state.sourceSelected++
+		}
+	case " ":
+		state.toggleSource(options[state.sourceSelected])
+	case "a":
+		state.Filter.Source = ""
+		state.Filter.Sources = append([]usage.SourceKind(nil), options...)
+		state.rebuildReadModel()
+		state.clampSelection()
+	case "n":
+		state.Filter.Source = ""
+		state.Filter.Sources = []usage.SourceKind{}
+		state.rebuildReadModel()
+		state.clampSelection()
+	}
+	return state, nil
+}
+
+func (state *State) toggleSource(source usage.SourceKind) {
+	selected := append([]usage.SourceKind(nil), state.Filter.Sources...)
+	state.Filter.Source = ""
+	for index, value := range selected {
+		if value != source {
+			continue
+		}
+		selected = append(selected[:index], selected[index+1:]...)
+		state.Filter.Sources = selected
+		state.rebuildReadModel()
+		state.clampSelection()
+		return
+	}
+	selected = append(selected, source)
+	state.Filter.Sources = orderedSources(selected)
+	state.rebuildReadModel()
+	state.clampSelection()
+}
+
 func (state *State) updateSearch(message tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch message.Type {
 	case tea.KeyEscape:
@@ -318,6 +447,100 @@ func (state *State) updateSearch(message tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return state, nil
+}
+
+func (state *State) updatePeriod(message tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch message.Type {
+	case tea.KeyEscape:
+		state.periodEditing = false
+		state.periodInput = ""
+		return state, nil
+	case tea.KeyEnter:
+		from, to, err := parsePeriodInput(state.periodInput, state.now)
+		if err != nil {
+			state.Status = "period: " + err.Error()
+			return state, nil
+		}
+		state.clearPeriodNotice()
+		state.Filter.From, state.Filter.To = from, to
+		state.periodEditing = false
+		state.periodInput = ""
+		state.Status = ""
+		state.Selected, state.Offset = 0, 0
+		state.rebuildReadModel()
+		state.setRoute(RouteOverview)
+		state.periodNotice = state.periodNoticeText()
+		return state, nil
+	case tea.KeyBackspace:
+		state.periodInput = trimLastRune(state.periodInput)
+		return state, nil
+	}
+	if message.Type == tea.KeyRunes && len(message.Runes) > 0 {
+		for _, value := range message.Runes {
+			if utf8.ValidRune(value) && value >= ' ' && value != '\u007f' {
+				state.periodInput += string(value)
+			}
+		}
+	}
+	return state, nil
+}
+
+func parsePeriodInput(value string, now time.Time) (time.Time, time.Time, error) {
+	value = strings.TrimSpace(value)
+	if value == "" || strings.EqualFold(value, "all") {
+		return time.Time{}, time.Time{}, nil
+	}
+	if days, err := strconv.Atoi(value); err == nil {
+		if days <= 0 {
+			return time.Time{}, time.Time{}, errors.New("period days must be at least 1")
+		}
+		const maxPeriodDays = int64((1<<63 - 1) / int64(24*time.Hour))
+		if int64(days) > maxPeriodDays {
+			return time.Time{}, time.Time{}, errors.New("period is too large")
+		}
+		if now.IsZero() {
+			now = time.Now().UTC()
+		}
+		return now.Add(-time.Duration(days) * 24 * time.Hour), now, nil
+	}
+	if strings.Contains(value, "..") {
+		bounds := strings.Split(value, "..")
+		if len(bounds) != 2 || (strings.TrimSpace(bounds[0]) == "" && strings.TrimSpace(bounds[1]) == "") {
+			return time.Time{}, time.Time{}, errors.New("period must be all, N, YYYY-MM-DD, or YYYY-MM-DD..YYYY-MM-DD")
+		}
+		from, err := parsePeriodDate(bounds[0])
+		if err != nil {
+			return time.Time{}, time.Time{}, err
+		}
+		to, err := parsePeriodDate(bounds[1])
+		if err != nil {
+			return time.Time{}, time.Time{}, err
+		}
+		if !to.IsZero() {
+			to = to.AddDate(0, 0, 1)
+		}
+		if !from.IsZero() && !to.IsZero() && !from.Before(to) {
+			return time.Time{}, time.Time{}, errors.New("period start must be before period end")
+		}
+		return from, to, nil
+	}
+	from, err := parsePeriodDate(value)
+	if err != nil {
+		return time.Time{}, time.Time{}, err
+	}
+	return from, from.AddDate(0, 0, 1), nil
+}
+
+func parsePeriodDate(value string) (time.Time, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}, nil
+	}
+	parsed, err := time.ParseInLocation("2006-01-02", value, time.UTC)
+	if err != nil {
+		return time.Time{}, errors.New("period dates must use YYYY-MM-DD")
+	}
+	return parsed, nil
 }
 
 func trimLastRune(value string) string {
@@ -346,13 +569,60 @@ func (state *State) startReload() tea.Cmd {
 }
 
 func (state *State) setRoute(route Route) {
+	state.clearPeriodNotice()
 	state.Route = route
 	state.ParentRoute = ""
 	state.selectedKey = ""
 	state.selectedTurnIndex = -1
 	state.Filter.Search = ""
 	state.Selected, state.Offset = 0, 0
+	state.sortMode = sortDefault
 	state.history = nil
+	state.clampSelection()
+}
+
+func sortOptions(route Route) []sortOption {
+	switch route {
+	case RouteModels, RouteSkills:
+		return []sortOption{{sortDefault, "Usage"}, {sortLastUsed, "Last Used"}, {sortName, "Name"}}
+	case RouteSessions:
+		return []sortOption{{sortDefault, "Last Used"}, {sortName, "Name"}, {sortTurns, "Turns"}}
+	case RouteModelDetail:
+		return []sortOption{{sortDefault, "Last Used"}, {sortTurns, "Turns"}, {sortName, "Name"}}
+	case RouteSkillDetail:
+		return []sortOption{{sortDefault, "Last Used"}, {sortFirstUsed, "First Used"}, {sortName, "Name"}}
+	default:
+		return nil
+	}
+}
+
+func isSortableRoute(route Route) bool {
+	return len(sortOptions(route)) > 0
+}
+
+func (state *State) sortLabel() string {
+	for _, option := range sortOptions(state.Route) {
+		if option.mode == state.sortMode {
+			return option.label
+		}
+	}
+	return ""
+}
+
+func (state *State) cycleSort() {
+	options := sortOptions(state.Route)
+	if len(options) < 2 {
+		return
+	}
+	index := 0
+	for i, option := range options {
+		if option.mode == state.sortMode {
+			index = i
+			break
+		}
+	}
+	state.sortMode = options[(index+1)%len(options)].mode
+	state.Selected, state.Offset = 0, 0
 	state.clampSelection()
 }
 
@@ -436,17 +706,17 @@ func (state *State) openSelected() {
 		}
 		state.push(RouteSessionDetail, rows[state.Selected].Key)
 	case RouteModelDetail:
-		detail, ok := state.ReadModel.ModelDetail(state.selectedKey)
-		if !ok || state.Selected >= len(detail.Sessions) {
+		rows := state.modelDetailRows()
+		if state.Selected >= len(rows) {
 			return
 		}
-		state.push(RouteSessionDetail, detail.Sessions[state.Selected].Key)
+		state.push(RouteSessionDetail, rows[state.Selected].Key)
 	case RouteSkillDetail:
-		detail, ok := state.ReadModel.SkillDetail(state.selectedKey)
-		if !ok || state.Selected >= len(detail.Sessions) {
+		rows := state.skillDetailRows()
+		if state.Selected >= len(rows) {
 			return
 		}
-		state.push(RouteSessionDetail, detail.Sessions[state.Selected].SessionKey)
+		state.push(RouteSessionDetail, rows[state.Selected].SessionKey)
 	case RouteSessionDetail:
 		detail, ok := state.ReadModel.SessionDetail(state.selectedKey)
 		if !ok || state.Selected >= len(detail.Turns) {
@@ -461,7 +731,8 @@ func (state *State) openSelected() {
 }
 
 func (state *State) push(route Route, key string) {
-	state.history = append(state.history, navigationContext{route: state.Route, selectedKey: state.selectedKey, selected: state.Selected, offset: state.Offset, search: state.Filter.Search})
+	state.clearPeriodNotice()
+	state.history = append(state.history, navigationContext{route: state.Route, selectedKey: state.selectedKey, selected: state.Selected, offset: state.Offset, search: state.Filter.Search, sortMode: state.sortMode})
 	state.parentSelected, state.parentOffset = state.Selected, state.Offset
 	state.ParentRoute = state.Route
 	state.Route = route
@@ -469,12 +740,14 @@ func (state *State) push(route Route, key string) {
 	state.selectedTurnIndex = -1
 	state.Filter.Search = ""
 	state.Selected, state.Offset = 0, 0
+	state.sortMode = sortDefault
 }
 
 func (state *State) back() {
 	if len(state.history) == 0 {
 		return
 	}
+	state.clearPeriodNotice()
 	last := len(state.history) - 1
 	context := state.history[last]
 	state.history = state.history[:last]
@@ -483,6 +756,7 @@ func (state *State) back() {
 	state.selectedTurnIndex = -1
 	state.Filter.Search = context.search
 	state.Selected, state.Offset = context.selected, context.offset
+	state.sortMode = context.sortMode
 	if len(state.history) == 0 {
 		state.ParentRoute = ""
 	} else {
@@ -533,53 +807,189 @@ func (state *State) filterSelectedSession(field string) {
 }
 
 func (state *State) filteredModels() []query.ModelSummary {
-	if strings.TrimSpace(state.Filter.Search) == "" {
-		return state.ReadModel.Models
-	}
-	rows := make([]query.ModelSummary, 0, len(state.ReadModel.Models))
-	for _, row := range state.ReadModel.Models {
-		if matchesSearch(state.Filter.Search, row.Model.Provider, row.Model.Name, row.Model.Provider+"/"+row.Model.Name) {
-			rows = append(rows, row)
+	rows := state.ReadModel.Models
+	if strings.TrimSpace(state.Filter.Search) != "" {
+		rows = make([]query.ModelSummary, 0, len(state.ReadModel.Models))
+		for _, row := range state.ReadModel.Models {
+			if matchesSearch(state.Filter.Search, row.Model.Provider, row.Model.Name, row.Model.Provider+"/"+row.Model.Name) {
+				rows = append(rows, row)
+			}
 		}
 	}
+	if state.sortMode == sortDefault {
+		return rows
+	}
+	rows = append([]query.ModelSummary(nil), rows...)
+	sort.SliceStable(rows, func(i, j int) bool {
+		switch state.sortMode {
+		case sortLastUsed:
+			if !rows[i].LastUsed.Equal(rows[j].LastUsed) {
+				return rows[i].LastUsed.After(rows[j].LastUsed)
+			}
+			if rows[i].Turns != rows[j].Turns {
+				return rows[i].Turns > rows[j].Turns
+			}
+			return rows[i].Model.Key() < rows[j].Model.Key()
+		case sortName:
+			left, right := strings.ToLower(rows[i].Model.Key()), strings.ToLower(rows[j].Model.Key())
+			if left != right {
+				return left < right
+			}
+			return rows[i].Model.Key() < rows[j].Model.Key()
+		default:
+			return false
+		}
+	})
 	return rows
 }
 
 func (state *State) filteredSkills() []query.SkillSummary {
-	if strings.TrimSpace(state.Filter.Search) == "" {
-		return state.ReadModel.Skills
-	}
-	rows := make([]query.SkillSummary, 0, len(state.ReadModel.Skills))
-	for _, row := range state.ReadModel.Skills {
-		if matchesSearch(state.Filter.Search, row.Name) {
-			rows = append(rows, row)
+	rows := state.ReadModel.Skills
+	if strings.TrimSpace(state.Filter.Search) != "" {
+		rows = make([]query.SkillSummary, 0, len(state.ReadModel.Skills))
+		for _, row := range state.ReadModel.Skills {
+			if matchesSearch(state.Filter.Search, row.Name) {
+				rows = append(rows, row)
+			}
 		}
 	}
+	if state.sortMode == sortDefault {
+		return rows
+	}
+	rows = append([]query.SkillSummary(nil), rows...)
+	sort.SliceStable(rows, func(i, j int) bool {
+		switch state.sortMode {
+		case sortLastUsed:
+			if !rows[i].LastUsed.Equal(rows[j].LastUsed) {
+				return rows[i].LastUsed.After(rows[j].LastUsed)
+			}
+			if rows[i].Uses != rows[j].Uses {
+				return rows[i].Uses > rows[j].Uses
+			}
+			return strings.ToLower(rows[i].Name) < strings.ToLower(rows[j].Name)
+		case sortName:
+			left, right := strings.ToLower(rows[i].Name), strings.ToLower(rows[j].Name)
+			if left != right {
+				return left < right
+			}
+			return rows[i].Name < rows[j].Name
+		default:
+			return false
+		}
+	})
 	return rows
 }
 
 func (state *State) filteredSessions() []query.SessionSummary {
-	if strings.TrimSpace(state.Filter.Search) == "" {
-		return state.ReadModel.Sessions
-	}
-	rows := make([]query.SessionSummary, 0, len(state.ReadModel.Sessions))
-	for _, row := range state.ReadModel.Sessions {
-		if matchesSearch(state.Filter.Search,
-			row.Key,
-			row.ID,
-			string(row.Source),
-			row.Agent,
-			row.Provider,
-			row.ProviderSessionID,
-			row.CtxSessionID,
-			row.ProjectPath,
-			row.CLIVersion,
-			row.Title,
-			sessionLabel(row.Title, row.Source, row.Agent, row.ID, row.Aborted),
-		) {
-			rows = append(rows, row)
+	rows := state.ReadModel.Sessions
+	if strings.TrimSpace(state.Filter.Search) != "" {
+		rows = make([]query.SessionSummary, 0, len(state.ReadModel.Sessions))
+		for _, row := range state.ReadModel.Sessions {
+			if matchesSearch(state.Filter.Search,
+				row.Key,
+				row.ID,
+				string(row.Source),
+				row.Agent,
+				row.Provider,
+				row.ProviderSessionID,
+				row.CtxSessionID,
+				row.ProjectPath,
+				row.CLIVersion,
+				row.Title,
+				sessionLabel(row.Title, row.Source, row.Agent, row.ID, row.Aborted),
+			) {
+				rows = append(rows, row)
+			}
 		}
 	}
+	if state.sortMode == sortDefault {
+		return rows
+	}
+	rows = append([]query.SessionSummary(nil), rows...)
+	sort.SliceStable(rows, func(i, j int) bool {
+		switch state.sortMode {
+		case sortName:
+			left, right := strings.ToLower(sessionName(rows[i].Title, rows[i].ID)), strings.ToLower(sessionName(rows[j].Title, rows[j].ID))
+			if left != right {
+				return left < right
+			}
+			return rows[i].Key < rows[j].Key
+		case sortTurns:
+			if rows[i].Turns != rows[j].Turns {
+				return rows[i].Turns > rows[j].Turns
+			}
+			if !rows[i].EndedAt.Equal(rows[j].EndedAt) {
+				return rows[i].EndedAt.After(rows[j].EndedAt)
+			}
+			return rows[i].Key < rows[j].Key
+		default:
+			return false
+		}
+	})
+	return rows
+}
+
+func (state *State) modelDetailRows() []query.ModelSessionUsage {
+	detail, ok := state.ReadModel.ModelDetail(state.selectedKey)
+	if !ok {
+		return nil
+	}
+	if state.sortMode == sortDefault {
+		return detail.Sessions
+	}
+	rows := append([]query.ModelSessionUsage(nil), detail.Sessions...)
+	sort.SliceStable(rows, func(i, j int) bool {
+		switch state.sortMode {
+		case sortTurns:
+			if rows[i].Turns != rows[j].Turns {
+				return rows[i].Turns > rows[j].Turns
+			}
+			if !rows[i].LastUsed.Equal(rows[j].LastUsed) {
+				return rows[i].LastUsed.After(rows[j].LastUsed)
+			}
+			return rows[i].Key < rows[j].Key
+		case sortName:
+			left, right := strings.ToLower(sessionName(rows[i].Title, rows[i].ID)), strings.ToLower(sessionName(rows[j].Title, rows[j].ID))
+			if left != right {
+				return left < right
+			}
+			return rows[i].Key < rows[j].Key
+		default:
+			return false
+		}
+	})
+	return rows
+}
+
+func (state *State) skillDetailRows() []query.SkillSessionUsage {
+	detail, ok := state.ReadModel.SkillDetail(state.selectedKey)
+	if !ok {
+		return nil
+	}
+	if state.sortMode == sortDefault {
+		return detail.Sessions
+	}
+	rows := append([]query.SkillSessionUsage(nil), detail.Sessions...)
+	sort.SliceStable(rows, func(i, j int) bool {
+		switch state.sortMode {
+		case sortFirstUsed:
+			if !rows[i].FirstUsed.Equal(rows[j].FirstUsed) {
+				return rows[i].FirstUsed.Before(rows[j].FirstUsed)
+			}
+			if !rows[i].LastUsed.Equal(rows[j].LastUsed) {
+				return rows[i].LastUsed.After(rows[j].LastUsed)
+			}
+			return rows[i].SessionKey < rows[j].SessionKey
+		case sortName:
+			left, right := strings.ToLower(sessionName(rows[i].Title, rows[i].SessionID)), strings.ToLower(sessionName(rows[j].Title, rows[j].SessionID))
+			if left != right {
+				return left < right
+			}
+			return rows[i].SessionKey < rows[j].SessionKey
+		default:
+			return false
+		}
+	})
 	return rows
 }
 
@@ -607,13 +1017,9 @@ func (state *State) rowCount() int {
 	case RouteSessions:
 		return len(state.filteredSessions())
 	case RouteModelDetail:
-		if detail, ok := state.ReadModel.ModelDetail(state.selectedKey); ok {
-			return len(detail.Sessions)
-		}
+		return len(state.modelDetailRows())
 	case RouteSkillDetail:
-		if detail, ok := state.ReadModel.SkillDetail(state.selectedKey); ok {
-			return len(detail.Sessions)
-		}
+		return len(state.skillDetailRows())
 	case RouteSessionDetail:
 		if detail, ok := state.ReadModel.SessionDetail(state.selectedKey); ok {
 			return len(detail.Turns)
@@ -757,6 +1163,9 @@ func (state *State) View() string {
 	if state.help {
 		return state.viewHelp()
 	}
+	if state.sourceFilterOpen {
+		return state.viewSourceFilter()
+	}
 	top := state.headerLines()
 	footer := state.footerLines()
 	bodyHeight := state.Height - len(top) - len(footer)
@@ -771,17 +1180,41 @@ func (state *State) View() string {
 	return boundView(lines, state.Width, state.Height)
 }
 
+func (state *State) viewSourceFilter() string {
+	width := state.renderWidth()
+	options := state.sourceOptions()
+	lines := []string{
+		titleStyle.Render(truncate("catsift / Sources", width)),
+		"",
+		sectionStyle.Render("Toggle sources"),
+		mutedStyle.Render(truncate("Space toggle   a all   n none   Enter apply   Esc cancel", width)),
+		"",
+	}
+	for index, source := range options {
+		mark := "[ ]"
+		if state.sourceEnabled(source) {
+			mark = "[x]"
+		}
+		line := fmt.Sprintf("  %s %s", mark, output.FormatSourceContext(source, state.pathForSource(source)))
+		line = truncate(line, width)
+		if index == state.sourceSelected {
+			line = selectedStyle.Render(padRightDisplay(line, width))
+		}
+		lines = append(lines, line)
+	}
+	return boundView(lines, width, state.Height)
+}
+
 func (state *State) headerLines() []string {
 	width := state.renderWidth()
 	lines := []string{titleStyle.Render(truncate("catsift", width))}
 	view := state.ReadModel.Overview
-	sourceField := metadataField{label: "Source", value: output.FormatSourceContext(view.Source, state.sourcePath)}
+	sourceField := metadataField{label: "Source", value: state.sourceContext(view.Source)}
 	agentsField := metadataField{label: "Agents", value: formatAgents(view.Agents, view.Agent)}
 	periodField := metadataField{label: "Period", value: formatPeriod(view.Period.From, view.Period.To)}
-	filtersField := metadataField{label: "Filters", value: filterSummary(state.Filter)}
 	scope := metadataLine("", sourceField, agentsField)
-	period := metadataLine("", periodField, filtersField)
-	compactMetadata := metadataLine("", sourceField, agentsField, periodField, filtersField)
+	period := metadataLine("", periodField)
+	compactMetadata := metadataLine("", sourceField, agentsField, periodField)
 	if lipgloss.Width(compactMetadata) <= width {
 		lines = append(lines, compactMetadata)
 	} else {
@@ -792,12 +1225,74 @@ func (state *State) headerLines() []string {
 		lines = append(lines, infoStyle.Render(truncate("Reloading snapshot…", width)))
 	} else if state.Status != "" {
 		lines = append(lines, warningStyle.Render(truncate(state.Status, width)))
+	} else if state.periodNotice != "" {
+		lines = append(lines, state.periodNoticeLines(width)...)
 	}
-	if state.searching {
+	if state.periodEditing {
+		lines = append(lines, truncate("Set period: "+state.periodInput+"_  Enter apply  Esc cancel", width))
+	} else if state.searching {
 		lines = append(lines, truncate("Search rows: /"+state.searchInput+"_  Enter apply  Esc cancel", width))
 	}
 	lines = append(lines, mutedStyle.Render(strings.Repeat("-", width)))
 	return lines
+}
+
+func (state *State) sourceContext(fallback usage.SourceKind) string {
+	sources := state.Filter.Sources
+	if sources == nil && fallback != "" {
+		sources = []usage.SourceKind{fallback}
+	}
+	if len(sources) == 0 {
+		return "none"
+	}
+	values := make([]string, 0, len(sources))
+	for _, source := range orderedSources(sources) {
+		values = append(values, output.FormatSourceContext(source, state.pathForSource(source)))
+	}
+	return strings.Join(values, ", ")
+}
+
+func (state *State) pathForSource(source usage.SourceKind) string {
+	if path := state.sourcePaths[source]; path != "" {
+		return path
+	}
+	if source == state.Input.Source || len(state.sourceOptions()) == 1 {
+		return state.sourcePath
+	}
+	return ""
+}
+
+func (state *State) periodNoticeLines(width int) []string {
+	const label = "Notice: "
+	notice := strings.TrimSpace(state.periodNotice)
+	content := wrapNoticeWords(notice, maxInt(1, width-lipgloss.Width(label)), maxInt(1, width))
+	lines := make([]string, 0, len(content))
+	lines = append(lines, infoStyle.Render(truncate(label+content[0], width)))
+	for _, line := range content[1:] {
+		lines = append(lines, infoStyle.Render(truncate(line, width)))
+	}
+	return lines
+}
+
+func wrapNoticeWords(value string, firstWidth, nextWidth int) []string {
+	words := strings.Fields(safeDisplay(value))
+	if len(words) == 0 {
+		return []string{""}
+	}
+	lines := make([]string, 0, len(words))
+	line := words[0]
+	width := firstWidth
+	for _, word := range words[1:] {
+		candidate := line + " " + word
+		if lipgloss.Width(candidate) <= width {
+			line = candidate
+			continue
+		}
+		lines = append(lines, line)
+		line = word
+		width = nextWidth
+	}
+	return append(lines, line)
 }
 
 func (state *State) tabsLine() string {
@@ -848,25 +1343,31 @@ func (state *State) footerLines() []string {
 		value = "b/Esc back   1-4 switch   ? help   q quit"
 	case state.isDetail():
 		value = "j/k scroll   b/Esc back   1-4 switch   ? help   q quit"
+		if isSortableRoute(state.Route) {
+			value = "j/k scroll   s sort   b/Esc back   1-4 switch   ? help   q quit"
+		}
 		if state.canOpenSelected() {
 			value = "j/k move   Enter open   b/Esc back   1-4 switch   ? help   q quit"
+			if isSortableRoute(state.Route) {
+				value = "j/k move   Enter open   s sort   b/Esc back   1-4 switch   ? help   q quit"
+			}
 		}
 	case state.Route == RouteOverview:
-		value = "j/k scroll   Home/End jump   1-4 switch   r reload   ? help   q quit"
+		value = "j/k scroll   Home/End jump   d period   1-4 switch   o sources   r reload   ? help   q quit"
 	case state.Route == RouteModels || state.Route == RouteSkills:
-		value = "j/k move   / search rows   f filter   r reload   ? help   q quit"
+		value = "j/k move   / search rows   s sort   f filter   d period   o sources   r reload   ? help   q quit"
 		if state.canOpenSelected() {
-			value = "j/k move   Enter detail   / search rows   f filter   r reload   ? help   q quit"
+			value = "j/k move   Enter detail   / search rows   s sort   f filter   d period   o sources   r reload   ? help   q quit"
 		}
 	case state.Route == RouteSessions:
-		value = "j/k move   / search rows   a agent   p project   r reload   ? help   q quit"
+		value = "j/k move   / search rows   s sort   a agent   p project   d period   o sources   r reload   ? help   q quit"
 		if state.canOpenSelected() {
-			value = "j/k move   Enter detail   / search rows   a agent   p project   r reload   ? help   q quit"
+			value = "j/k move   Enter detail   / search rows   s sort   a agent   p project   d period   o sources   r reload   ? help   q quit"
 		}
 	default:
-		value = "j/k move   / search rows   r reload   ? help   q quit"
+		value = "j/k move   / search rows   d period   o sources   r reload   ? help   q quit"
 		if state.canOpenSelected() {
-			value = "j/k move   Enter detail   / search rows   r reload   ? help   q quit"
+			value = "j/k move   Enter detail   / search rows   d period   o sources   r reload   ? help   q quit"
 		}
 	}
 	return []string{
@@ -895,7 +1396,10 @@ func (state *State) viewHelp() string {
 		"  f         filter selected model or skill",
 		"  a         filter Sessions by selected agent",
 		"  p         filter Sessions by selected project",
+		"  o         toggle source visibility",
+		"  d         set period: all, N, YYYY-MM-DD[..YYYY-MM-DD]",
 		"  r         reload snapshot",
+		"  s         cycle list sort",
 		"  c         clear TUI filters",
 		"  ?/Esc     close help",
 		"  q/Ctrl+C  quit",
@@ -977,6 +1481,7 @@ func (state *State) overviewLines() []string {
 			lines = append(lines, renderTableRow(width, false, trendCells(width, &point, bar)))
 		}
 	}
+	periodInfo := state.periodInfoLines()
 	for _, group := range []struct {
 		level string
 		label string
@@ -986,12 +1491,17 @@ func (state *State) overviewLines() []string {
 		{level: "info", label: "Input notes", style: infoStyle},
 	} {
 		summaries := warningSummaries(state.ReadModel.Warnings, group.level)
-		if len(summaries) == 0 {
+		if len(summaries) == 0 && (group.level != "info" || len(periodInfo) == 0) {
 			continue
 		}
 		lines = append(lines, "", group.style.Render(group.label))
 		for _, summary := range summaries {
 			lines = append(lines, group.style.Render(truncate("  "+warningSummaryText(summary), width)))
+		}
+		if group.level == "info" {
+			for _, info := range periodInfo {
+				lines = append(lines, infoStyle.Render(truncate("  "+info, width)))
+			}
 		}
 	}
 	return lines
@@ -1154,7 +1664,7 @@ func joinOverviewColumns(left, right []string, width int) []string {
 func (state *State) viewModels(height int) []string {
 	rows := state.filteredModels()
 	width := state.renderWidth()
-	lines := []string{primaryListHeading("Models", len(rows), state.Selected, width)}
+	lines := []string{primaryListHeading("Models ["+state.sortLabel()+"]", len(rows), state.Selected, width)}
 	if len(rows) == 0 {
 		if strings.TrimSpace(state.Filter.Search) != "" {
 			return append(lines, mutedStyle.Render("No matching rows."))
@@ -1176,7 +1686,7 @@ func (state *State) viewModels(height int) []string {
 func (state *State) viewSkills(height int) []string {
 	rows := state.filteredSkills()
 	width := state.renderWidth()
-	lines := []string{primaryListHeading("Skills", len(rows), state.Selected, width)}
+	lines := []string{primaryListHeading("Skills ["+state.sortLabel()+"]", len(rows), state.Selected, width)}
 	if len(rows) == 0 {
 		if strings.TrimSpace(state.Filter.Search) != "" {
 			return append(lines, mutedStyle.Render("No matching rows."))
@@ -1198,7 +1708,7 @@ func (state *State) viewSkills(height int) []string {
 func (state *State) viewSessions(height int) []string {
 	rows := state.filteredSessions()
 	width := state.renderWidth()
-	lines := []string{primaryListHeading("Sessions", len(rows), state.Selected, width)}
+	lines := []string{primaryListHeading("Sessions ["+state.sortLabel()+"]", len(rows), state.Selected, width)}
 	if len(rows) == 0 {
 		if strings.TrimSpace(state.Filter.Search) != "" {
 			return append(lines, mutedStyle.Render("No matching rows."))
@@ -1222,22 +1732,23 @@ func (state *State) viewModelDetail(height int) []string {
 	if !ok {
 		return []string{"Model detail unavailable."}
 	}
+	rows := state.modelDetailRows()
 	width := state.renderWidth()
 	lines := []string{
 		titleStyle.Render(truncate("Model detail", width)),
 		identityStyle.Render(truncate("  Model: "+detail.Summary.Model.Provider+"/"+detail.Summary.Model.Name, width)),
 		metadataLine("  ", metadataField{label: "Turns", value: formatInt(detail.Summary.Turns)}, metadataField{label: "Prompts", value: formatInt(detail.Summary.UserPrompts)}, metadataField{label: "Tools", value: formatInt(detail.Summary.ToolCalls)}, metadataField{label: "Skills", value: formatInt(detail.Summary.SkillUses)}),
 		metadataLine("  ", metadataField{label: "Tokens", value: formatTokenTotal(detail.Summary.TokenUsage, detail.Summary.TokenUsageAvailable)}, metadataField{label: "First", value: formatTime(detail.Summary.FirstUsed)}, metadataField{label: "Last", value: formatTime(detail.Summary.LastUsed)}),
-		listHeading("Sessions", len(detail.Sessions), state.Selected, width),
+		listHeading("Sessions ["+state.sortLabel()+"]", len(rows), state.Selected, width),
 		renderTableHeader(width, modelSessionCells(width, nil)),
 	}
 	rowHeight := height - len(lines)
 	if rowHeight < 1 {
 		rowHeight = 1
 	}
-	start, end := window(len(detail.Sessions), state.Offset, rowHeight)
+	start, end := window(len(rows), state.Offset, rowHeight)
 	for i := start; i < end; i++ {
-		lines = append(lines, renderTableRow(width, state.selectedRow(i), modelSessionCellsForRow(width, detail.Sessions[i])))
+		lines = append(lines, renderTableRow(width, state.selectedRow(i), modelSessionCellsForRow(width, rows[i])))
 	}
 	return fitBody(lines, height)
 }
@@ -1247,6 +1758,7 @@ func (state *State) viewSkillDetail(height int) []string {
 	if !ok {
 		return []string{"Skill detail unavailable."}
 	}
+	rows := state.skillDetailRows()
 	row := detail.Summary
 	width := state.renderWidth()
 	lines := []string{
@@ -1262,16 +1774,16 @@ func (state *State) viewSkillDetail(height int) []string {
 			labeledCount{label: "Inferred", value: row.Inferred},
 			labeledCount{label: "Unconfirmed", value: row.Unconfirmed},
 		)}),
-		listHeading("Sessions", len(detail.Sessions), state.Selected, width),
+		listHeading("Sessions ["+state.sortLabel()+"]", len(rows), state.Selected, width),
 		renderTableHeader(width, skillSessionCells(width, nil)),
 	}
 	rowHeight := height - len(lines)
 	if rowHeight < 1 {
 		rowHeight = 1
 	}
-	start, end := window(len(detail.Sessions), state.Offset, rowHeight)
+	start, end := window(len(rows), state.Offset, rowHeight)
 	for i := start; i < end; i++ {
-		lines = append(lines, renderTableRow(width, state.selectedRow(i), skillSessionCellsForRow(width, detail.Sessions[i])))
+		lines = append(lines, renderTableRow(width, state.selectedRow(i), skillSessionCellsForRow(width, rows[i])))
 	}
 	return fitBody(lines, height)
 }
@@ -1400,29 +1912,71 @@ func trendCells(width int, row *query.UsageTrend, bar string) []tableCell {
 	return []tableCell{{value: row.Date.Format("01-02"), width: 8}, {value: bar, width: barWidth}, {value: formatInt(row.Turns), width: 7, right: true}, {value: formatInt(row.Sessions), width: 9, right: true}}
 }
 
-func filterSummary(filter query.Filter) string {
-	parts := make([]string, 0, 5)
-	if filter.Agent != "" {
-		parts = append(parts, "agent="+filter.Agent)
+func (state *State) periodInfoLines() []string {
+	if state.Filter.From.IsZero() && state.Filter.To.IsZero() {
+		return nil
 	}
-	if filter.Project != "" {
-		parts = append(parts, "project="+filter.Project)
+	actual := state.ReadModel.Overview.Period
+	if actual.From.IsZero() {
+		return []string{"No usage found for the selected period."}
 	}
-	if filter.ModelKey != "" {
-		parts = append(parts, "model="+filter.ModelKey)
-	} else if filter.Model.Name != "" {
-		parts = append(parts, "model="+filter.Model.Provider+"/"+filter.Model.Name)
+	now := state.now
+	if now.IsZero() {
+		now = time.Now().UTC()
 	}
-	if filter.Skill != "" {
-		parts = append(parts, "skill="+filter.Skill)
+	requestedFrom, requestedTo := state.Filter.From, state.Filter.To
+	if requestedTo.IsZero() {
+		requestedTo = now
+	} else {
+		requestedTo = requestedTo.Add(-time.Nanosecond)
 	}
-	if filter.Search != "" {
-		parts = append(parts, "search="+filter.Search)
+	var messages []string
+	if !requestedFrom.IsZero() && dateBefore(requestedFrom, actual.From) {
+		messages = append(messages, fmt.Sprintf("selected period starts before the first usage record (%s)", formatDate(actual.From)))
 	}
-	if len(parts) == 0 {
-		return "none"
+	if !actual.To.IsZero() && dateBefore(actual.To, requestedTo) {
+		messages = append(messages, fmt.Sprintf("selected period ends after the last usage record (%s)", formatDate(actual.To)))
 	}
-	return strings.Join(parts, " ")
+	if len(messages) == 0 {
+		return nil
+	}
+	return messages
+}
+
+func (state *State) periodNoticeText() string {
+	if state.Filter.From.IsZero() && state.Filter.To.IsZero() {
+		return ""
+	}
+	actual := state.ReadModel.Overview.Period
+	if actual.From.IsZero() {
+		return "No usage found for the selected period."
+	}
+	if len(state.periodInfoLines()) == 0 {
+		return ""
+	}
+	now := state.now
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	requestedTo := state.Filter.To
+	if requestedTo.IsZero() {
+		requestedTo = now
+	} else {
+		requestedTo = requestedTo.Add(-time.Nanosecond)
+	}
+	return fmt.Sprintf("Period partially covered (requested: %s; actual: %s)", formatPeriod(state.Filter.From, requestedTo), formatPeriod(actual.From, actual.To))
+}
+
+func (state *State) clearPeriodNotice() {
+	state.periodNotice = ""
+}
+
+func dateBefore(left, right time.Time) bool {
+	left = left.UTC()
+	right = right.UTC()
+	left = time.Date(left.Year(), left.Month(), left.Day(), 0, 0, 0, 0, time.UTC)
+	right = time.Date(right.Year(), right.Month(), right.Day(), 0, 0, 0, 0, time.UTC)
+	return left.Before(right)
 }
 
 func listHeading(name string, count, selected, width int) string {
@@ -1502,7 +2056,7 @@ func renderTableLine(width int, selected bool, cells []tableCell) string {
 	parts := make([]string, 0, len(cells))
 	for _, cell := range cells {
 		value := truncate(safeDisplay(cell.value), cell.width)
-		if cell.muted {
+		if cell.muted && !selected {
 			value = mutedStyle.Render(value)
 		}
 		if cell.right {
@@ -1626,22 +2180,31 @@ func sessionDisplayName(title, id string) string {
 	if title != "" {
 		return title
 	}
-	if len(id) > 8 {
-		id = id[:8]
-	}
-	return "(" + id + ")"
+	return "(" + shortSessionID(id) + ")"
 }
 
 func sessionDisplayCell(title, id string, width int) tableCell {
-	return tableCell{value: sessionDisplayName(title, id), width: width, muted: strings.TrimSpace(title) == ""}
+	title = strings.TrimSpace(title)
+	return tableCell{value: sessionDisplayName(title, id), width: width, muted: title == ""}
 }
 
-func sessionLabel(title string, source usage.SourceKind, agent, id string, aborted bool) string {
+func shortSessionID(id string) string {
+	if len(id) > 8 {
+		return id[:8]
+	}
+	return id
+}
+
+func sessionIdentity(source usage.SourceKind, agent, id string) string {
 	identity := string(source) + "/" + id
 	if agent != "" && agent != "unknown" && agent != string(source) {
 		identity = string(source) + "/" + agent + "/" + id
 	}
-	label := sessionName(title, identity)
+	return identity
+}
+
+func sessionLabel(title string, source usage.SourceKind, agent, id string, aborted bool) string {
+	label := sessionName(title, sessionIdentity(source, agent, id))
 	if aborted {
 		label = "! " + label
 	}
@@ -1650,7 +2213,7 @@ func sessionLabel(title string, source usage.SourceKind, agent, id string, abort
 
 func sessionCells(width int, row *query.SessionSummary) []tableCell {
 	if width >= 90 {
-		available := maxInt(30, width-17)
+		available := maxInt(30, width-8-relativeTimeColumnWidth)
 		nameWidth := maxInt(16, available*2/5)
 		projectWidth := maxInt(12, available-nameWidth)
 		if row == nil {
@@ -1658,7 +2221,7 @@ func sessionCells(width int, row *query.SessionSummary) []tableCell {
 		}
 		return []tableCell{sessionDisplayCell(row.Title, row.ID, nameWidth), {value: emptyDash(row.ProjectPath), width: projectWidth}, {value: formatRelativeTime(row.EndedAt), width: relativeTimeColumnWidth, right: true}}
 	}
-	nameWidth := maxInt(8, width-15)
+	nameWidth := maxInt(8, width-6-relativeTimeColumnWidth)
 	if row == nil {
 		return []tableCell{{value: "SESSION", width: nameWidth}, {value: "LAST USED", width: relativeTimeColumnWidth, right: true}}
 	}
@@ -1676,13 +2239,13 @@ func modelSessionCells(width int, row *query.ModelSessionUsage) []tableCell {
 		if row == nil {
 			return []tableCell{{value: "SESSION", width: nameWidth}, {value: "PROJECT", width: projectWidth}, {value: "TURNS", width: 7, right: true}, {value: "TOKENS", width: 10, right: true}}
 		}
-		return []tableCell{{value: sessionLabel(row.Title, row.Source, row.Agent, row.ID, false), width: nameWidth}, {value: emptyDash(row.Project), width: projectWidth}, {value: formatInt(row.Turns), width: 7, right: true}, {value: formatTokenTotal(row.TokenUsage, row.TokenUsage.TotalTokens != 0), width: 10, right: true}}
+		return []tableCell{sessionDisplayCell(row.Title, row.ID, nameWidth), {value: emptyDash(row.Project), width: projectWidth}, {value: formatInt(row.Turns), width: 7, right: true}, {value: formatTokenTotal(row.TokenUsage, row.TokenUsage.TotalTokens != 0), width: 10, right: true}}
 	}
 	nameWidth := maxInt(8, width-23)
 	if row == nil {
 		return []tableCell{{value: "SESSION", width: nameWidth}, {value: "TURNS", width: 7, right: true}, {value: "TOKENS", width: 10, right: true}}
 	}
-	return []tableCell{{value: sessionLabel(row.Title, row.Source, row.Agent, row.ID, false), width: nameWidth}, {value: formatInt(row.Turns), width: 7, right: true}, {value: formatTokenTotal(row.TokenUsage, row.TokenUsage.TotalTokens != 0), width: 10, right: true}}
+	return []tableCell{sessionDisplayCell(row.Title, row.ID, nameWidth), {value: formatInt(row.Turns), width: 7, right: true}, {value: formatTokenTotal(row.TokenUsage, row.TokenUsage.TotalTokens != 0), width: 10, right: true}}
 }
 
 func modelSessionCellsForRow(width int, row query.ModelSessionUsage) []tableCell {
@@ -1691,17 +2254,17 @@ func modelSessionCellsForRow(width int, row query.ModelSessionUsage) []tableCell
 
 func skillSessionCells(width int, row *query.SkillSessionUsage) []tableCell {
 	if width >= 100 {
-		nameWidth := maxInt(16, width-59)
+		nameWidth := maxInt(16, width-47)
 		if row == nil {
-			return []tableCell{{value: "SESSION", width: nameWidth}, {value: "TURNS", width: 7, right: true}, {value: "FIRST USED", width: relativeTimeColumnWidth, right: true}, {value: "LAST USED", width: relativeTimeColumnWidth, right: true}, {value: "METHODS", width: 24}}
+			return []tableCell{{value: "SESSION", width: nameWidth}, {value: "TURNS", width: 7, right: true}, {value: "METHODS", width: 24}, {value: "LAST USED", width: relativeTimeColumnWidth, right: true}}
 		}
-		return []tableCell{{value: sessionLabel(row.Title, row.Source, row.Agent, row.SessionID, false), width: nameWidth}, {value: formatInt(row.Turns), width: 7, right: true}, {value: formatRelativeTime(row.FirstUsed), width: relativeTimeColumnWidth, right: true}, {value: formatRelativeTime(row.LastUsed), width: relativeTimeColumnWidth, right: true}, {value: formatMethodCounts(row.MethodCounts), width: 24}}
+		return []tableCell{sessionDisplayCell(row.Title, row.SessionID, nameWidth), {value: formatInt(row.Turns), width: 7, right: true}, {value: formatMethodCounts(row.MethodCounts), width: 24}, {value: formatRelativeTime(row.LastUsed), width: relativeTimeColumnWidth, right: true}}
 	}
-	nameWidth := maxInt(8, width-35)
+	nameWidth := maxInt(8, width-23)
 	if row == nil {
-		return []tableCell{{value: "SESSION", width: nameWidth}, {value: "TURNS", width: 7, right: true}, {value: "FIRST USED", width: relativeTimeColumnWidth, right: true}, {value: "LAST USED", width: relativeTimeColumnWidth, right: true}}
+		return []tableCell{{value: "SESSION", width: nameWidth}, {value: "TURNS", width: 7, right: true}, {value: "LAST USED", width: relativeTimeColumnWidth, right: true}}
 	}
-	return []tableCell{{value: sessionLabel(row.Title, row.Source, row.Agent, row.SessionID, false), width: nameWidth}, {value: formatInt(row.Turns), width: 7, right: true}, {value: formatRelativeTime(row.FirstUsed), width: relativeTimeColumnWidth, right: true}, {value: formatRelativeTime(row.LastUsed), width: relativeTimeColumnWidth, right: true}}
+	return []tableCell{sessionDisplayCell(row.Title, row.SessionID, nameWidth), {value: formatInt(row.Turns), width: 7, right: true}, {value: formatRelativeTime(row.LastUsed), width: relativeTimeColumnWidth, right: true}}
 }
 
 func skillSessionCellsForRow(width int, row query.SkillSessionUsage) []tableCell {
@@ -1896,6 +2459,69 @@ func formatAgents(agents []string, fallback string) string {
 	}
 	sort.Strings(names)
 	return strings.Join(names, ", ")
+}
+
+func cloneSourcePaths(values map[usage.SourceKind]string) map[usage.SourceKind]string {
+	if len(values) == 0 {
+		return nil
+	}
+	result := make(map[usage.SourceKind]string, len(values))
+	for source, path := range values {
+		result[source] = path
+	}
+	return result
+}
+
+func inputSources(input query.Input) []usage.SourceKind {
+	values := make([]usage.SourceKind, 0, len(input.Sources)+1)
+	values = append(values, input.Sources...)
+	if input.Source != "" {
+		values = append(values, input.Source)
+	}
+	for _, turn := range input.Turns {
+		values = append(values, turn.Source.Source)
+	}
+	for _, session := range input.Sessions {
+		values = append(values, session.Source.Source)
+	}
+	return orderedSources(values)
+}
+
+func orderedSources(values []usage.SourceKind) []usage.SourceKind {
+	seen := make(map[usage.SourceKind]struct{}, len(values))
+	for _, value := range values {
+		if value.Valid() {
+			seen[value] = struct{}{}
+		}
+	}
+	result := make([]usage.SourceKind, 0, len(seen))
+	for _, value := range usage.AllSourceKinds() {
+		if _, ok := seen[value]; ok {
+			result = append(result, value)
+		}
+	}
+	return result
+}
+
+func (state *State) sourceOptions() []usage.SourceKind {
+	values := inputSources(state.Input)
+	values = append(values, state.Filter.Sources...)
+	if state.Filter.Source != "" {
+		values = append(values, state.Filter.Source)
+	}
+	return orderedSources(values)
+}
+
+func (state *State) sourceEnabled(source usage.SourceKind) bool {
+	if state.Filter.Sources == nil {
+		return state.Filter.Source == "" || state.Filter.Source == source
+	}
+	for _, selected := range state.Filter.Sources {
+		if selected == source {
+			return true
+		}
+	}
+	return false
 }
 
 func formatDate(value time.Time) string {

@@ -16,6 +16,18 @@ const (
 	SourceOpenCode SourceKind = "opencode"
 )
 
+// AllSourceKinds returns sources in stable display order.
+func AllSourceKinds() []SourceKind {
+	return []SourceKind{SourceCodex, SourceCtx, SourceOpenCode}
+}
+
+// DefaultSourceKinds returns sources loaded when the user does not select a
+// source explicitly. ctx remains opt-in while its session metadata contract
+// is incomplete.
+func DefaultSourceKinds() []SourceKind {
+	return []SourceKind{SourceCodex, SourceOpenCode}
+}
+
 func (s SourceKind) Valid() bool {
 	return s == SourceCodex || s == SourceCtx || s == SourceOpenCode
 }
@@ -139,8 +151,17 @@ func ModelFromMap(value map[string]any, fallbackProvider string) (ModelRef, bool
 	if len(value) == 0 {
 		return ModelRef{}, false
 	}
-	provider := firstModelString(value, "provider", "provider_name", "providerName", "provider_id", "providerId", "model_provider", "modelProvider", "model_provider_id", "modelProviderId", "vendor")
-	for _, key := range []string{"model", "model_name", "modelName", "model_id", "modelId"} {
+	provider := firstModelString(value, "provider", "provider_name", "providerName", "provider_id", "providerId", "providerID", "model_provider", "modelProvider", "model_provider_id", "modelProviderId", "vendor")
+	if model, factProvider, found := modelFactValue(value); found {
+		if provider == "" {
+			provider = factProvider
+		}
+		if provider == "" {
+			provider = fallbackProvider
+		}
+		return NewModelRef(provider, model), true
+	}
+	for _, key := range []string{"model", "model_name", "modelName", "model_id", "modelId", "modelID"} {
 		raw, ok := value[key]
 		if !ok {
 			continue
@@ -176,6 +197,25 @@ func ModelFromMap(value map[string]any, fallbackProvider string) (ModelRef, bool
 	return ModelRef{}, false
 }
 
+func modelFactValue(value map[string]any) (name, provider string, found bool) {
+	kind := compactModelKind(firstModelString(value, "kind", "fact_kind", "factKind", "type"))
+	switch kind {
+	case "model", "modelname", "modelid":
+		name, provider = modelValue(value["value"])
+		return name, provider, name != ""
+	default:
+		return "", "", false
+	}
+}
+
+func compactModelKind(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	value = strings.ReplaceAll(value, "_", "")
+	value = strings.ReplaceAll(value, "-", "")
+	value = strings.ReplaceAll(value, " ", "")
+	return value
+}
+
 func firstModelString(value map[string]any, keys ...string) string {
 	for _, key := range keys {
 		if text, ok := value[key].(string); ok && strings.TrimSpace(text) != "" {
@@ -190,7 +230,7 @@ func modelValue(value any) (name, provider string) {
 	case string:
 		return typed, ""
 	case map[string]any:
-		return firstModelString(typed, "name", "id", "model", "model_name", "modelName"), firstModelString(typed, "provider", "provider_name", "providerName", "provider_id", "providerId", "model_provider", "modelProvider", "model_provider_id", "modelProviderId", "vendor")
+		return firstModelString(typed, "name", "id", "model", "model_name", "modelName", "model_id", "modelId", "modelID"), firstModelString(typed, "provider", "provider_name", "providerName", "provider_id", "providerId", "providerID", "model_provider", "modelProvider", "model_provider_id", "modelProviderId", "vendor")
 	default:
 		return "", ""
 	}
@@ -536,6 +576,10 @@ func WarningDescription(reason string) string {
 		return "record has an invalid timestamp"
 	case "read_file":
 		return "could not read file"
+	case "source_unavailable":
+		return "history source unavailable"
+	case "stale_cache":
+		return "using stale history cache"
 	case "opencode_invalid_session":
 		return "skipped invalid OpenCode session"
 	case "opencode_malformed_message":

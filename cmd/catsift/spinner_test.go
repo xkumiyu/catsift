@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"reflect"
 	"strings"
 	"sync"
@@ -43,6 +44,39 @@ func TestSpinnerLineFormatsElapsedTime(t *testing.T) {
 				t.Fatalf("spinnerLine() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestFormatSpinnerElapsedUsesCoarseUnits(t *testing.T) {
+	tests := []struct {
+		elapsed time.Duration
+		want    string
+	}{
+		{elapsed: 704 * time.Millisecond, want: "<1s"},
+		{elapsed: 1500 * time.Millisecond, want: "1s"},
+		{elapsed: 69 * time.Second, want: "1m09s"},
+	}
+	for _, tt := range tests {
+		if got := formatSpinnerElapsed(tt.elapsed); got != tt.want {
+			t.Errorf("formatSpinnerElapsed(%s) = %q, want %q", tt.elapsed, got, tt.want)
+		}
+	}
+}
+
+func TestSpinnerWritesDiagnosticsOutsideCurrentLine(t *testing.T) {
+	var output recordingWriter
+	spinner := newSpinner(&output, true, false)
+	spinner.lineWidth = 5
+
+	spinner.writeDiagnostic(func() {
+		_, _ = io.WriteString(&output, "debug: loading\n")
+	})
+
+	if got, want := output.String(), "\r     \rdebug: loading\n"; got != want {
+		t.Fatalf("diagnostic output = %q, want %q", got, want)
+	}
+	if spinner.lineWidth != 0 {
+		t.Fatalf("spinner line width = %d, want 0", spinner.lineWidth)
 	}
 }
 

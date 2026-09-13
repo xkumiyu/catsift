@@ -1,7 +1,19 @@
 {
   "name": "catsift",
-  "version": "0.3.0",
-  "description": "CLI for inspecting Codex usage",
+  "version": "0.0.0",
+  "description": "Analyze local coding-agent history and present usage data by source, model, skill, and session",
+  "keywords": [
+    "coding-agent",
+    "coding-agents",
+    "agent-usage",
+    "usage-analytics",
+    "developer-productivity",
+    "codex",
+    "opencode",
+    "terminal",
+    "tui",
+    "cli"
+  ],
   "license": "MIT",
   "bin": {
     "catsift": "bin/catsift.js"

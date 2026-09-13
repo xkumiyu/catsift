@@ -14,7 +14,7 @@ import (
 	"github.com/xkumiyu/catsift/internal/usage"
 )
 
-const ParserVersion = "opencode-normalizer-v4"
+const ParserVersion = "opencode-normalizer-v3"
 
 type IngestOptions struct {
 	Days       int
@@ -52,6 +52,7 @@ func Load(dataRoot string, options IngestOptions) (IngestResult, error) {
 		return IngestResult{}, err
 	}
 	if database == "" {
+		diagnose(options, fmt.Sprintf("opencode source: root=%q database=none parser=%s", root, ParserVersion))
 		return result, nil
 	}
 	scope := root
@@ -59,15 +60,19 @@ func Load(dataRoot string, options IngestOptions) (IngestResult, error) {
 	if err != nil {
 		return IngestResult{}, err
 	}
+	cachePath := cache.New(options.CacheDir).Path(string(usage.SourceOpenCode), scope)
+	diagnose(options, fmt.Sprintf("opencode source: root=%q database=%q revision=%q parser=%s", root, database, revision, ParserVersion))
 	store := cache.New(options.CacheDir)
 	if store.Dir != "" {
+		diagnose(options, fmt.Sprintf("opencode cache: lookup path=%q revision=%q parser=%s", cachePath, revision, ParserVersion))
 		data, hit, readErr := store.Read(string(usage.SourceOpenCode), scope, revision, ParserVersion)
 		if readErr != nil {
-			diagnose(options, fmt.Sprintf("opencode cache read failed: %v", readErr))
+			diagnose(options, fmt.Sprintf("opencode cache read failed path=%q: %v", cachePath, readErr))
 		}
 		if hit {
 			var snapshot cache.Snapshot
 			if err := json.Unmarshal(data, &snapshot); err == nil {
+				diagnose(options, fmt.Sprintf("opencode cache: hit path=%q", cachePath))
 				diagnose(options, "opencode cache hit; applying selected period locally")
 				result := resultFromSnapshot(snapshot, database)
 				if filter.active() {
@@ -75,25 +80,30 @@ func Load(dataRoot string, options IngestOptions) (IngestResult, error) {
 				}
 				return result, nil
 			}
-			diagnose(options, "opencode cache miss; invalid snapshot")
+			diagnose(options, fmt.Sprintf("opencode cache miss; invalid snapshot path=%q", cachePath))
 		} else {
-			diagnose(options, "opencode cache miss; reading source")
+			diagnose(options, fmt.Sprintf("opencode cache miss; reading source %q", database))
 		}
 	}
+	diagnose(options, fmt.Sprintf("opencode source: reading database %q", database))
 	normalizer := newNormalizer(database)
 	if err := Read(database, normalizer.consume); err != nil {
 		return IngestResult{}, err
 	}
 	result = normalizer.result()
 	if store.Dir != "" {
-		if after, afterErr := sourceRevision(database); afterErr == nil && after == revision {
+		after, afterErr := sourceRevision(database)
+		switch {
+		case afterErr != nil:
+			diagnose(options, fmt.Sprintf("opencode cache skipped; source revision check failed: %v", afterErr))
+		case after != revision:
+			diagnose(options, fmt.Sprintf("opencode cache skipped; source revision changed: before=%q after=%q", revision, after))
+		default:
 			if err := store.Write(string(usage.SourceOpenCode), scope, revision, ParserVersion, snapshotFromResult(result)); err != nil {
-				diagnose(options, fmt.Sprintf("opencode cache write failed: %v", err))
+				diagnose(options, fmt.Sprintf("opencode cache write failed path=%q: %v", cachePath, err))
 			} else {
-				diagnose(options, "opencode cache stored complete snapshot")
+				diagnose(options, fmt.Sprintf("opencode cache stored complete snapshot path=%q", cachePath))
 			}
-		} else {
-			diagnose(options, "opencode cache skipped; source revision changed")
 		}
 	}
 	if filter.active() {

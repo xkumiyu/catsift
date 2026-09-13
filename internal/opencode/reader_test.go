@@ -213,6 +213,47 @@ func TestReaderReadsSessionTitleWhenAvailable(t *testing.T) {
 	}
 }
 
+func TestReaderReadsSessionModelWhenAvailable(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "opencode.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, statement := range []string{
+		`CREATE TABLE session (id TEXT PRIMARY KEY, directory TEXT, title TEXT, version TEXT, time_created INTEGER, time_updated INTEGER, model TEXT)`,
+		`CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT, time_created INTEGER, time_updated INTEGER, data TEXT)`,
+		`CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT, session_id TEXT, time_created INTEGER, time_updated INTEGER, data TEXT)`,
+		`INSERT INTO session VALUES ('s1', '/workspace', 'Model test', '1.0', 1000, 2000, '{"id":"model-a","providerID":"provider-a"}')`,
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			_ = db.Close()
+			t.Fatal(err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reader, err := OpenReader(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = reader.Close() }()
+	var model string
+	if err := reader.Read(func(row Row) error {
+		if row.Kind == RowSession {
+			model = string(row.Session.Model)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if model != `{"id":"model-a","providerID":"provider-a"}` {
+		t.Fatalf("session model = %q", model)
+	}
+}
+
 func TestReaderRejectsMissingSchema(t *testing.T) {
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "opencode.db")

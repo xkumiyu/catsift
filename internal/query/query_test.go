@@ -56,7 +56,7 @@ func TestBuildReadModelFiltersAndSortsSyntheticSnapshotDeterministically(t *test
 	if model.Overview.TokenUsage.TotalTokens != 15 {
 		t.Fatalf("overview token usage = %#v", model.Overview.TokenUsage)
 	}
-	if len(model.Models) != 3 || model.Models[0].Model != usage.NewModelRef("codex", "model-a") || model.Models[2].Model != usage.UnknownModel() {
+	if len(model.Models) != 3 || model.Models[0].Model != usage.UnknownModel() || model.Models[2].Model != usage.NewModelRef("codex", "model-a") {
 		t.Fatalf("models = %#v", model.Models)
 	}
 	if len(model.Sessions) != 2 || model.Sessions[0].Key == model.Sessions[1].Key {
@@ -110,6 +110,59 @@ func TestBuildReadModelFiltersAndSortsSyntheticSnapshotDeterministically(t *test
 	}
 }
 
+func TestRowsUseLastUsedAsAggregateTieBreaker(t *testing.T) {
+	old := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	newer := old.Add(24 * time.Hour)
+
+	models := modelRows(map[string]*modelAccumulator{
+		"old": {model: usage.NewModelRef("codex", "old"), sessions: map[string]struct{}{"s": {}}, turns: map[string]struct{}{"t": {}}, last: old},
+		"new": {model: usage.NewModelRef("codex", "new"), sessions: map[string]struct{}{"s": {}}, turns: map[string]struct{}{"t": {}}, last: newer},
+	})
+	if got := models[0].Model.Name; got != "new" {
+		t.Fatalf("model tie-break = %q, want newer model first", got)
+	}
+
+	skills := skillRows(map[string]*skillAccumulator{
+		"old": {name: "alpha", uses: []usage.SkillUse{{}}, last: old},
+		"new": {name: "beta", uses: []usage.SkillUse{{}}, last: newer},
+	})
+	if got := skills[0].Name; got != "beta" {
+		t.Fatalf("skill tie-break = %q, want newer skill first", got)
+	}
+}
+
+func TestDetailSessionRowsPreferMostRecentlyUsed(t *testing.T) {
+	source := usage.NewCodexSourceRef("history.jsonl", 1, "")
+	model := usage.NewModelRef("codex", "gpt-example")
+	old := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	newer := old.Add(24 * time.Hour)
+
+	oldTurn := usage.NewTurn("a", "old-turn", 1, source)
+	oldTurn.StartedAt = old
+	oldTurn.EndedAt = old.Add(time.Minute)
+	oldTurn.ObserveModelAt(model, old, source)
+	oldTurn.SkillEvidence = []usage.SkillEvidence{usage.NewSkillEvidence("a", "old-turn", "review", usage.ModeExplicit, usage.MethodExplicitRequest, usage.StateConfirmed, old, source)}
+	newTurn := usage.NewTurn("b", "new-turn", 1, source)
+	newTurn.StartedAt = newer
+	newTurn.EndedAt = newer.Add(time.Minute)
+	newTurn.ObserveModelAt(model, newer, source)
+	newTurn.SkillEvidence = []usage.SkillEvidence{usage.NewSkillEvidence("b", "new-turn", "review", usage.ModeExplicit, usage.MethodExplicitRequest, usage.StateConfirmed, newer, source)}
+
+	readModel := Build(Input{
+		Turns:    []usage.Turn{oldTurn, newTurn},
+		Sessions: []usage.Session{usage.NewSession("a", source), usage.NewSession("b", source)},
+	}, Filter{})
+
+	modelDetail, ok := readModel.ModelDetail(model.Key())
+	if !ok || len(modelDetail.Sessions) != 2 || modelDetail.Sessions[0].ID != "b" {
+		t.Fatalf("model detail session order = %#v, want b first", modelDetail.Sessions)
+	}
+	skillDetail, ok := readModel.SkillDetail("review")
+	if !ok || len(skillDetail.Sessions) != 2 || skillDetail.Sessions[0].SessionID != "b" {
+		t.Fatalf("skill detail session order = %#v, want b first", skillDetail.Sessions)
+	}
+}
+
 func TestBuildOverviewUsesSourceAgentsAndDataPeriod(t *testing.T) {
 	when := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	source := usage.NewCodexSourceRef("/private/codex.jsonl", 10, "1")
@@ -130,6 +183,66 @@ func TestBuildOverviewUsesSourceAgentsAndDataPeriod(t *testing.T) {
 	}
 	if !model.Overview.Period.From.Equal(when) || !model.Overview.Period.To.Equal(when.Add(time.Minute)) {
 		t.Fatalf("overview period = %#v", model.Overview.Period)
+	}
+}
+
+func TestBuildOverviewIncludesZeroActivityDays(t *testing.T) {
+	from := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	source := usage.NewCodexSourceRef("/private/codex.jsonl", 1, "1")
+	turn := func(id string, day int) usage.Turn {
+		started := from.AddDate(0, 0, day-1).Add(time.Hour)
+		value := usage.NewTurn("session", id, day, source)
+		value.StartedAt = started
+		value.EndedAt = started.Add(time.Minute)
+		return value
+	}
+
+	model := Build(Input{
+		Turns:  []usage.Turn{turn("day-1", 1), turn("day-3", 3)},
+		Source: usage.SourceCodex,
+	}, Filter{Source: usage.SourceCodex, From: from, To: from.AddDate(0, 0, 3)})
+
+	if len(model.Overview.Trend) != 3 {
+		t.Fatalf("daily trend rows = %#v, want one row per day", model.Overview.Trend)
+	}
+	for index, wantDate := range []time.Time{from, from.AddDate(0, 0, 1), from.AddDate(0, 0, 2)} {
+		if !model.Overview.Trend[index].Date.Equal(wantDate) {
+			t.Fatalf("trend[%d].Date = %v, want %v", index, model.Overview.Trend[index].Date, wantDate)
+		}
+	}
+	if got := model.Overview.Trend[1]; got.Turns != 0 || got.Sessions != 0 || got.UserPrompts != 0 || got.ToolCalls != 0 {
+		t.Fatalf("zero activity row = %#v", got)
+	}
+}
+
+func TestBuildOverviewTrendUsesActualPeriodBounds(t *testing.T) {
+	requestedFrom := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	started := time.Date(2026, 1, 5, 23, 0, 0, 0, time.UTC)
+	ended := time.Date(2026, 1, 6, 0, 1, 0, 0, time.UTC)
+	source := usage.NewCodexSourceRef("fixture", 1, "1")
+	turn := usage.NewTurn("session", "turn", 1, source)
+	turn.StartedAt = started
+	turn.EndedAt = ended
+
+	model := Build(Input{Turns: []usage.Turn{turn}, Source: usage.SourceCodex}, Filter{
+		Source: usage.SourceCodex,
+		From:   requestedFrom,
+		To:     requestedFrom.AddDate(0, 0, 10),
+	})
+
+	if !model.Overview.Period.From.Equal(started) || !model.Overview.Period.To.Equal(ended) {
+		t.Fatalf("overview period = %#v", model.Overview.Period)
+	}
+	if len(model.Overview.Trend) != 2 {
+		t.Fatalf("daily trend rows = %#v, want actual period dates only", model.Overview.Trend)
+	}
+	for index, wantDate := range []time.Time{
+		time.Date(2026, 1, 5, 0, 0, 0, 0, time.UTC),
+		time.Date(2026, 1, 6, 0, 0, 0, 0, time.UTC),
+	} {
+		if !model.Overview.Trend[index].Date.Equal(wantDate) {
+			t.Fatalf("trend[%d].Date = %v, want %v", index, model.Overview.Trend[index].Date, wantDate)
+		}
 	}
 }
 
@@ -295,5 +408,59 @@ func TestSessionMetadataOnlyStillHasDetail(t *testing.T) {
 	detail, ok := model.SessionDetail(session.QualifiedKey())
 	if !ok || detail.Summary.ID != "metadata-only" || len(detail.Turns) != 0 {
 		t.Fatalf("metadata-only session detail = %#v, found=%v", detail, ok)
+	}
+}
+
+func TestBuildUsesSourceVisibilityAndPrefersDirectHistoryOverCtxDuplicate(t *testing.T) {
+	when := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	codexSource := usage.NewCodexSourceRef("codex", 1, "")
+	ctxSource := usage.NewCtxSourceRef("ctx://event", "codex", "session", "ctx-session", "event")
+	opencodeSource := usage.NewOpenCodeSourceRef("opencode", "")
+
+	codexTurn := usage.NewTurn("session", "turn", 1, codexSource)
+	codexTurn.StartedAt = when
+	codexTurn.EndedAt = when.Add(time.Minute)
+	codexTurn.UserPrompts = 1
+	codexTurn.UserPromptTimes = []time.Time{when}
+	codexTurn.AddTokenUsageForModelAt(usage.NewModelRef("codex", "direct"), when, usage.TokenUsage{TotalTokens: 3})
+
+	ctxTurn := usage.NewTurn("ctx-session", "turn", 1, ctxSource)
+	ctxTurn.StartedAt = when
+	ctxTurn.EndedAt = when.Add(time.Minute)
+	ctxTurn.UserPrompts = 1
+	ctxTurn.UserPromptTimes = []time.Time{when}
+	ctxTurn.AddTokenUsageForModelAt(usage.NewModelRef("codex", "ctx"), when, usage.TokenUsage{TotalTokens: 5})
+
+	opencodeTurn := usage.NewTurn("opencode-session", "other", 1, opencodeSource)
+	opencodeTurn.StartedAt = when.Add(time.Hour)
+	opencodeTurn.EndedAt = opencodeTurn.StartedAt.Add(time.Minute)
+
+	input := Input{
+		Turns: []usage.Turn{ctxTurn, opencodeTurn, codexTurn},
+		Sessions: []usage.Session{
+			usage.NewSession("ctx-session", ctxSource),
+			usage.NewSession("opencode-session", opencodeSource),
+			usage.NewSession("session", codexSource),
+		},
+		Agents:  []string{"codex", "opencode"},
+		Sources: usage.AllSourceKinds(),
+	}
+
+	all := Build(input, Filter{Sources: usage.AllSourceKinds()})
+	if all.Overview.Turns != 2 || all.Overview.Sessions != 2 || all.Overview.TokenUsage.TotalTokens != 3 {
+		t.Fatalf("all-source read model = %#v", all.Overview)
+	}
+	if all.Overview.Source != "" || len(all.Overview.Sources) != 3 {
+		t.Fatalf("all-source visibility = %#v", all.Overview.Sources)
+	}
+
+	ctxOnly := Build(input, Filter{Sources: []usage.SourceKind{usage.SourceCtx}})
+	if ctxOnly.Overview.Turns != 1 || ctxOnly.Overview.TokenUsage.TotalTokens != 5 || len(ctxOnly.Sessions) != 1 || ctxOnly.Sessions[0].Source != usage.SourceCtx {
+		t.Fatalf("ctx-only read model = %#v", ctxOnly.Overview)
+	}
+
+	codexOnly := Build(input, Filter{Sources: []usage.SourceKind{usage.SourceCodex}})
+	if codexOnly.Overview.Turns != 1 || codexOnly.Overview.TokenUsage.TotalTokens != 3 || len(codexOnly.Sessions) != 1 || codexOnly.Sessions[0].Source != usage.SourceCodex {
+		t.Fatalf("codex-only read model = %#v", codexOnly.Overview)
 	}
 }

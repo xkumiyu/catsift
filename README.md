@@ -9,7 +9,7 @@ model, skill, and session.
 > CatSift reads:
 > - Codex local history
 > - OpenCode local history
-> - [ctx](https://github.com/ctxrs/ctx) event stream
+> - [ctx](https://github.com/ctxrs/ctx) event stream (experimental)
 
 ## Quick start
 
@@ -18,6 +18,8 @@ Try CatSift without installing it first:
 ```sh
 npx catsift
 ```
+
+![CatSift screenshot](docs/images/catsift-overview.svg)
 
 ## Installation
 
@@ -52,25 +54,16 @@ Explore local agent usage with the following views:
 | Skills | [Skill usage](#skill-usage-fields), evidence state, and related sessions |
 | Sessions | Session metadata and chronological turn details |
 
-Select a source and period when needed:
-
-```sh
-catsift --source codex --days 30
-catsift --source ctx --ctx-data-root /path/to/ctx --days 30
-catsift --source opencode --opencode-home /path/to/opencode --days 30
-```
-
-Each invocation reads one source.
+Filter usage by period or keywords and sort lists. Press `?` inside the TUI for details.
 
 ## Common options
 
 These options apply to both [interactive mode](#usage) and [CLI mode](#cli-usage):
 
-- `--source` selects the history source: `codex`, `ctx`, or `opencode`.
-- `--days N` limits the report to the last N days.
-- `--from YYYY-MM-DD` and `--to YYYY-MM-DD` select an inclusive UTC calendar-date range; either option may be used alone. They cannot be combined with `--days`.
+- `--source` selects one or more history sources: `codex`, `ctx`, or `opencode`.
+  Separate sources with commas or repeat the option. The default is `codex` and
+  `opencode`.
 - `--strict-input` exits non-zero when input records are skipped.
-- `--verbose` shows input and cache diagnostic details.
 
 ## Skill usage fields
 
@@ -99,7 +92,9 @@ Run a subcommand to execute CatSift in CLI mode.
 | `catsift tools` | Show tool usage by canonical name |
 | `catsift skills` | Show skill usage and evidence state |
 
-The CLI-only `--json` option emits machine-readable output.
+The `--json` option emits machine-readable output.
+
+Filter usage by period. See each command's `--help` output for details.
 
 ### Usage overview
 
@@ -109,19 +104,19 @@ catsift stats
 
 ```text
 USAGE OVERVIEW
-Source: Codex (~/.codex)
-Agents: Codex
+Source: Codex (~/.codex), OpenCode (~/.local/share/opencode)
+Agents: Codex, OpenCode
 Period: 2026-01-01 to 2026-01-31
 
 Activity
   Sessions                    123
   Turns                       456
   User Prompts                789
-  Tool Calls                1,234
+  Tool Calls                   42
 
 Skill Usage
-  By turn                      42
-  By session                   24
+  By turn                       9
+  By session                    6
 
 Token Usage
   Total Tokens                3.16B
@@ -143,8 +138,8 @@ catsift skills --view mode
 
 ```text
 SKILL USAGE
-Source: Codex (~/.codex)
-Agents: Codex
+Source: Codex (~/.codex), OpenCode (~/.local/share/opencode)
+Agents: Codex, OpenCode
 Period: 2026-01-01 to 2026-01-31
 Group by: turn
 Strict: false
@@ -166,14 +161,14 @@ catsift tools
 
 ```text
 TOOL USAGE
-Source: Codex (~/.codex)
-Agents: Codex
+Source: Codex (~/.codex), OpenCode (~/.local/share/opencode)
+Agents: Codex, OpenCode
 Period: 2026-01-01 to 2026-01-31
 Layer: effective
 
 Tool       Calls  Failures  Last Used
 ────────────────────────────────────────────────────
-shell          42         0  2026-09-01 12:34 JST
+shell          42         0  2026-01-31 12:34 JST
 
 1 tool, 42 calls total
 ```
@@ -208,7 +203,7 @@ catsift skills --unused
 Inventory identity is the canonical skill name plus its absolute physical path.
 Therefore, same-name skills at different paths are shown as separate rows when
 the name is unused.
-Usage matching remains canonical-name based: if any selected ctx agent used a name, all inventory rows with that name are considered used.
+Usage matching remains canonical-name based: if any agent in the selected history sources used a name, all inventory rows with that name are considered used.
 
 ## Cache
 
@@ -217,7 +212,8 @@ subsequent runs.
 
 ## Data handling
 
-CatSift reads Codex history, ctx's public event stream, or OpenCode's local
-database and never modifies the selected data.
-It does not send history externally.
+CatSift reads the selected Codex history, ctx's public event stream, or
+OpenCode's local database. It does not modify the selected history data or
+send history externally. The `skills --unused` command also reads the
+installed skill inventory.
 The TUI and reports do not display or include prompt text, command text, Tool arguments, Skill bodies, provider payloads, or other raw event details.

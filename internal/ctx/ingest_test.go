@@ -30,6 +30,9 @@ func eventLine(t *testing.T, id, provider, session, eventType, role, when, text 
 		"role":                role,
 		"content":             map[string]any{"text": text, "activity": activity},
 	}
+	if activity != nil {
+		event["activity"] = activity
+	}
 	return jsonLine(t, map[string]any{"record_type": "event_range_event", "event": event})
 }
 
@@ -106,6 +109,42 @@ func TestLoadReadsAllPagesAndKeepsAgentSessionIdentity(t *testing.T) {
 	}
 }
 
+func TestLoadCoalescesProviderSessionAcrossCodexSourceFormats(t *testing.T) {
+	eventLine := func(id, sourceFormat, ctxSession, when string) string {
+		event := map[string]any{
+			"ctx_event_id":        id,
+			"ctx_session_id":      ctxSession,
+			"event_type":          "message",
+			"occurred_at":         when,
+			"provider":            "codex",
+			"provider_session_id": "shared-provider-session",
+			"role":                "user",
+			"source_format":       sourceFormat,
+			"content":             map[string]any{"text": "same prompt"},
+		}
+		return jsonLine(t, map[string]any{"record_type": "event_range_event", "event": event})
+	}
+	data := strings.Join([]string{
+		eventLine("history-event", "codex_history_jsonl", "history-ctx-session", "2026-01-01T00:00:00Z"),
+		eventLine("session-event", "codex_session_jsonl", "native-ctx-session", "2026-01-01T00:00:01Z"),
+		completionLine(t, "generation-1", "", true),
+	}, "\n") + "\n"
+	runner := func([]string) (CommandResult, error) {
+		return CommandResult{Stdout: []byte(data)}, nil
+	}
+
+	result, err := Load("/tmp/ctx", IngestOptions{Runner: runner})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Sessions) != 1 || len(result.Turns) != 1 || result.Turns[0].UserPrompts != 1 {
+		t.Fatalf("coalesced provider session = sessions=%d turns=%d prompts=%d", len(result.Sessions), len(result.Turns), result.Turns[0].UserPrompts)
+	}
+	if result.Sessions[0].CtxSessionID != "native-ctx-session" {
+		t.Fatalf("canonical ctx session = %q", result.Sessions[0].CtxSessionID)
+	}
+}
+
 func TestLoadCapturesModelFromProviderPayload(t *testing.T) {
 	data := strings.Join([]string{
 		eventLine(t, "model-event", "codex", "session", "message", "assistant", "2026-01-01T00:00:00Z", "", map[string]any{
@@ -126,6 +165,72 @@ func TestLoadCapturesModelFromProviderPayload(t *testing.T) {
 	want := usage.NewModelRef("codex", "gpt-example")
 	if got := result.Turns[0].ModelObservations[0].Model; got != want {
 		t.Fatalf("model = %#v, want %#v", got, want)
+	}
+}
+
+func TestLoadCapturesSessionMetadataAndModelFacts(t *testing.T) {
+	data := strings.Join([]string{
+		eventLine(t, "metadata-event", "codex", "session", "message", "assistant", "2026-01-01T00:00:00Z", "", map[string]any{
+			"facts": []any{
+				map[string]any{"kind": "session_cwd", "value": "/workspace/catsift"},
+				map[string]any{"kind": "session_name", "value": "ctx metadata"},
+				map[string]any{"kind": "model", "value": "gpt-fact"},
+			},
+		}),
+		completionLine(t, "generation-1", "", true),
+	}, "\n") + "\n"
+	runner := func([]string) (CommandResult, error) {
+		return CommandResult{Stdout: []byte(data)}, nil
+	}
+	result, err := Load("/tmp/ctx", IngestOptions{Runner: runner})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Sessions) != 1 {
+		t.Fatalf("sessions = %#v", result.Sessions)
+	}
+	if got := result.Sessions[0].ProjectPath; got != "/workspace/catsift" {
+		t.Fatalf("project path = %q", got)
+	}
+	if got := result.Sessions[0].Title; got != "ctx metadata" {
+		t.Fatalf("session title = %q", got)
+	}
+	if len(result.Turns) != 1 || len(result.Turns[0].ModelObservations) != 1 {
+		t.Fatalf("model observations = %#v", result.Turns)
+	}
+	want := usage.NewModelRef("codex", "gpt-fact")
+	if got := result.Turns[0].ModelObservations[0].Model; got != want {
+		t.Fatalf("model = %#v, want %#v", got, want)
+	}
+}
+
+func TestLoadKeepsSessionMetadataEventsOutOfUsageTurns(t *testing.T) {
+	metadata := map[string]any{
+		"ctx_event_id":        "session-meta",
+		"ctx_session_id":      "ctx-codex",
+		"event_type":          "session_meta",
+		"occurred_at":         "2026-01-01T00:00:00Z",
+		"provider":            "codex",
+		"provider_session_id": "session",
+		"title":               "metadata event",
+		"cwd":                 "/workspace/catsift",
+	}
+	data := strings.Join([]string{
+		jsonLine(t, map[string]any{"record_type": "event_range_event", "event": metadata}),
+		completionLine(t, "generation-1", "", true),
+	}, "\n") + "\n"
+	runner := func([]string) (CommandResult, error) {
+		return CommandResult{Stdout: []byte(data)}, nil
+	}
+	result, err := Load("/tmp/ctx", IngestOptions{Runner: runner})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Turns) != 0 || len(result.Sessions) != 1 {
+		t.Fatalf("metadata event turns/sessions = %#v / %#v", result.Turns, result.Sessions)
+	}
+	if got := result.Sessions[0]; got.Title != "metadata event" || got.ProjectPath != "/workspace/catsift" {
+		t.Fatalf("session metadata = %#v", got)
 	}
 }
 

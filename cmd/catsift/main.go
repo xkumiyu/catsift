@@ -8,6 +8,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -41,15 +42,12 @@ Commands:
   skills    Show skill usage and evidence state
 
 Usage options:
-  --source SOURCE   codex, ctx, or opencode (default: codex)
-  --days N          Include the last N days (N >= 1; default: all time)
-  --from DATE       Include records on or after DATE (YYYY-MM-DD)
-  --to DATE         Include records before the day after DATE (YYYY-MM-DD)
-  --codex-home PATH Override CODEX_HOME for this invocation
-  --ctx-data-root PATH Read a specific ctx data root
-  --opencode-home PATH Override OpenCode data root for this invocation
-  --verbose         Show input and cache diagnostic details
+  --source SOURCE   codex, ctx, or opencode; repeatable or comma-separated (default: codex, opencode)
+  --verbose         Show input/cache diagnostics and TUI source-load timings
   --strict-input    Exit non-zero when input records are skipped
+
+Report options:
+  See "catsift stats --help", "catsift tools --help", or "catsift skills --help".
 
 Options:
   --help       Show this help
@@ -63,13 +61,10 @@ const statsUsageText = `Usage: catsift stats [options]
 Show an overview of agent usage.
 
 Options:
-  --source SOURCE   codex, ctx, or opencode (default: codex)
+  --source SOURCE   codex, ctx, or opencode; repeatable or comma-separated (default: codex, opencode)
   --days N          Include the last N days (N >= 1; default: all time)
   --from DATE       Include records on or after DATE (YYYY-MM-DD)
   --to DATE         Include records before the day after DATE (YYYY-MM-DD)
-  --codex-home PATH Override CODEX_HOME for this invocation (default: CODEX_HOME or ~/.codex)
-  --ctx-data-root PATH Read a specific ctx data root (default: ctx default)
-  --opencode-home PATH Override OpenCode data root for this invocation (default: XDG_DATA_HOME/opencode or ~/.local/share/opencode)
   --color MODE      auto, always, or never (default: auto; human report only)
   --verbose         Show input and cache diagnostic details
   --strict-input    Exit non-zero when input records are skipped
@@ -82,13 +77,10 @@ const toolsUsageText = `Usage: catsift tools [options]
 Show tool usage by canonical name.
 
 Options:
-  --source SOURCE   codex, ctx, or opencode (default: codex)
+  --source SOURCE   codex, ctx, or opencode; repeatable or comma-separated (default: codex, opencode)
   --days N          Include the last N days (N >= 1; default: all time)
   --from DATE       Include records on or after DATE (YYYY-MM-DD)
   --to DATE         Include records before the day after DATE (YYYY-MM-DD)
-  --codex-home PATH Override CODEX_HOME for this invocation (default: CODEX_HOME or ~/.codex)
-  --ctx-data-root PATH Read a specific ctx data root (default: ctx default)
-  --opencode-home PATH Override OpenCode data root for this invocation (default: XDG_DATA_HOME/opencode or ~/.local/share/opencode)
   --color MODE      auto, always, or never (default: auto; human report only)
   --layer LAYER     effective, runtime, or model (default: effective)
   --verbose         Show input and cache diagnostic details
@@ -102,13 +94,10 @@ const skillsUsageText = `Usage: catsift skills [options]
 Show skill usage and evidence state.
 
 Options:
-  --source SOURCE   codex, ctx, or opencode (default: codex)
+  --source SOURCE   codex, ctx, or opencode; repeatable or comma-separated (default: codex, opencode)
   --days N          Include the last N days (N >= 1; default: all time)
   --from DATE       Include records on or after DATE (YYYY-MM-DD)
   --to DATE         Include records before the day after DATE (YYYY-MM-DD)
-  --codex-home PATH Override CODEX_HOME for this invocation (default: CODEX_HOME or ~/.codex)
-  --ctx-data-root PATH Read a specific ctx data root (default: ctx default)
-  --opencode-home PATH Override OpenCode data root for this invocation (default: XDG_DATA_HOME/opencode or ~/.local/share/opencode)
   --color MODE      auto, always, or never (default: auto; human report only)
   --group-by UNIT   turn or session (default: turn; no effect on --unused)
   --strict          Count confirmed skill evidence only
@@ -127,14 +116,8 @@ Explore model, usage, skill, and session details in an interactive terminal.
 The TUI is read-only and does not display prompt text, tool arguments, or skill bodies.
 
 Options:
-  --source SOURCE   codex, ctx, or opencode (default: codex)
-  --days N          Include the last N days (N >= 1; default: all time)
-  --from DATE       Include records on or after DATE (YYYY-MM-DD)
-  --to DATE         Include records before the day after DATE (YYYY-MM-DD)
-  --codex-home PATH Override CODEX_HOME for this invocation (default: CODEX_HOME or ~/.codex)
-  --ctx-data-root PATH Read a specific ctx data root (default: ctx default)
-  --opencode-home PATH Override OpenCode data root for this invocation (default: XDG_DATA_HOME/opencode or ~/.local/share/opencode)
-  --verbose         Show input and cache diagnostic details
+  --source SOURCE   codex, ctx, or opencode; repeatable or comma-separated (default: codex, opencode)
+  --verbose         Show input/cache diagnostics and source-load timings
   --strict-input    Exit non-zero when input records are skipped
   --help            Show this help
 
@@ -142,11 +125,14 @@ Keys:
   1/2/3/4           Overview, Models, Skills, Sessions
   Tab/Shift+Tab      Move to the next/previous view
   Enter             Open detail; b/Esc returns to the previous view
+  d                 Set period: all, N, YYYY-MM-DD[..YYYY-MM-DD]
   /                 Search safe metadata
   f                 Filter the selected model or skill
   a                 Filter Sessions by selected agent
   p                 Filter Sessions by selected project
+  o                 Toggle source visibility
   r                 Reload the source snapshot
+  s                 Cycle list sort
   c                 Clear TUI filters
   ?                 Show help
   q                 Quit
@@ -285,6 +271,72 @@ func (values *stringList) Set(value string) error {
 	return nil
 }
 
+type sourceList []usage.SourceKind
+
+func (values *sourceList) String() string {
+	items := make([]string, 0, len(*values))
+	for _, value := range *values {
+		items = append(items, string(value))
+	}
+	return strings.Join(items, ",")
+}
+
+func (values *sourceList) Set(value string) error {
+	selected := []usage.SourceKind(*values)
+	if err := appendSourceSelection(&selected, value); err != nil {
+		return err
+	}
+	*values = sourceList(selected)
+	return nil
+}
+
+func parseSourceSelection(values []string) ([]usage.SourceKind, error) {
+	selected := make([]usage.SourceKind, 0, len(values))
+	for _, value := range values {
+		if err := appendSourceSelection(&selected, value); err != nil {
+			return nil, err
+		}
+	}
+	return orderedSourceKinds(selected), nil
+}
+
+func appendSourceSelection(selected *[]usage.SourceKind, value string) error {
+	for _, part := range strings.Split(value, ",") {
+		part = strings.TrimSpace(part)
+		source := usage.SourceKind(strings.ToLower(part))
+		if !source.Valid() {
+			return fmt.Errorf("invalid --source %q (want codex, ctx, or opencode)", part)
+		}
+		duplicate := false
+		for _, existing := range *selected {
+			if existing == source {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			*selected = append(*selected, source)
+		}
+	}
+	return nil
+}
+
+func orderedSourceKinds(values []usage.SourceKind) []usage.SourceKind {
+	seen := make(map[usage.SourceKind]struct{}, len(values))
+	for _, value := range values {
+		if value.Valid() {
+			seen[value] = struct{}{}
+		}
+	}
+	result := make([]usage.SourceKind, 0, len(seen))
+	for _, value := range usage.AllSourceKinds() {
+		if _, ok := seen[value]; ok {
+			result = append(result, value)
+		}
+	}
+	return result
+}
+
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
 
 func defaultExplorerArgs(args []string) []string {
@@ -308,31 +360,29 @@ type ctxHistoryLoader func(string, ctxsource.IngestOptions) (ctxsource.IngestRes
 
 type loadedHistory struct {
 	query.Input
-	SourcePath string
+	SourcePath  string
+	SourcePaths map[usage.SourceKind]string
 }
 
 type historyLoadOptions struct {
-	Source       usage.SourceKind
-	CodexHome    string
-	CtxDataRoot  string
-	OpenCodeHome string
-	Days         int
-	DaysSet      bool
-	From         time.Time
-	To           time.Time
-	Now          time.Time
-	CacheDir     string
-	Verbose      bool
-	Diagnostics  diagnosticWriter
-	LoadCtx      ctxHistoryLoader
+	Source      usage.SourceKind
+	Sources     []usage.SourceKind
+	Days        int
+	DaysSet     bool
+	From        time.Time
+	To          time.Time
+	Now         time.Time
+	CacheDir    string
+	Verbose     bool
+	Diagnostics diagnosticWriter
+	LoadCtx     ctxHistoryLoader
 }
 
 func loadHistory(options historyLoadOptions) (loadedHistory, error) {
 	result := loadedHistory{Input: query.Input{Source: options.Source, From: options.From, To: options.To}}
 	switch options.Source {
 	case usage.SourceCtx:
-		result.SourcePath = strings.TrimSpace(options.CtxDataRoot)
-		ctxOptions := ctxsource.IngestOptions{DataRoot: options.CtxDataRoot, Days: options.Days, DaysSet: options.DaysSet, From: options.From, To: options.To, Now: options.Now, CacheDir: options.CacheDir}
+		ctxOptions := ctxsource.IngestOptions{Days: options.Days, DaysSet: options.DaysSet, From: options.From, To: options.To, Now: options.Now, CacheDir: options.CacheDir}
 		if options.Verbose {
 			ctxOptions.Diagnostic = func(message string) { options.Diagnostics.write("debug", message) }
 		}
@@ -340,13 +390,13 @@ func loadHistory(options historyLoadOptions) (loadedHistory, error) {
 		if loader == nil {
 			loader = ctxsource.Load
 		}
-		input, err := loader(options.CtxDataRoot, ctxOptions)
+		input, err := loader("", ctxOptions)
 		if err != nil {
 			return loadedHistory{}, fmt.Errorf("read ctx history: %w", err)
 		}
 		result.Input = query.Input{Turns: input.Turns, Sessions: input.Sessions, Warnings: input.Warnings, Agents: input.Agents, Source: options.Source, From: options.From, To: options.To}
 	case usage.SourceOpenCode:
-		home, err := opencode.ResolveHome(options.OpenCodeHome)
+		home, err := opencode.ResolveHome("")
 		if err != nil {
 			return loadedHistory{}, fmt.Errorf("resolve OpenCode data root: %w", err)
 		}
@@ -362,12 +412,16 @@ func loadHistory(options historyLoadOptions) (loadedHistory, error) {
 		result.SourcePath = home
 		result.Input = query.Input{Turns: input.Turns, Sessions: input.Sessions, Warnings: input.Warnings, Agents: input.Agents, Source: options.Source, From: options.From, To: options.To}
 	case usage.SourceCodex:
-		home, err := codex.ResolveHome(options.CodexHome)
+		home, err := codex.ResolveHome("")
 		if err != nil {
 			return loadedHistory{}, fmt.Errorf("resolve Codex home: %w", err)
 		}
 		result.SourcePath = home
-		input, err := codex.Load(home, codex.IngestOptions{Days: options.Days, DaysSet: options.DaysSet, From: options.From, To: options.To, Now: options.Now, CacheDir: options.CacheDir})
+		codexOptions := codex.IngestOptions{Days: options.Days, DaysSet: options.DaysSet, From: options.From, To: options.To, Now: options.Now, CacheDir: options.CacheDir}
+		if options.Verbose {
+			codexOptions.Diagnostic = func(message string) { options.Diagnostics.write("debug", message) }
+		}
+		input, err := codex.Load(home, codexOptions)
 		if err != nil {
 			return loadedHistory{}, fmt.Errorf("read Codex history %q: %w", home, err)
 		}
@@ -375,7 +429,161 @@ func loadHistory(options historyLoadOptions) (loadedHistory, error) {
 	default:
 		return loadedHistory{}, fmt.Errorf("unsupported history source %q", options.Source)
 	}
+	result.Sources = []usage.SourceKind{options.Source}
+	result.SourcePaths = map[usage.SourceKind]string{options.Source: result.SourcePath}
 	return result, nil
+}
+
+func selectedHistorySources(options historyLoadOptions) []usage.SourceKind {
+	if len(options.Sources) > 0 {
+		return orderedSourceKinds(options.Sources)
+	}
+	if options.Source.Valid() {
+		return []usage.SourceKind{options.Source}
+	}
+	return usage.DefaultSourceKinds()
+}
+
+func loadSelectedHistory(options historyLoadOptions) (loadedHistory, error) {
+	sources := selectedHistorySources(options)
+	if len(sources) == 0 {
+		return loadedHistory{}, errors.New("no history source selected")
+	}
+	options.Sources = sources
+	if len(sources) == 1 {
+		options.Source = sources[0]
+		return loadHistory(options)
+	}
+	return loadAllHistoryWith(options, loadHistory)
+}
+
+func sourceLoadLabel(sources []usage.SourceKind) string {
+	if len(sources) != 1 {
+		return "Reading history sources"
+	}
+	switch sources[0] {
+	case usage.SourceCtx:
+		return "Reading ctx history"
+	case usage.SourceOpenCode:
+		return "Reading OpenCode history"
+	default:
+		return "Reading Codex history"
+	}
+}
+
+type sourceLoadResult struct {
+	source  usage.SourceKind
+	history loadedHistory
+	elapsed time.Duration
+	err     error
+}
+
+func loadAllHistoryWith(options historyLoadOptions, loadSource func(historyLoadOptions) (loadedHistory, error)) (loadedHistory, error) {
+	if loadSource == nil {
+		loadSource = loadHistory
+	}
+	sources := selectedHistorySources(options)
+	started := time.Now()
+	if options.Verbose {
+		defer func() {
+			options.Diagnostics.write("debug", fmt.Sprintf("selected history sources loaded in %s", formatSpinnerElapsed(time.Since(started))))
+		}()
+	}
+	results := make(chan sourceLoadResult, len(sources))
+	var group sync.WaitGroup
+	for _, source := range sources {
+		source := source
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			current := options
+			current.Source = source
+			loadStarted := time.Now()
+			history, err := loadSource(current)
+			results <- sourceLoadResult{source: source, history: history, elapsed: time.Since(loadStarted), err: err}
+		}()
+	}
+	group.Wait()
+	close(results)
+
+	bySource := make(map[usage.SourceKind]sourceLoadResult, len(sources))
+	for result := range results {
+		bySource[result.source] = result
+	}
+	loaded := make([]loadedHistory, 0, len(sources))
+	var failures []sourceLoadResult
+	for _, source := range sources {
+		result := bySource[source]
+		if result.err != nil {
+			failures = append(failures, result)
+			if options.Verbose {
+				options.Diagnostics.write("debug", fmt.Sprintf("%s source unavailable after %s: %v", source, formatSpinnerElapsed(result.elapsed), result.err))
+			}
+			continue
+		}
+		loaded = append(loaded, result.history)
+		if options.Verbose {
+			options.Diagnostics.write("debug", fmt.Sprintf("source %s loaded in %s", source, formatSpinnerElapsed(result.elapsed)))
+		}
+	}
+	if len(loaded) == 0 {
+		if len(failures) == 0 {
+			return loadedHistory{}, errors.New("no history source could be loaded")
+		}
+		details := make([]string, 0, len(failures))
+		for _, failure := range failures {
+			details = append(details, fmt.Sprintf("%s: %v", failure.source, failure.err))
+		}
+		return loadedHistory{}, fmt.Errorf("no history source could be loaded: %s", strings.Join(details, "; "))
+	}
+	result := mergeLoadedHistories(loaded...)
+	result.Sources = append([]usage.SourceKind(nil), sources...)
+	result.Source = ""
+	if len(result.Sources) == 1 {
+		result.Source = result.Sources[0]
+	}
+	for _, failure := range failures {
+		result.Warnings = append(result.Warnings, usage.Warning{Reason: "source_unavailable", Type: string(failure.source), Count: 1})
+	}
+	return result, nil
+}
+
+func mergeLoadedHistories(values ...loadedHistory) loadedHistory {
+	result := loadedHistory{SourcePaths: make(map[usage.SourceKind]string)}
+	seenSources := make(map[usage.SourceKind]struct{})
+	for _, value := range values {
+		result.Turns = append(result.Turns, value.Turns...)
+		result.Sessions = append(result.Sessions, value.Sessions...)
+		result.Agents = append(result.Agents, value.Agents...)
+		result.Warnings = append(result.Warnings, value.Warnings...)
+		result.From = value.From
+		result.To = value.To
+		if value.SourcePath != "" {
+			result.SourcePath = value.SourcePath
+		}
+		for source, path := range value.SourcePaths {
+			result.SourcePaths[source] = path
+		}
+		sources := value.Sources
+		if len(sources) == 0 && value.Source.Valid() {
+			sources = []usage.SourceKind{value.Source}
+		}
+		if value.SourcePath != "" && len(sources) == 1 {
+			result.SourcePaths[sources[0]] = value.SourcePath
+		}
+		for _, source := range sources {
+			seenSources[source] = struct{}{}
+		}
+	}
+	for _, source := range usage.AllSourceKinds() {
+		if _, ok := seenSources[source]; ok {
+			result.Sources = append(result.Sources, source)
+		}
+	}
+	if len(result.Sources) == 1 {
+		result.Source = result.Sources[0]
+	}
+	return result
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
@@ -423,13 +631,11 @@ func runWithCtxLoader(args []string, stdout, stderr io.Writer, loadCtx ctxHistor
 	flags := flag.NewFlagSet(kind, flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	flags.Usage = func() { _, _ = fmt.Fprint(stderr, commandUsage(kind)) }
-	source := flags.String("source", string(usage.SourceCodex), "history source")
+	var sourceValues sourceList
+	flags.Var(&sourceValues, "source", "history sources (repeatable or comma-separated)")
 	days := flags.Int("days", 0, "include the last N days")
 	from := flags.String("from", "", "include records on or after date")
 	to := flags.String("to", "", "include records through date")
-	codexHome := flags.String("codex-home", "", "override CODEX_HOME for this invocation")
-	ctxDataRoot := flags.String("ctx-data-root", "", "ctx data root path")
-	opencodeHome := flags.String("opencode-home", "", "override OpenCode data root for this invocation")
 	color := flags.String("color", string(output.ColorAuto), "human report color mode")
 	layer := flags.String("layer", string(usage.LayerEffective), "tool layer")
 	var groupBy *string
@@ -458,35 +664,13 @@ func runWithCtxLoader(args []string, stdout, stderr io.Writer, loadCtx ctxHistor
 		diagnostics.errorf("--json is not supported for the interactive view")
 		return 2
 	}
-	selectedSource := usage.SourceKind(strings.ToLower(strings.TrimSpace(*source)))
-	if !selectedSource.Valid() {
-		diagnostics.errorf("invalid --source %q (want codex, ctx, or opencode)", *source)
-		return 2
+	selectedSources := orderedSourceKinds([]usage.SourceKind(sourceValues))
+	if len(selectedSources) == 0 {
+		selectedSources = usage.DefaultSourceKinds()
 	}
-	codexHomeSet := false
-	ctxDataRootSet := false
-	opencodeHomeSet := false
-	flags.Visit(func(f *flag.Flag) {
-		switch f.Name {
-		case "codex-home":
-			codexHomeSet = true
-		case "ctx-data-root":
-			ctxDataRootSet = true
-		case "opencode-home":
-			opencodeHomeSet = true
-		}
-	})
-	if selectedSource != usage.SourceCodex && codexHomeSet {
-		diagnostics.errorf("--codex-home is only valid for codex source")
-		return 2
-	}
-	if selectedSource != usage.SourceCtx && ctxDataRootSet {
-		diagnostics.errorf("--ctx-data-root is only valid for ctx source")
-		return 2
-	}
-	if selectedSource != usage.SourceOpenCode && opencodeHomeSet {
-		diagnostics.errorf("--opencode-home is only valid for opencode source")
-		return 2
+	selectedSource := usage.SourceKind("")
+	if len(selectedSources) == 1 {
+		selectedSource = selectedSources[0]
 	}
 	mode := output.ColorMode(*color)
 	diagnostics = newDiagnosticWriter(stderr, mode, noColor)
@@ -556,6 +740,10 @@ func runWithCtxLoader(args []string, stdout, stderr io.Writer, loadCtx ctxHistor
 			toSet = true
 		}
 	})
+	if kind == usageExplorerKind && (daysSet || fromSet || toSet) {
+		diagnostics.errorf("--days, --from, and --to are only valid for stats, tools, or skills; use d in the TUI")
+		return 2
+	}
 	if daysSet && *days == 0 {
 		diagnostics.errorf("--days must be at least 1")
 		return 2
@@ -588,29 +776,28 @@ func runWithCtxLoader(args []string, stdout, stderr io.Writer, loadCtx ctxHistor
 
 	now := time.Now().UTC()
 	cacheDir, _ := cache.DefaultDir()
+	if *verbose {
+		diagnostics.write("debug", fmt.Sprintf("catsift version: %s", appversion.String()))
+		diagnostics.write("debug", fmt.Sprintf("cache version: %s schema=%d dir=%q", cache.Version, cache.SchemaVersion, cacheDir))
+	}
 	if kind == usageExplorerKind && !tui.IsInteractive(os.Stdin, stdout) {
 		diagnostics.errorf("%v; use catsift stats, catsift tools, or catsift skills for non-interactive reports", tui.ErrNotInteractive)
 		return 1
 	}
-	progress := newSpinner(stderr, !*jsonOutput && !*verbose && diagnostics.capabilities.IsTTY, diagnostics.capabilities.ColorsEnabled())
+	progress := newSpinner(stderr, !*jsonOutput && diagnostics.capabilities.IsTTY, diagnostics.capabilities.ColorsEnabled())
+	diagnostics.progress = progress.writeDiagnostic
 	var (
 		history      loadedHistory
 		stopProgress func()
 	)
-	label := "Reading history"
-	switch selectedSource {
-	case usage.SourceCtx:
-		label = "Reading ctx history"
-	case usage.SourceOpenCode:
-		label = "Reading OpenCode history"
-	case usage.SourceCodex:
-		label = "Reading Codex history"
-	}
+	label := sourceLoadLabel(selectedSources)
 	stopProgress = progress.Start(label)
-	history, loadErr := loadHistory(historyLoadOptions{
-		Source: selectedSource, CodexHome: *codexHome, CtxDataRoot: *ctxDataRoot, OpenCodeHome: *opencodeHome,
+	loadOptions := historyLoadOptions{
+		Source: selectedSource, Sources: selectedSources,
 		Days: *days, DaysSet: daysSet, From: fromDate, To: toDate, Now: now, CacheDir: cacheDir, Verbose: *verbose, Diagnostics: diagnostics, LoadCtx: loadCtx,
-	})
+	}
+	var loadErr error
+	history, loadErr = loadSelectedHistory(loadOptions)
 	if loadErr != nil {
 		stopProgress()
 		diagnostics.errorf("%v", loadErr)
@@ -618,7 +805,10 @@ func runWithCtxLoader(args []string, stdout, stderr io.Writer, loadCtx ctxHistor
 	}
 	if kind == usageExplorerKind {
 		stopProgress()
-		filter := query.Filter{Source: selectedSource, From: fromDate, To: toDate}
+		filter := query.Filter{From: fromDate, To: toDate, Sources: append([]usage.SourceKind(nil), selectedSources...)}
+		if len(selectedSources) == 1 {
+			filter.Source = selectedSources[0]
+		}
 		if daysSet {
 			filter.From = now.Add(-time.Duration(*days) * 24 * time.Hour)
 			filter.To = now
@@ -630,16 +820,16 @@ func runWithCtxLoader(args []string, stdout, stderr io.Writer, loadCtx ctxHistor
 				// source snapshot is refreshed.
 				reloadNow = filter.To
 			}
-			refreshed, err := loadHistory(historyLoadOptions{
-				Source: selectedSource, CodexHome: *codexHome, CtxDataRoot: *ctxDataRoot, OpenCodeHome: *opencodeHome,
-				Days: *days, DaysSet: daysSet, From: fromDate, To: toDate, Now: reloadNow, CacheDir: cacheDir, Verbose: *verbose, Diagnostics: diagnostics, LoadCtx: loadCtx,
-			})
+			loadOptions.Now = reloadNow
+			var refreshed loadedHistory
+			var err error
+			refreshed, err = loadSelectedHistory(loadOptions)
 			if err != nil {
 				return query.Input{}, err
 			}
 			return refreshed.Input, nil
 		}
-		if err := tui.Run(tui.RunOptions{Input: history.Input, Filter: filter, SourcePath: history.SourcePath, Reload: reload, Stdin: os.Stdin, Stdout: stdout}); err != nil {
+		if err := tui.Run(tui.RunOptions{Input: history.Input, Filter: filter, SourcePath: history.SourcePath, SourcePaths: history.SourcePaths, Reload: reload, Stdin: os.Stdin, Stdout: stdout}); err != nil {
 			diagnostics.errorf("run interactive view: %v", err)
 			return 1
 		}
@@ -653,7 +843,7 @@ func runWithCtxLoader(args []string, stdout, stderr io.Writer, loadCtx ctxHistor
 	warnings := history.Warnings
 	agents := history.Agents
 	sourcePath := history.SourcePath
-	aggregateInput := aggregate.Input{Turns: turns, SessionCount: len(history.Sessions), Warnings: warnings, Source: selectedSource, Agents: agents}
+	aggregateInput := aggregate.Input{Turns: turns, SessionCount: len(history.Sessions), Warnings: warnings, Source: history.Source, Agents: agents}
 	report := aggregate.Report{}
 	var inventorySnapshot skillinventory.InventorySnapshot
 	if *unused {
@@ -694,7 +884,7 @@ func runWithCtxLoader(args []string, stdout, stderr io.Writer, loadCtx ctxHistor
 	}
 	period := formatPeriod(turns)
 	periodInfo := formatPeriodInfo(turns, daysSet, *days, fromDate, toDate, now)
-	context := output.ReportContext{Source: selectedSource, SourcePath: sourcePath, Agents: agents, Agent: legacyAgentValue(agents), Period: period, PeriodInfo: periodInfo, Layer: selectedLayer, SkillGroupBy: selectedGroupBy, SkillUsageView: selectedSkillUsageView, Strict: *strict, ReferenceTime: now, Location: time.Local}
+	context := output.ReportContext{Source: history.Source, Sources: history.Sources, SourcePath: sourcePath, SourcePaths: history.SourcePaths, Agents: agents, Agent: legacyAgentValue(agents), Period: period, PeriodInfo: periodInfo, Layer: selectedLayer, SkillGroupBy: selectedGroupBy, SkillUsageView: selectedSkillUsageView, Strict: *strict, ReferenceTime: now, Location: time.Local}
 	if *unused {
 		context.SkillView = output.SkillViewUnused
 		context.SkillRoots = append([]string{}, inventorySnapshot.Roots...)
@@ -715,7 +905,7 @@ func runWithCtxLoader(args []string, stdout, stderr io.Writer, loadCtx ctxHistor
 			return 1
 		}
 	}
-	if !*jsonOutput && len(warnings) > 0 {
+	if !*jsonOutput && !*verbose && len(warnings) > 0 {
 		_, _ = io.WriteString(stderr, "\n")
 	}
 	writeWarnings(stderr, warnings, *verbose, diagnostics.capabilities)
@@ -729,6 +919,8 @@ func runWithCtxLoader(args []string, stdout, stderr io.Writer, loadCtx ctxHistor
 type diagnosticWriter struct {
 	w            io.Writer
 	capabilities output.TerminalCapabilities
+	mutex        *sync.Mutex
+	progress     func(func())
 }
 
 func newDiagnosticWriter(w io.Writer, mode output.ColorMode, noColor bool) diagnosticWriter {
@@ -736,7 +928,7 @@ func newDiagnosticWriter(w io.Writer, mode output.ColorMode, noColor bool) diagn
 	if file, ok := w.(*os.File); ok {
 		capabilities = output.DetectCapabilities(file, mode, noColor)
 	}
-	return diagnosticWriter{w: w, capabilities: capabilities}
+	return diagnosticWriter{w: w, capabilities: capabilities, mutex: &sync.Mutex{}}
 }
 
 func (d diagnosticWriter) errorf(format string, args ...any) {
@@ -744,7 +936,18 @@ func (d diagnosticWriter) errorf(format string, args ...any) {
 }
 
 func (d diagnosticWriter) write(level, message string) {
-	_, _ = fmt.Fprintf(d.w, "%s %s\n", output.DiagnosticPrefix(level, d.capabilities), output.DiagnosticMessage(level, message, d.capabilities))
+	if d.mutex != nil {
+		d.mutex.Lock()
+		defer d.mutex.Unlock()
+	}
+	write := func() {
+		_, _ = fmt.Fprintf(d.w, "%s %s\n", output.DiagnosticPrefix(level, d.capabilities), output.DiagnosticMessage(level, message, d.capabilities))
+	}
+	if d.progress != nil {
+		d.progress(write)
+		return
+	}
+	write()
 }
 
 func writeWarnings(w io.Writer, warnings []usage.Warning, verbose bool, capabilities ...output.TerminalCapabilities) {

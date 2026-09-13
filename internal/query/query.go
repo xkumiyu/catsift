@@ -18,6 +18,7 @@ type Input struct {
 	Agents   []string
 	Warnings []usage.Warning
 	Source   usage.SourceKind
+	Sources  []usage.SourceKind
 	From     time.Time
 	To       time.Time
 	Filter   Filter
@@ -27,6 +28,7 @@ type Input struct {
 // inclusive and To is exclusive, matching the source adapters' range rules.
 type Filter struct {
 	Source        usage.SourceKind
+	Sources       []usage.SourceKind
 	Agent         string
 	Project       string
 	Model         usage.ModelRef
@@ -47,21 +49,22 @@ type Period struct {
 
 // OverviewView contains scope totals and a compact daily usage trend.
 type OverviewView struct {
-	Source              usage.SourceKind `json:"source,omitempty"`
-	Agent               string           `json:"agent,omitempty"`
-	Agents              []string         `json:"agents,omitempty"`
-	Project             string           `json:"project,omitempty"`
-	Period              Period           `json:"period"`
-	Sessions            int              `json:"sessions"`
-	Turns               int              `json:"turns"`
-	UserPrompts         int              `json:"user_prompts"`
-	ToolCalls           int              `json:"tool_calls"`
-	SkillUses           int              `json:"skill_uses"`
-	SkillUsesSession    int              `json:"skill_uses_session"`
-	TokenUsage          usage.TokenUsage `json:"token_usage"`
-	TokenUsageAvailable bool             `json:"token_usage_available"`
-	Trend               []UsageTrend     `json:"trend,omitempty"`
-	Warnings            []usage.Warning  `json:"warnings,omitempty"`
+	Source              usage.SourceKind   `json:"source,omitempty"`
+	Sources             []usage.SourceKind `json:"sources,omitempty"`
+	Agent               string             `json:"agent,omitempty"`
+	Agents              []string           `json:"agents,omitempty"`
+	Project             string             `json:"project,omitempty"`
+	Period              Period             `json:"period"`
+	Sessions            int                `json:"sessions"`
+	Turns               int                `json:"turns"`
+	UserPrompts         int                `json:"user_prompts"`
+	ToolCalls           int                `json:"tool_calls"`
+	SkillUses           int                `json:"skill_uses"`
+	SkillUsesSession    int                `json:"skill_uses_session"`
+	TokenUsage          usage.TokenUsage   `json:"token_usage"`
+	TokenUsageAvailable bool               `json:"token_usage_available"`
+	Trend               []UsageTrend       `json:"trend,omitempty"`
+	Warnings            []usage.Warning    `json:"warnings,omitempty"`
 }
 
 // UsageTrend is a daily bucket. Dates are normalized to UTC midnight.
@@ -219,6 +222,7 @@ type ReadModel struct {
 func SanitizeInput(input Input) Input {
 	result := input
 	result.Agents = append([]string(nil), input.Agents...)
+	result.Sources = append([]usage.SourceKind(nil), input.Sources...)
 	result.Warnings = cloneWarnings(input.Warnings)
 	result.Sessions = make([]usage.Session, 0, len(input.Sessions))
 	for _, session := range input.Sessions {
@@ -277,16 +281,24 @@ func Build(input Input, filters ...Filter) ReadModel {
 	if len(filters) > 0 {
 		filter = filters[0]
 	}
-	if filter.Source == "" {
+	if filter.Source == "" && filter.Sources == nil {
 		filter.Source = input.Source
+	}
+	if filter.Sources != nil {
+		filter.Source = ""
+		if len(filter.Sources) == 1 {
+			filter.Source = filter.Sources[0]
+		}
 	}
 	if filter.From.IsZero() && filter.To.IsZero() {
 		filter.From, filter.To = input.From, input.To
 	}
 
-	index := newSessionIndex(input.Sessions, input.Turns)
-	selected := make([]selectedTurn, 0, len(input.Turns))
-	for _, turn := range input.Turns {
+	turns := deduplicateTurns(input.Turns, filter)
+	sessions := deduplicateSessions(input.Sessions, filter)
+	index := newSessionIndex(sessions, turns)
+	selected := make([]selectedTurn, 0, len(turns))
+	for _, turn := range turns {
 		key := index.keyForTurn(turn)
 		meta := index.sessions[key]
 		if !matchesBaseFilter(turn, meta, filter) {
@@ -492,7 +504,7 @@ func matchesBaseFilter(turn usage.Turn, session usage.Session, filter Filter) bo
 	if source == "" {
 		source = turn.Source.Source
 	}
-	if filter.Source != "" && source != filter.Source {
+	if !sourceMatchesFilter(source, filter) {
 		return false
 	}
 	agent := session.Agent
@@ -515,13 +527,119 @@ func matchesBaseFilter(turn usage.Turn, session usage.Session, filter Filter) bo
 }
 
 func sessionMatchesFilter(session usage.Session, filter Filter) bool {
-	if filter.Source != "" && session.Source.Source != "" && session.Source.Source != filter.Source {
+	if session.Source.Source != "" && !sourceMatchesFilter(session.Source.Source, filter) {
 		return false
 	}
 	if filter.Agent != "" && usage.CanonicalAgentID(session.Agent) != usage.CanonicalAgentID(filter.Agent) {
 		return false
 	}
 	return filter.Project == "" || session.ProjectPath == filter.Project
+}
+
+func sourceMatchesFilter(source usage.SourceKind, filter Filter) bool {
+	if source == "" {
+		return true
+	}
+	if filter.Sources != nil {
+		for _, selected := range filter.Sources {
+			if source == selected {
+				return true
+			}
+		}
+		return false
+	}
+	return filter.Source == "" || source == filter.Source
+}
+
+func deduplicateTurns(values []usage.Turn, filter Filter) []usage.Turn {
+	result := make([]usage.Turn, 0, len(values))
+	positions := make(map[string]int, len(values))
+	for _, turn := range values {
+		if !sourceMatchesFilter(turn.Source.Source, filter) {
+			continue
+		}
+		key := sharedTurnIdentity(turn)
+		if key == "" {
+			result = append(result, turn)
+			continue
+		}
+		position, ok := positions[key]
+		if !ok {
+			positions[key] = len(result)
+			result = append(result, turn)
+			continue
+		}
+		if result[position].Source.Source == turn.Source.Source {
+			continue
+		}
+		if preferSource(turn.Source.Source, result[position].Source.Source) {
+			result[position] = turn
+		}
+	}
+	return result
+}
+
+func deduplicateSessions(values []usage.Session, filter Filter) []usage.Session {
+	result := make([]usage.Session, 0, len(values))
+	positions := make(map[string]int, len(values))
+	for _, session := range values {
+		if session.Source.Source != "" && !sourceMatchesFilter(session.Source.Source, filter) {
+			continue
+		}
+		key := sharedSessionIdentity(session)
+		if key == "" {
+			result = append(result, session)
+			continue
+		}
+		position, ok := positions[key]
+		if !ok {
+			positions[key] = len(result)
+			result = append(result, session)
+			continue
+		}
+		if result[position].Source.Source == session.Source.Source {
+			continue
+		}
+		if preferSource(session.Source.Source, result[position].Source.Source) {
+			result[position] = session
+		}
+	}
+	return result
+}
+
+func sharedTurnIdentity(turn usage.Turn) string {
+	// ponytail: use stable adapter-provided IDs only; add a fuzzy timestamp/content
+	// identity when sources expose no shared turn ID without risking false merges.
+	identity := strings.TrimSpace(turn.Source.ProviderSessionID)
+	if identity == "" {
+		identity = strings.TrimSpace(turn.SessionID)
+	}
+	turnID := strings.TrimSpace(turn.ID)
+	if identity == "" || turnID == "" {
+		return ""
+	}
+	return usage.CanonicalAgentID(turn.Source.Agent) + "\x00" + identity + "\x00" + turnID
+}
+
+func sharedSessionIdentity(session usage.Session) string {
+	identity := strings.TrimSpace(session.ProviderSessionID)
+	if identity == "" {
+		identity = strings.TrimSpace(session.ID)
+	}
+	if identity == "" {
+		return ""
+	}
+	return usage.CanonicalAgentID(session.Agent) + "\x00" + identity
+}
+
+func preferSource(left, right usage.SourceKind) bool {
+	if left == usage.SourceCtx {
+		return false
+	}
+	if right == usage.SourceCtx {
+		return true
+	}
+	return string(left) < string(right)
 }
 
 func sessionMetadataInPeriod(session usage.Session, filter Filter) bool {
@@ -779,11 +897,14 @@ func filterSkills(values []usage.SkillEvidence, filter Filter) []usage.SkillEvid
 }
 
 func buildOverview(filter Filter, agents []string, warnings []usage.Warning, selected []selectedTurn, sessionCount int, skillUses []usage.SkillUse) OverviewView {
-	view := OverviewView{Source: filter.Source, Project: filter.Project, Period: selectedPeriod(selected), Warnings: cloneWarnings(warnings)}
+	view := OverviewView{Source: filter.Source, Sources: append([]usage.SourceKind(nil), filter.Sources...), Project: filter.Project, Period: selectedPeriod(selected), Warnings: cloneWarnings(warnings)}
 	view.Agents = overviewAgents(filter, agents, selected)
 	view.Agent = strings.Join(view.Agents, ",")
-	if view.Source == "" && len(selected) > 0 {
+	if view.Source == "" && len(view.Sources) == 0 && len(selected) > 0 {
 		view.Source = selected[0].turn.Source.Source
+	}
+	if view.Source == "" && len(view.Sources) == 1 {
+		view.Source = view.Sources[0]
 	}
 	sessions := make(map[string]struct{})
 	trend := make(map[time.Time]*trendAccumulator)
@@ -822,11 +943,34 @@ func buildOverview(filter Filter, agents []string, warnings []usage.Warning, sel
 	}
 	view.SkillUses = len(skillUses)
 	view.SkillUsesSession = skillUsesBySession(skillUses)
-	for date, value := range trend {
+	trendFrom, trendTo := trendBounds(view.Period, trend)
+	for date := trendFrom; !date.IsZero() && !date.After(trendTo); date = date.AddDate(0, 0, 1) {
+		value := trend[date]
+		if value == nil {
+			view.Trend = append(view.Trend, UsageTrend{Date: date})
+			continue
+		}
 		view.Trend = append(view.Trend, UsageTrend{Date: date, Sessions: len(value.sessions), Turns: value.turns, UserPrompts: value.prompts, ToolCalls: value.tools, TokenUsage: value.tokens, TokenUsageAvailable: value.tokenAvailable})
 	}
-	sort.Slice(view.Trend, func(i, j int) bool { return view.Trend[i].Date.Before(view.Trend[j].Date) })
 	return view
+}
+
+func trendBounds(period Period, trend map[time.Time]*trendAccumulator) (from, to time.Time) {
+	for date := range trend {
+		if from.IsZero() || date.Before(from) {
+			from = date
+		}
+		if to.IsZero() || date.After(to) {
+			to = date
+		}
+	}
+	if !period.From.IsZero() {
+		from = dateBucket(period.From)
+	}
+	if !period.To.IsZero() {
+		to = dateBucket(period.To)
+	}
+	return from, to
 }
 
 func skillUsesBySession(uses []usage.SkillUse) int {
@@ -854,7 +998,7 @@ func overviewAgents(filter Filter, agents []string, selected []selectedTurn) []s
 			values = append(values, item.turn.Source.Agent)
 		}
 	}
-	if len(values) == 0 && filter.Source == usage.SourceCodex {
+	if len(values) == 0 && (filter.Source == usage.SourceCodex || sourceListContains(filter.Sources, usage.SourceCodex)) {
 		values = []string{"codex"}
 	}
 	seen := make(map[string]struct{}, len(values))
@@ -869,6 +1013,15 @@ func overviewAgents(filter Filter, agents []string, selected []selectedTurn) []s
 	}
 	sort.Strings(result)
 	return result
+}
+
+func sourceListContains(values []usage.SourceKind, wanted usage.SourceKind) bool {
+	for _, value := range values {
+		if value == wanted {
+			return true
+		}
+	}
+	return false
 }
 
 func selectedPeriod(selected []selectedTurn) Period {
@@ -917,6 +1070,10 @@ func turnBucket(turn usage.Turn) time.Time {
 	if when.IsZero() {
 		return time.Time{}
 	}
+	return dateBucket(when)
+}
+
+func dateBucket(when time.Time) time.Time {
 	when = when.UTC()
 	return time.Date(when.Year(), when.Month(), when.Day(), 0, 0, 0, 0, time.UTC)
 }
@@ -1018,6 +1175,9 @@ func modelRows(values map[string]*modelAccumulator) []ModelSummary {
 		if result[i].Sessions != result[j].Sessions {
 			return result[i].Sessions > result[j].Sessions
 		}
+		if !result[i].LastUsed.Equal(result[j].LastUsed) {
+			return result[i].LastUsed.After(result[j].LastUsed)
+		}
 		return result[i].Model.Key() < result[j].Model.Key()
 	})
 	return result
@@ -1092,6 +1252,9 @@ func skillRows(values map[string]*skillAccumulator) []SkillSummary {
 	sort.Slice(result, func(i, j int) bool {
 		if result[i].Uses != result[j].Uses {
 			return result[i].Uses > result[j].Uses
+		}
+		if !result[i].LastUsed.Equal(result[j].LastUsed) {
+			return result[i].LastUsed.After(result[j].LastUsed)
 		}
 		return strings.ToLower(result[i].Name) < strings.ToLower(result[j].Name)
 	})
@@ -1239,6 +1402,15 @@ func (model *ReadModel) buildDetails(index *sessionIndex, sessionKeys map[string
 			}
 			detail.Sessions = append(detail.Sessions, row)
 		}
+		sort.Slice(detail.Sessions, func(i, j int) bool {
+			if !detail.Sessions[i].LastUsed.Equal(detail.Sessions[j].LastUsed) {
+				return detail.Sessions[i].LastUsed.After(detail.Sessions[j].LastUsed)
+			}
+			if detail.Sessions[i].Turns != detail.Sessions[j].Turns {
+				return detail.Sessions[i].Turns > detail.Sessions[j].Turns
+			}
+			return detail.Sessions[i].Key < detail.Sessions[j].Key
+		})
 		model.modelDetails[key] = detail
 	}
 
@@ -1310,8 +1482,11 @@ func (model *ReadModel) buildDetails(index *sessionIndex, sessionKeys map[string
 		}
 		sort.Slice(orderedSessions, func(i, j int) bool {
 			left, right := grouped[orderedSessions[i]], grouped[orderedSessions[j]]
+			if !left.LastUsed.Equal(right.LastUsed) {
+				return left.LastUsed.After(right.LastUsed)
+			}
 			if !left.FirstUsed.Equal(right.FirstUsed) {
-				return left.FirstUsed.Before(right.FirstUsed)
+				return left.FirstUsed.After(right.FirstUsed)
 			}
 			return left.SessionKey < right.SessionKey
 		})

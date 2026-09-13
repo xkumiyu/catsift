@@ -24,7 +24,10 @@ const (
 	pageLimit        = 100_000
 	probePageLimit   = 1
 	ctxMaxLineBytes  = 4 << 20
-	ctxParserVersion = "ctx-normalizer-v3"
+	ctxParserVersion = "ctx-normalizer-v2"
+	// ponytail: fixed 24h ceiling; add per-source policy only if real usage needs it.
+	maxStaleCacheAge  = 24 * time.Hour
+	staleCacheWarning = "stale_cache"
 )
 
 // CommandResult is the result of one ctx invocation. The runner is injectable
@@ -70,6 +73,9 @@ type event struct {
 	CtxSessionID      string
 	Provider          string
 	ProviderSessionID string
+	Title             string
+	ProjectPath       string
+	SourceFormat      string
 	EventType         string
 	Role              string
 	Timestamp         time.Time
@@ -103,8 +109,17 @@ func Load(dataRoot string, options IngestOptions) (IngestResult, error) {
 	if strings.TrimSpace(options.CacheDir) != "" {
 		return loadCached(options, runner)
 	}
+	diagnoseSource(options, "ctx source")
 	options.diagnostic("ctx cache: disabled; reading source")
 	return load(options, runner)
+}
+
+func diagnoseSource(options IngestOptions, label string) {
+	root := strings.TrimSpace(options.DataRoot)
+	if root == "" {
+		root = "<ctx default>"
+	}
+	options.diagnostic(fmt.Sprintf("%s: data-root=%q scope=%q parser=%s", label, root, canonicalDataRoot(options.DataRoot), ctxParserVersion))
 }
 
 func (options IngestOptions) diagnostic(message string) {
@@ -215,23 +230,37 @@ func loadCached(options IngestOptions, runner CommandRunner) (IngestResult, erro
 	}
 	scope := canonicalDataRoot(options.DataRoot)
 	store := cache.New(options.CacheDir)
+	diagnoseSource(options, "ctx source")
+	cachePath := store.Path("ctx", scope)
+	options.diagnostic(fmt.Sprintf("ctx cache: lookup path=%q parser=%s", cachePath, ctxParserVersion))
+	cacheEntry, cacheHit, readErr := store.ReadEntry("ctx", scope, ctxParserVersion)
+	if readErr != nil {
+		options.diagnostic(fmt.Sprintf("ctx cache: read failed path=%q: %v", cachePath, readErr))
+	}
 	options.diagnostic("ctx cache: checking generation")
 	generation, probeErr := probeGeneration(options, runner, now)
 	if generation != "" {
-		data, hit, _ := store.Read("ctx", scope, generation, ctxParserVersion)
-		if hit {
-			var snapshot cache.Snapshot
-			if err := json.Unmarshal(data, &snapshot); err == nil {
+		options.diagnostic(fmt.Sprintf("ctx cache: generation=%q", generation))
+		if cacheHit && cacheEntry.Revision == generation {
+			result, err := resultFromCacheEntry(cacheEntry, options, now)
+			if err == nil {
+				options.diagnostic(fmt.Sprintf("ctx cache: hit path=%q", cachePath))
 				if hasTimeRange(options) {
 					options.diagnostic("ctx cache: hit; applying selected period locally")
 				} else {
 					options.diagnostic("ctx cache: hit; using complete cached history")
 				}
-				return filterCachedResult(resultFromSnapshot(snapshot), options, now), nil
+				return result, nil
 			}
+			options.diagnostic(fmt.Sprintf("ctx cache: invalid snapshot path=%q", cachePath))
 		}
 	}
 	if probeErr != nil {
+		options.diagnostic(fmt.Sprintf("ctx cache: generation check unavailable: %v", probeErr))
+		if result, age, ok := staleCacheResult(cacheEntry, cacheHit, options, now); ok {
+			options.diagnostic(fmt.Sprintf("ctx cache: stale hit path=%q revision=%q age=%s max_age=%s; using cached history", cachePath, cacheEntry.Revision, formatCacheAge(age), formatCacheAge(maxStaleCacheAge)))
+			return result, nil
+		}
 		options.diagnostic("ctx cache: generation check unavailable; reading source")
 	} else {
 		options.diagnostic("ctx cache: miss; reading source")
@@ -246,18 +275,61 @@ func loadCached(options IngestOptions, runner CommandRunner) (IngestResult, erro
 	}
 	result, fullGeneration, err := loadStream(fullOptions, runner, false)
 	if err != nil {
+		if staleResult, age, ok := staleCacheResult(cacheEntry, cacheHit, options, now); ok {
+			options.diagnostic(fmt.Sprintf("ctx cache: stale fallback path=%q revision=%q age=%s max_age=%s; source read failed: %v", cachePath, cacheEntry.Revision, formatCacheAge(age), formatCacheAge(maxStaleCacheAge), err))
+			return staleResult, nil
+		}
 		return IngestResult{}, err
+	}
+	if generation != "" && fullGeneration != "" && generation != fullGeneration {
+		options.diagnostic(fmt.Sprintf("ctx source: generation changed during read: before=%q after=%q", generation, fullGeneration))
 	}
 	if fullGeneration != "" {
 		if err := store.Write("ctx", scope, fullGeneration, ctxParserVersion, snapshotFromResult(result)); err != nil {
-			options.diagnostic("ctx cache: could not store complete generation; result is still available")
+			options.diagnostic(fmt.Sprintf("ctx cache: could not store complete generation path=%q: %v", cachePath, err))
 		} else {
-			options.diagnostic("ctx cache: stored complete generation")
+			options.diagnostic(fmt.Sprintf("ctx cache: stored complete generation=%q path=%q", fullGeneration, cachePath))
 		}
 	} else {
 		options.diagnostic("ctx cache: source returned no generation; result is still available")
 	}
 	return filterCachedResult(result, options, now), nil
+}
+
+func resultFromCacheEntry(entry cache.Entry, options IngestOptions, now time.Time) (IngestResult, error) {
+	var snapshot cache.Snapshot
+	if err := json.Unmarshal(entry.Snapshot, &snapshot); err != nil {
+		return IngestResult{}, err
+	}
+	return filterCachedResult(resultFromSnapshot(snapshot), options, now), nil
+}
+
+func staleCacheResult(entry cache.Entry, cacheHit bool, options IngestOptions, now time.Time) (IngestResult, time.Duration, bool) {
+	if !cacheHit {
+		return IngestResult{}, 0, false
+	}
+	age := now.Sub(entry.StoredAt)
+	if age < 0 {
+		age = 0
+	}
+	if age > maxStaleCacheAge {
+		options.diagnostic(fmt.Sprintf("ctx cache: stale candidate expired age=%s max_age=%s", formatCacheAge(age), formatCacheAge(maxStaleCacheAge)))
+		return IngestResult{}, age, false
+	}
+	result, err := resultFromCacheEntry(entry, options, now)
+	if err != nil {
+		options.diagnostic(fmt.Sprintf("ctx cache: stale candidate invalid: %v", err))
+		return IngestResult{}, age, false
+	}
+	result.Warnings = append(result.Warnings, usage.Warning{Reason: staleCacheWarning, Type: "ctx", Count: 1})
+	return result, age, true
+}
+
+func formatCacheAge(age time.Duration) string {
+	if age < time.Second {
+		return "<1s"
+	}
+	return age.Truncate(time.Second).String()
 }
 
 func probeGeneration(options IngestOptions, runner CommandRunner, now time.Time) (string, error) {
@@ -604,6 +676,7 @@ func eventFromMap(raw map[string]any, line int) event {
 		CtxSessionID:      firstString(raw, "ctx_session_id", "session_uuid"),
 		Provider:          provider,
 		ProviderSessionID: firstString(raw, "provider_session_id", "provider_session", "session_id"),
+		SourceFormat:      firstString(raw, "source_format"),
 		EventType:         firstString(raw, "event_type", "type"),
 		Role:              strings.ToLower(strings.TrimSpace(firstString(raw, "role", "author"))),
 		Timestamp:         timestamp,
@@ -612,7 +685,11 @@ func eventFromMap(raw map[string]any, line int) event {
 		Ordinal:           integerValue(raw, "ordinal"),
 		Line:              line,
 	}
+	if item.SourceFormat == "" {
+		item.SourceFormat = firstString(source, "source_format")
+	}
 	item.PayloadValues = eventPayloadValues(raw)
+	item.Title, item.ProjectPath = sessionMetadataFromValues(item.PayloadValues, item.EventType)
 	item.Model, item.HasModel = usage.ModelFromMap(raw, provider)
 	if !item.HasModel {
 		item.Model, item.HasModel = usage.ModelFromValues(item.PayloadValues, provider)
@@ -683,6 +760,7 @@ type assembler struct {
 	ordinals map[string]int
 	sessions map[string]SessionMetadata
 	agents   map[string]struct{}
+	formats  map[string]string
 }
 
 type turnState struct {
@@ -698,16 +776,23 @@ func newAssembler(warnings []usage.Warning) *assembler {
 		ordinals: make(map[string]int),
 		sessions: make(map[string]SessionMetadata),
 		agents:   make(map[string]struct{}),
+		formats:  make(map[string]string),
 	}
 }
 
 func (a *assembler) consume(item event) {
 	if isNonUsageEvent(item) {
+		if item.hasSessionMetadata() {
+			a.ensureSession(item)
+		}
 		return
 	}
 	sessionID := item.sessionID()
 	source := item.source()
 	agent := source.Agent
+	if item.SourceFormat != "" {
+		a.formats[sessionID] = item.SourceFormat
+	}
 	if !recognized(item) {
 		if agent == "unknown" {
 			a.warnings = append(a.warnings, warning("ctx_missing_agent", item.EventType, item.Line))
@@ -719,17 +804,7 @@ func (a *assembler) consume(item event) {
 	if agent == "unknown" {
 		a.warnings = append(a.warnings, warning("ctx_missing_agent", item.EventType, item.Line))
 	}
-	if _, ok := a.sessions[sessionID]; !ok {
-		session := usage.NewSession(sessionDisplayID(item, sessionID), source)
-		session.Agent = agent
-		session.Provider = strings.TrimSpace(item.Provider)
-		session.ProviderSessionID = strings.TrimSpace(item.ProviderSessionID)
-		session.CtxSessionID = strings.TrimSpace(item.CtxSessionID)
-		session.CreatedAt = item.Timestamp
-		session.UpdatedAt = item.Timestamp
-		session.Key = usage.NewSessionKey(source, sessionID)
-		a.sessions[sessionID] = session
-	}
+	a.ensureSession(item)
 	a.touchSession(sessionID, item.Timestamp)
 	turnID := item.turnID()
 	if isUserMessage(item) {
@@ -749,6 +824,29 @@ func (a *assembler) consume(item event) {
 		current.turn.EndedAt = item.Timestamp
 		a.finish(sessionID)
 	}
+}
+
+func (a *assembler) ensureSession(item event) {
+	sessionID := item.sessionID()
+	source := item.source()
+	session, ok := a.sessions[sessionID]
+	if !ok {
+		session = usage.NewSession(sessionDisplayID(item, sessionID), source)
+		session.Agent = source.Agent
+		session.Provider = strings.TrimSpace(item.Provider)
+		session.ProviderSessionID = strings.TrimSpace(item.ProviderSessionID)
+		session.CtxSessionID = strings.TrimSpace(item.CtxSessionID)
+		session.CreatedAt = item.Timestamp
+		session.UpdatedAt = item.Timestamp
+		session.Key = usage.NewSessionKey(source, sessionID)
+	}
+	if session.Title == "" {
+		session.Title = item.Title
+	}
+	if session.ProjectPath == "" {
+		session.ProjectPath = item.ProjectPath
+	}
+	a.sessions[sessionID] = session
 }
 
 func (a *assembler) touchSession(sessionID string, timestamp time.Time) {
@@ -839,6 +937,7 @@ func (a *assembler) flush() {
 }
 
 func (a *assembler) result() IngestResult {
+	selected := canonicalSessionIDs(a.sessions, a.formats)
 	agents := make([]string, 0, len(a.agents))
 	for agent := range a.agents {
 		agents = append(agents, agent)
@@ -846,6 +945,9 @@ func (a *assembler) result() IngestResult {
 	sort.Strings(agents)
 	sessionIDs := make([]string, 0, len(a.sessions))
 	for id := range a.sessions {
+		if _, ok := selected[id]; !ok {
+			continue
+		}
 		sessionIDs = append(sessionIDs, id)
 	}
 	sort.Strings(sessionIDs)
@@ -853,7 +955,60 @@ func (a *assembler) result() IngestResult {
 	for _, id := range sessionIDs {
 		sessions = append(sessions, a.sessions[id])
 	}
-	return IngestResult{Turns: a.turns, Sessions: sessions, Agents: agents, Warnings: a.warnings}
+	turns := make([]usage.Turn, 0, len(a.turns))
+	for _, turn := range a.turns {
+		if _, ok := selected[turn.SessionID]; ok {
+			turns = append(turns, turn)
+		}
+	}
+	return IngestResult{Turns: turns, Sessions: sessions, Agents: agents, Warnings: a.warnings}
+}
+
+func canonicalSessionIDs(sessions map[string]SessionMetadata, formats map[string]string) map[string]struct{} {
+	selected := make(map[string]struct{}, len(sessions))
+	preferred := make(map[string]int)
+	for id := range sessions {
+		selected[id] = struct{}{}
+		rank := sourceFormatRank(formats[id])
+		if rank == 0 {
+			continue
+		}
+		identity := providerSessionIdentity(sessions[id])
+		if identity == "" || rank <= preferred[identity] {
+			continue
+		}
+		preferred[identity] = rank
+	}
+	for id := range sessions {
+		rank := sourceFormatRank(formats[id])
+		if rank == 0 {
+			continue
+		}
+		identity := providerSessionIdentity(sessions[id])
+		if identity != "" && rank < preferred[identity] {
+			delete(selected, id)
+		}
+	}
+	return selected
+}
+
+func providerSessionIdentity(session SessionMetadata) string {
+	providerSessionID := strings.TrimSpace(session.ProviderSessionID)
+	if providerSessionID == "" {
+		return ""
+	}
+	return usage.CanonicalAgentID(session.Agent) + "\x00" + providerSessionID
+}
+
+func sourceFormatRank(format string) int {
+	switch strings.TrimSpace(format) {
+	case "codex_history_jsonl":
+		return 1
+	case "codex_session_jsonl":
+		return 2
+	default:
+		return 0
+	}
 }
 
 func (a *assembler) observe(current *turnState, item event) {
@@ -1465,7 +1620,21 @@ func isNonUsageEvent(item event) bool {
 	// ctx summaries are provider metadata, not a user prompt or tool
 	// observation. They are expected in a complete event stream and should not
 	// produce an unknown-event warning or an empty usage turn.
-	return compact(item.EventType) == "summary"
+	kind := compact(item.EventType)
+	return kind == "summary" || isSessionMetadataEventKind(kind)
+}
+
+func isSessionMetadataEventKind(kind string) bool {
+	switch compact(kind) {
+	case "session", "sessionmeta", "sessionmetadata", "sessioninfo", "sessiondetails", "threadmeta", "threadmetadata", "conversationmeta", "conversationmetadata":
+		return true
+	default:
+		return false
+	}
+}
+
+func (item event) hasSessionMetadata() bool {
+	return strings.TrimSpace(item.Title) != "" || strings.TrimSpace(item.ProjectPath) != ""
 }
 
 func (item event) source() usage.SourceRef {
@@ -1709,6 +1878,88 @@ func eventPayloadValues(raw map[string]any) []any {
 		values = append(values, decoded)
 	}
 	return values
+}
+
+func sessionMetadataFromValues(values []any, eventType string) (title, projectPath string) {
+	sessionLike := isSessionMetadataEventKind(eventType)
+	for _, value := range values {
+		foundTitle, foundProjectPath := sessionMetadataFromValue(value, sessionLike)
+		if title == "" {
+			title = foundTitle
+		}
+		if projectPath == "" {
+			projectPath = foundProjectPath
+		}
+		if title != "" && projectPath != "" {
+			break
+		}
+	}
+	return title, projectPath
+}
+
+func sessionMetadataFromValue(value any, sessionLike bool) (title, projectPath string) {
+	switch typed := value.(type) {
+	case []any:
+		for _, child := range typed {
+			foundTitle, foundProjectPath := sessionMetadataFromValue(child, sessionLike)
+			if title == "" {
+				title = foundTitle
+			}
+			if projectPath == "" {
+				projectPath = foundProjectPath
+			}
+		}
+	case map[string]any:
+		kind := compact(firstString(typed, "kind", "type", "activity_type", "event_type", "eventType"))
+		switch kind {
+		case "sessioncwd", "cwd", "project", "projectpath", "workspace", "workingdirectory":
+			if projectPath := strings.TrimSpace(valueText(typed["value"])); projectPath != "" {
+				return "", projectPath
+			}
+		case "sessionname", "sessiontitle", "threadname", "threadtitle", "conversationname", "conversationtitle", "title":
+			if title := strings.TrimSpace(valueText(typed["value"])); title != "" {
+				return title, ""
+			}
+		}
+
+		currentSessionLike := sessionLike || isSessionMetadataEventKind(kind)
+		title = firstString(typed, "session_title", "sessionTitle", "session_name", "sessionName", "thread_title", "threadTitle", "thread_name", "threadName", "conversation_title", "conversationTitle", "conversation_name", "conversationName")
+		projectPath = firstString(typed, "project_path", "projectPath", "project_dir", "projectDir", "workspace_path", "workspacePath", "working_directory", "workingDirectory", "session_cwd", "sessionCwd")
+		if currentSessionLike {
+			if title == "" {
+				title = firstString(typed, "title", "name")
+			}
+			if projectPath == "" {
+				projectPath = firstString(typed, "cwd")
+			}
+		}
+
+		keys := make([]string, 0, len(typed))
+		for key := range typed {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			childSessionLike := currentSessionLike || isSessionMetadataContainerKey(key)
+			foundTitle, foundProjectPath := sessionMetadataFromValue(typed[key], childSessionLike)
+			if title == "" {
+				title = foundTitle
+			}
+			if projectPath == "" {
+				projectPath = foundProjectPath
+			}
+		}
+	}
+	return title, projectPath
+}
+
+func isSessionMetadataContainerKey(key string) bool {
+	switch compact(key) {
+	case "session", "sessionmeta", "sessionmetadata", "sessioninfo", "thread", "threadmeta", "conversation", "conversationmeta", "metadata":
+		return true
+	default:
+		return false
+	}
 }
 
 func mapValue(raw map[string]any, key string) map[string]any {

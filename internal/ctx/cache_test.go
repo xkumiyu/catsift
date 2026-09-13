@@ -74,12 +74,15 @@ func TestLoadReportsCacheActivity(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
+		"ctx source: data-root=",
+		"ctx cache: lookup path=",
+		"parser=ctx-normalizer-v2",
 		"ctx cache: checking generation",
 		"ctx cache: miss; reading source",
 		"ctx source: reading full event stream",
 		"ctx cache: stored complete generation",
 	} {
-		if !containsString(cold, want) {
+		if !containsDiagnostic(cold, want) {
 			t.Errorf("cold diagnostics missing %q: %v", want, cold)
 		}
 	}
@@ -99,10 +102,14 @@ func TestLoadReportsCacheActivity(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
+		"ctx source: data-root=",
+		"ctx cache: lookup path=",
+		"parser=ctx-normalizer-v2",
+		"ctx cache: generation=",
 		"ctx cache: checking generation",
 		"ctx cache: hit; applying selected period locally",
 	} {
-		if !containsString(warm, want) {
+		if !containsDiagnostic(warm, want) {
 			t.Errorf("warm diagnostics missing %q: %v", want, warm)
 		}
 	}
@@ -123,9 +130,174 @@ func TestLoadReportsCacheActivity(t *testing.T) {
 	}
 }
 
+func TestLoadUsesRecentCacheWhenGenerationProbeFails(t *testing.T) {
+	data := strings.Join([]string{
+		eventLine(t, "cached", "codex", "session", "message", "user", "2026-01-02T00:00:00Z", "cached", nil),
+		completionLine(t, "generation-1", "", true),
+	}, "\n") + "\n"
+	cacheDir := t.TempDir()
+	now := time.Now().UTC()
+	populate := func(args []string) (CommandResult, error) {
+		if containsPair(args, "--limit", "1") {
+			return CommandResult{Stdout: []byte(completionLine(t, "generation-1", "", true) + "\n")}, nil
+		}
+		return CommandResult{Stdout: []byte(data)}, nil
+	}
+	if _, err := Load("/tmp/ctx-stale", IngestOptions{
+		DataRoot: "/tmp/ctx-stale",
+		Now:      now,
+		CacheDir: cacheDir,
+		Runner:   populate,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cachePath := cache.New(cacheDir).Path("ctx", "/tmp/ctx-stale")
+	if err := os.Chtimes(cachePath, now.Add(-time.Minute), now.Add(-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+
+	var calls [][]string
+	failing := func(args []string) (CommandResult, error) {
+		calls = append(calls, append([]string(nil), args...))
+		return CommandResult{ExitCode: 1, Stderr: []byte("ctx unavailable")}, nil
+	}
+	result, err := Load("/tmp/ctx-stale", IngestOptions{
+		DataRoot: "/tmp/ctx-stale",
+		Now:      now,
+		CacheDir: cacheDir,
+		Runner:   failing,
+	})
+	if err != nil {
+		t.Fatalf("stale fallback error = %v", err)
+	}
+	if len(result.Turns) != 1 || result.Turns[0].Source.EventID != "cached" {
+		t.Fatalf("stale fallback result = %#v", result)
+	}
+	if len(result.Warnings) != 1 || result.Warnings[0].Reason != "stale_cache" || result.Warnings[0].Type != "ctx" {
+		t.Fatalf("stale fallback warnings = %#v", result.Warnings)
+	}
+	if len(calls) != 1 || !containsPair(calls[0], "--limit", "1") {
+		t.Fatalf("stale fallback calls = %#v", calls)
+	}
+}
+
+func TestLoadUsesRecentCacheAfterFreshReadFails(t *testing.T) {
+	data := strings.Join([]string{
+		eventLine(t, "cached", "codex", "session", "message", "user", "2026-01-02T00:00:00Z", "cached", nil),
+		completionLine(t, "generation-1", "", true),
+	}, "\n") + "\n"
+	cacheDir := t.TempDir()
+	now := time.Now().UTC()
+	populate := func(args []string) (CommandResult, error) {
+		if containsPair(args, "--limit", "1") {
+			return CommandResult{Stdout: []byte(completionLine(t, "generation-1", "", true) + "\n")}, nil
+		}
+		return CommandResult{Stdout: []byte(data)}, nil
+	}
+	if _, err := Load("/tmp/ctx-stale-read", IngestOptions{
+		DataRoot: "/tmp/ctx-stale-read",
+		Now:      now,
+		CacheDir: cacheDir,
+		Runner:   populate,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cachePath := cache.New(cacheDir).Path("ctx", "/tmp/ctx-stale-read")
+	if err := os.Chtimes(cachePath, now.Add(-time.Minute), now.Add(-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+
+	var calls [][]string
+	failing := func(args []string) (CommandResult, error) {
+		calls = append(calls, append([]string(nil), args...))
+		if containsPair(args, "--limit", "1") {
+			return CommandResult{Stdout: []byte(completionLine(t, "generation-2", "", true) + "\n")}, nil
+		}
+		return CommandResult{ExitCode: 1, Stderr: []byte("ctx read failed")}, nil
+	}
+	result, err := Load("/tmp/ctx-stale-read", IngestOptions{
+		DataRoot: "/tmp/ctx-stale-read",
+		Now:      now,
+		CacheDir: cacheDir,
+		Runner:   failing,
+	})
+	if err != nil {
+		t.Fatalf("stale read fallback error = %v", err)
+	}
+	if len(result.Warnings) != 1 || result.Warnings[0].Reason != "stale_cache" {
+		t.Fatalf("stale read fallback warnings = %#v", result.Warnings)
+	}
+	if len(calls) != 2 || !containsPair(calls[0], "--limit", "1") || containsPair(calls[1], "--limit", "1") {
+		t.Fatalf("stale read fallback calls = %#v", calls)
+	}
+}
+
+func TestLoadDoesNotUseExpiredCacheWhenGenerationProbeFails(t *testing.T) {
+	data := strings.Join([]string{
+		eventLine(t, "cached", "codex", "session", "message", "user", "2026-01-02T00:00:00Z", "cached", nil),
+		completionLine(t, "generation-1", "", true),
+	}, "\n") + "\n"
+	cacheDir := t.TempDir()
+	now := time.Now().UTC()
+	populate := func(args []string) (CommandResult, error) {
+		if containsPair(args, "--limit", "1") {
+			return CommandResult{Stdout: []byte(completionLine(t, "generation-1", "", true) + "\n")}, nil
+		}
+		return CommandResult{Stdout: []byte(data)}, nil
+	}
+	if _, err := Load("/tmp/ctx-expired", IngestOptions{
+		DataRoot: "/tmp/ctx-expired",
+		Now:      now,
+		CacheDir: cacheDir,
+		Runner:   populate,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cachePath := cache.New(cacheDir).Path("ctx", "/tmp/ctx-expired")
+	old := now.Add(-maxStaleCacheAge - time.Minute)
+	if err := os.Chtimes(cachePath, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	var calls [][]string
+	refresh := func(args []string) (CommandResult, error) {
+		calls = append(calls, append([]string(nil), args...))
+		if containsPair(args, "--limit", "1") {
+			return CommandResult{ExitCode: 1, Stderr: []byte("ctx unavailable")}, nil
+		}
+		return CommandResult{Stdout: []byte(strings.Replace(data, "generation-1", "generation-2", 1))}, nil
+	}
+	result, err := Load("/tmp/ctx-expired", IngestOptions{
+		DataRoot: "/tmp/ctx-expired",
+		Now:      now,
+		CacheDir: cacheDir,
+		Runner:   refresh,
+	})
+	if err != nil {
+		t.Fatalf("expired cache refresh error = %v", err)
+	}
+	if len(calls) != 2 || !containsPair(calls[0], "--limit", "1") || containsPair(calls[1], "--limit", "1") {
+		t.Fatalf("expired cache calls = %#v", calls)
+	}
+	for _, warning := range result.Warnings {
+		if warning.Reason == staleCacheWarning {
+			t.Fatalf("expired cache unexpectedly used stale fallback: %#v", result.Warnings)
+		}
+	}
+}
+
 func containsString(values []string, want string) bool {
 	for _, value := range values {
 		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+func containsDiagnostic(values []string, want string) bool {
+	for _, value := range values {
+		if strings.Contains(value, want) {
 			return true
 		}
 	}

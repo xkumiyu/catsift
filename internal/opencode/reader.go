@@ -37,6 +37,7 @@ type SessionRow struct {
 	Title     string
 	Directory string
 	Version   string
+	Model     []byte
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -174,33 +175,39 @@ type queryer interface {
 }
 
 func (r *Reader) readSessions(db queryer, consume func(Row) error) error {
-	hasTitle, err := sessionHasTitleColumn(db)
+	hasTitle, err := sessionHasColumn(db, "title")
 	if err != nil {
 		return fmt.Errorf("inspect OpenCode session columns: %w", err)
 	}
-	query := `
-		SELECT id, directory, version, CAST(time_created AS TEXT), CAST(time_updated AS TEXT)
-		FROM session
-		ORDER BY id`
-	if hasTitle {
-		query = `
-			SELECT id, directory, title, version, CAST(time_created AS TEXT), CAST(time_updated AS TEXT)
-			FROM session
-			ORDER BY id`
+	hasModel, err := sessionHasColumn(db, "model")
+	if err != nil {
+		return fmt.Errorf("inspect OpenCode session columns: %w", err)
 	}
+	columns := []string{"id", "directory"}
+	if hasTitle {
+		columns = append(columns, "title")
+	}
+	columns = append(columns, "version", "CAST(time_created AS TEXT)", "CAST(time_updated AS TEXT)")
+	if hasModel {
+		columns = append(columns, "model")
+	}
+	query := "SELECT " + strings.Join(columns, ", ") + " FROM session ORDER BY id"
 	rows, err := db.Query(query)
 	if err != nil {
 		return fmt.Errorf("read OpenCode sessions: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
-		var id, title, directory, version, created, updated sql.NullString
-		var scanErr error
+		var id, title, directory, version, created, updated, model sql.NullString
+		scanArgs := []any{&id, &directory}
 		if hasTitle {
-			scanErr = rows.Scan(&id, &directory, &title, &version, &created, &updated)
-		} else {
-			scanErr = rows.Scan(&id, &directory, &version, &created, &updated)
+			scanArgs = append(scanArgs, &title)
 		}
+		scanArgs = append(scanArgs, &version, &created, &updated)
+		if hasModel {
+			scanArgs = append(scanArgs, &model)
+		}
+		scanErr := rows.Scan(scanArgs...)
 		if scanErr != nil {
 			return fmt.Errorf("read OpenCode session row: %w", scanErr)
 		}
@@ -209,6 +216,7 @@ func (r *Reader) readSessions(db queryer, consume func(Row) error) error {
 			Title:     title.String,
 			Directory: directory.String,
 			Version:   version.String,
+			Model:     append([]byte(nil), []byte(model.String)...),
 			CreatedAt: parseDatabaseTime(created.String),
 			UpdatedAt: parseDatabaseTime(updated.String),
 		}}
@@ -219,7 +227,7 @@ func (r *Reader) readSessions(db queryer, consume func(Row) error) error {
 	return rows.Err()
 }
 
-func sessionHasTitleColumn(db queryer) (bool, error) {
+func sessionHasColumn(db queryer, wanted string) (bool, error) {
 	rows, err := db.Query(`PRAGMA table_info(session)`)
 	if err != nil {
 		return false, err
@@ -232,7 +240,7 @@ func sessionHasTitleColumn(db queryer) (bool, error) {
 		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
 			return false, err
 		}
-		if strings.EqualFold(name, "title") {
+		if strings.EqualFold(name, wanted) {
 			return true, nil
 		}
 	}

@@ -74,6 +74,48 @@ func TestNormalizerPreservesSessionTitle(t *testing.T) {
 	}
 }
 
+func TestLoadUsesOpenCodeSessionModelForModelAttribution(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "opencode.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, statement := range []string{
+		`CREATE TABLE session (id TEXT PRIMARY KEY, directory TEXT, title TEXT, version TEXT, time_created INTEGER, time_updated INTEGER, model TEXT)`,
+		`CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT, time_created INTEGER, time_updated INTEGER, data TEXT)`,
+		`CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT, session_id TEXT, time_created INTEGER, time_updated INTEGER, data TEXT)`,
+		`INSERT INTO session VALUES ('s1', '/workspace', 'Model test', '1.0', 1000, 3000, '{"id":"model-a","providerID":"provider-a"}')`,
+		`INSERT INTO message VALUES ('m1', 's1', 2000, 2000, '{"role":"user"}')`,
+		`INSERT INTO part VALUES ('p1', 'm1', 's1', 2000, 2000, '{"type":"text","text":"prompt"}')`,
+		`INSERT INTO message VALUES ('m2', 's1', 2500, 2500, '{"role":"assistant"}')`,
+		`INSERT INTO part VALUES ('p2', 'm2', 's1', 2500, 2500, '{"type":"step-finish","tokens":{"total":7,"input":5,"output":2}}')`,
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			_ = db.Close()
+			t.Fatal(err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := Load(root, IngestOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := usage.NewModelRef("provider-a", "model-a")
+	if len(result.Turns) != 1 || len(result.Turns[0].ModelObservations) == 0 {
+		t.Fatalf("model observations = %#v", result.Turns)
+	}
+	if got := result.Turns[0].ModelObservations[0].Model; got != want {
+		t.Fatalf("model observation = %#v, want %#v", got, want)
+	}
+	if len(result.Turns[0].TokenUsageEvents) != 1 || result.Turns[0].TokenUsageEvents[0].Model != want {
+		t.Fatalf("token usage events = %#v, want model %#v", result.Turns[0].TokenUsageEvents, want)
+	}
+}
+
 func TestLoadIsDeterministicRegardlessOfInsertionOrder(t *testing.T) {
 	firstRoot := t.TempDir()
 	secondRoot := t.TempDir()

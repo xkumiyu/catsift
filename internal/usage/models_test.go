@@ -119,6 +119,18 @@ func TestNewModelRefNormalizesMissingIdentity(t *testing.T) {
 	}
 }
 
+func TestModelFromMapSupportsOpenCodeIdentifiers(t *testing.T) {
+	got, ok := ModelFromMap(map[string]any{
+		"model": map[string]any{
+			"providerID": "provider-a",
+			"modelID":    "model-a",
+		},
+	}, "opencode")
+	if !ok || got != (ModelRef{Provider: "provider-a", Name: "model-a"}) {
+		t.Fatalf("OpenCode model = %#v, found=%v", got, ok)
+	}
+}
+
 func TestSessionKeySeparatesSourcesWithTheSameProviderID(t *testing.T) {
 	codex := NewCodexSourceRef("codex.jsonl", 1, "")
 	codex.ProviderSessionID = "shared"

@@ -20,11 +20,13 @@ type normalizer struct {
 }
 
 type sessionState struct {
-	rawID   string
-	meta    SessionMetadata
-	current *turnState
-	turns   []*turnState
-	ordinal int
+	rawID    string
+	meta     SessionMetadata
+	model    usage.ModelRef
+	hasModel bool
+	current  *turnState
+	turns    []*turnState
+	ordinal  int
 }
 
 type turnState struct {
@@ -95,6 +97,10 @@ func (n *normalizer) consumeSession(row SessionRow) {
 	session.meta.CreatedAt = row.CreatedAt
 	session.meta.UpdatedAt = row.UpdatedAt
 	session.meta.Source = n.source(row.ID, row.Version)
+	if model, ok := openCodeModel(row.Model); ok {
+		session.model = model
+		session.hasModel = true
+	}
 }
 
 func (n *normalizer) startMessage(row MessageRow) {
@@ -183,20 +189,25 @@ func (n *normalizer) finishMessage() {
 		n.finishUserMessage(session, message)
 	case "assistant":
 		turn := n.ensureTurn(session, "", message.row.CreatedAt)
-		if message.hasModel {
-			turn.turn.ObserveModelAt(message.model, message.row.CreatedAt, turn.turn.Source)
+		model, hasModel := modelForMessage(session, message)
+		if hasModel {
+			turn.turn.ObserveModelAt(model, message.row.CreatedAt, turn.turn.Source)
 		}
 		if tokenUsage, ok := tokenUsageFromMessage(message.raw); ok {
-			if message.hasModel {
-				turn.turn.AddTokenUsageForModelAt(message.model, message.row.CreatedAt, tokenUsage)
+			if hasModel {
+				turn.turn.AddTokenUsageForModelAt(model, message.row.CreatedAt, tokenUsage)
 			} else {
 				turn.turn.AddTokenUsageAt(message.row.CreatedAt, tokenUsage)
 			}
 			turn.touch(message.row.CreatedAt)
 		} else {
 			for _, token := range message.tokens {
-				if token.hasModel {
-					turn.turn.AddTokenUsageForModelAt(token.model, token.timestamp, token.usage)
+				tokenModel, tokenHasModel := token.model, token.hasModel
+				if !tokenHasModel {
+					tokenModel, tokenHasModel = model, hasModel
+				}
+				if tokenHasModel {
+					turn.turn.AddTokenUsageForModelAt(tokenModel, token.timestamp, token.usage)
 				} else {
 					turn.turn.AddTokenUsageAt(token.timestamp, token.usage)
 				}
@@ -221,8 +232,8 @@ func (n *normalizer) finishUserMessage(session *sessionState, message *messageSt
 		n.finishTurn(session)
 	}
 	turn := n.ensureTurn(session, message.row.ID, message.row.CreatedAt)
-	if message.hasModel {
-		turn.turn.ObserveModelAt(message.model, message.row.CreatedAt, turn.turn.Source)
+	if model, ok := modelForMessage(session, message); ok {
+		turn.turn.ObserveModelAt(model, message.row.CreatedAt, turn.turn.Source)
 	}
 	if !injectedOnly {
 		turn.turn.UserPrompts++
@@ -231,6 +242,21 @@ func (n *normalizer) finishUserMessage(session *sessionState, message *messageSt
 	turn.userTexts = append(turn.userTexts, message.texts...)
 	turn.touch(message.row.CreatedAt)
 	n.applyTools(turn, message.tools)
+}
+
+func modelForMessage(session *sessionState, message *messageState) (usage.ModelRef, bool) {
+	if message.hasModel {
+		return message.model, true
+	}
+	return session.model, session.hasModel
+}
+
+func openCodeModel(data []byte) (usage.ModelRef, bool) {
+	raw, err := decodeObject(data)
+	if err != nil {
+		return usage.ModelRef{}, false
+	}
+	return usage.ModelFromMap(map[string]any{"model": raw}, "opencode")
 }
 
 func ignoredText(raw map[string]any) bool {

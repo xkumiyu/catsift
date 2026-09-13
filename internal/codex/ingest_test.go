@@ -439,6 +439,99 @@ func TestLoadUsesThreadSettingsModelForTokenCountWithoutTurnContext(t *testing.T
 	}
 }
 
+func TestLoadUsesSessionModelProviderForModelOnlyTurnContext(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, "sessions", "one.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	lines := []string{
+		`{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"s","model_provider":"openai"}}`,
+		`{"timestamp":"2026-01-01T00:00:01Z","type":"task_started","payload":{"turn_id":"t"}}`,
+		`{"timestamp":"2026-01-01T00:00:02Z","type":"turn_context","payload":{"turn_id":"t","model":"gpt-example"}}`,
+		`{"timestamp":"2026-01-01T00:00:03Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":10,"output_tokens":2,"total_tokens":12}}}}`,
+		`{"timestamp":"2026-01-01T00:00:04Z","type":"task_complete","payload":{"turn_id":"t"}}`,
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := Load(home, IngestOptions{Now: time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := usage.NewModelRef("openai", "gpt-example")
+	if len(result.Turns) != 1 {
+		t.Fatalf("turns = %d, want 1", len(result.Turns))
+	}
+	if len(result.Turns[0].ModelObservations) == 0 {
+		t.Fatal("model observations are empty")
+	}
+	for _, observation := range result.Turns[0].ModelObservations {
+		if observation.Model != want {
+			t.Fatalf("model observation = %#v, want model %#v", observation.Model, want)
+		}
+	}
+	if len(result.Turns[0].TokenUsageEvents) != 1 {
+		t.Fatalf("token usage events = %#v, want 1", result.Turns[0].TokenUsageEvents)
+	}
+	if result.Turns[0].TokenUsageEvents[0].Model != want {
+		t.Fatalf("token usage model = %#v, want model %#v", result.Turns[0].TokenUsageEvents[0].Model, want)
+	}
+}
+
+func TestLoadKeepsForkRecordsInTheirOwnSessionWithCache(t *testing.T) {
+	home := t.TempDir()
+	sessionsDir := filepath.Join(home, "sessions")
+	if err := os.MkdirAll(sessionsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	parentPath := filepath.Join(sessionsDir, "01-parent.jsonl")
+	childPath := filepath.Join(sessionsDir, "02-child.jsonl")
+	if err := os.WriteFile(parentPath, []byte(`{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"parent","model_provider":"openai"}}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	childLines := []string{
+		`{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"child","session_id":"parent","model_provider":"openai"}}`,
+		`{"timestamp":"2026-01-01T00:00:01Z","type":"token_usage_record","payload":{"session_id":"parent","turn_id":"child-t1","response_id":"r1","usage":{"input_tokens":10,"output_tokens":2,"total_tokens":12}}}`,
+		`{"timestamp":"2026-01-01T00:00:02Z","type":"task_complete","payload":{"turn_id":"child-t1"}}`,
+		`{"timestamp":"2026-01-01T00:00:03Z","type":"turn_context","payload":{"turn_id":"child-t2","model":"gpt-example"}}`,
+		`{"timestamp":"2026-01-01T00:00:04Z","type":"task_complete","payload":{"turn_id":"child-t2"}}`,
+	}
+	if err := os.WriteFile(childPath, []byte(strings.Join(childLines, "\n")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := Load(home, IngestOptions{
+		Now:      time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC),
+		CacheDir: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Turns) != 2 {
+		t.Fatalf("turns = %#v, want two child turns", result.Turns)
+	}
+	want := usage.NewModelRef("openai", "gpt-example")
+	foundModel := false
+	for _, turn := range result.Turns {
+		if turn.SessionID != "child" {
+			t.Fatalf("turn session = %q, want child", turn.SessionID)
+		}
+		for _, observation := range turn.ModelObservations {
+			if observation.Model == usage.NewModelRef("codex", "gpt-example") {
+				t.Fatalf("fork model retained codex provider: %#v", observation.Model)
+			}
+			if observation.Model == want {
+				foundModel = true
+			}
+		}
+	}
+	if !foundModel {
+		t.Fatalf("child model observation missing: %#v", result.Turns)
+	}
+}
+
 func TestLoadDoesNotUseHistoryPathAsMissingSessionID(t *testing.T) {
 	home := t.TempDir()
 	path := filepath.Join(home, "sessions", "one.jsonl")

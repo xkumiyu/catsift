@@ -35,12 +35,14 @@ type spinnerClock struct {
 }
 
 type spinner struct {
-	out      io.Writer
-	enabled  bool
-	delay    time.Duration
-	interval time.Duration
-	clock    spinnerClock
-	colored  bool
+	out       io.Writer
+	enabled   bool
+	delay     time.Duration
+	interval  time.Duration
+	clock     spinnerClock
+	colored   bool
+	mutex     sync.Mutex
+	lineWidth int
 }
 
 func newSpinner(out io.Writer, enabled, colored bool) *spinner {
@@ -100,9 +102,10 @@ func (s *spinner) run(label string, done <-chan struct{}, stopped chan<- struct{
 	ticker := s.clock.ticker(s.interval)
 	defer ticker.Stop()
 
-	lineWidth := 0
 	frame := 0
 	draw := func(now time.Time) {
+		s.mutex.Lock()
+		defer s.mutex.Unlock()
 		frameText := spinnerFrames[frame%len(spinnerFrames)]
 		elapsed := now.Sub(startedAt)
 		visibleLine := spinnerLine(frameText, label, elapsed)
@@ -111,11 +114,11 @@ func (s *spinner) run(label string, done <-chan struct{}, stopped chan<- struct{
 			line = spinnerLine(colorSpinnerFrame(frameText), label, elapsed)
 		}
 		prefix := "\r"
-		if lineWidth > 0 {
-			prefix = fmt.Sprintf("\r%s\r", strings.Repeat(" ", lineWidth))
+		if s.lineWidth > 0 {
+			prefix = fmt.Sprintf("\r%s\r", strings.Repeat(" ", s.lineWidth))
 		}
 		_, _ = io.WriteString(s.out, prefix+line)
-		lineWidth = len([]rune(visibleLine))
+		s.lineWidth = len([]rune(visibleLine))
 		frame++
 	}
 
@@ -124,23 +127,44 @@ func (s *spinner) run(label string, done <-chan struct{}, stopped chan<- struct{
 		select {
 		case now, ok := <-ticker.C:
 			if !ok {
-				s.clear(lineWidth)
+				s.clearCurrent()
 				return
 			}
 			draw(now)
 		case <-done:
-			s.clear(lineWidth)
+			s.clearCurrent()
 			return
 		}
 	}
 }
 
-func (s *spinner) clear(lineWidth int) {
-	if lineWidth == 0 {
-		_, _ = io.WriteString(s.out, "\r")
+func (s *spinner) clearCurrent() {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	if s.lineWidth == 0 {
 		return
 	}
-	_, _ = fmt.Fprintf(s.out, "\r%s\r", strings.Repeat(" ", lineWidth))
+	_, _ = fmt.Fprintf(s.out, "\r%s\r", strings.Repeat(" ", s.lineWidth))
+	s.lineWidth = 0
+}
+
+func (s *spinner) writeDiagnostic(write func()) {
+	if !s.enabled {
+		write()
+		return
+	}
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	s.clearCurrentLocked()
+	write()
+}
+
+func (s *spinner) clearCurrentLocked() {
+	if s.lineWidth == 0 {
+		return
+	}
+	_, _ = fmt.Fprintf(s.out, "\r%s\r", strings.Repeat(" ", s.lineWidth))
+	s.lineWidth = 0
 }
 
 func spinnerLine(frame, label string, elapsed time.Duration) string {
@@ -156,6 +180,9 @@ func colorSpinnerFrame(frame string) string {
 }
 
 func formatSpinnerElapsed(elapsed time.Duration) string {
+	if elapsed < time.Second {
+		return "<1s"
+	}
 	seconds := int(elapsed / time.Second)
 	if seconds < 60 {
 		return fmt.Sprintf("%ds", seconds)

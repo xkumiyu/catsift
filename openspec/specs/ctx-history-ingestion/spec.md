@@ -27,7 +27,7 @@ ctxが保持する複数Agentの履歴を、内部DB schemaに依存せず、cat
 
 ### Requirement: ctxに含まれる複数Agentを履歴scopeへ含める
 
-ctx sourceは、選択されたctx data rootの現在の履歴scopeに含まれる全Agentのイベントを入力へ含めなければならない（SHALL）。各イベントには取得できる範囲でcanonicalなAgentまたはprovider identity、provider session identity、ctx session identity、ctx event identity、およびtimestampを関連付けなければならない（SHALL）。異なるAgentの同名sessionを同一sessionとして扱ってはならない（MUST NOT）。
+ctx sourceは、ctxが解決したdata rootの現在の履歴scopeに含まれる全Agentのイベントを入力へ含めなければならない（SHALL）。各イベントには取得できる範囲でcanonicalなAgentまたはprovider identity、provider session identity、ctx session identity、ctx event identity、およびtimestampを関連付けなければならない（SHALL）。異なるAgentの同名sessionを同一sessionとして扱ってはならない（MUST NOT）。
 
 #### Scenario: CodexとOpenCodeの履歴がctxに存在する
 
@@ -62,9 +62,9 @@ ctx sourceは、選択されたctx data rootの現在の履歴scopeに含まれ�
 - **WHEN** ctx event列挙に未知のevent typeが含まれる
 - **THEN** システムはそのeventをwarning対象としてskipし、既知のeventからreportを生成する
 
-#### Scenario: ctx data rootを読み取れない
+#### Scenario: ctxのdata rootを読み取れない
 
-- **WHEN** userが指定したctx data rootが存在しない、読み取れない、またはctxが履歴を列挙できない
+- **WHEN** ctxのdata rootが存在しない、読み取れない、またはctxが履歴を列挙できない
 - **THEN** システムは対象pathまたはsourceを含むerrorをstderrへ出力し、非0の終了codeを返す
 
 ### Requirement: ctxのcomplete generation cacheを再利用する
@@ -77,7 +77,7 @@ ctx sourceは、公開されたイベント列挙が完了しimmutable generatio
 
 #### Scenario: 同じgenerationを再利用する
 
-- **WHEN** userが同じctx data rootとimmutable generationに対して統計commandを再実行する
+- **WHEN** userが同じctxのdata rootとimmutable generationに対して統計commandを再実行する
 - **THEN** システムはgeneration cacheを再利用し、全pageをfreshに列挙した場合と同じAgent一覧、件数、row順序、およびJSON値を出力する
 
 #### Scenario: generationが更新される

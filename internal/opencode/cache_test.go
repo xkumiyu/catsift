@@ -131,6 +131,70 @@ func TestLoadCachesOpenCodeSnapshotAndFiltersCachedObservations(t *testing.T) {
 	}
 }
 
+func TestOpenCodeDiagnosticsIncludeSourceAndCacheMetadata(t *testing.T) {
+	root := t.TempDir()
+	writeNormalizerFixture(t, root)
+	cacheDir := t.TempDir()
+	var diagnostics []string
+	if _, err := Load(root, IngestOptions{
+		CacheDir:   cacheDir,
+		Diagnostic: func(message string) { diagnostics = append(diagnostics, message) },
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"opencode source: root=",
+		"database=",
+		"opencode cache: lookup path=",
+		"parser=" + ParserVersion,
+		"revision=",
+		"opencode cache stored complete snapshot path=",
+	} {
+		if !containsDiagnostic(diagnostics, want) {
+			t.Errorf("diagnostics missing %q: %v", want, diagnostics)
+		}
+	}
+
+	diagnostics = nil
+	if _, err := Load(root, IngestOptions{
+		CacheDir:   cacheDir,
+		Diagnostic: func(message string) { diagnostics = append(diagnostics, message) },
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !containsDiagnostic(diagnostics, "opencode cache: hit path=") {
+		t.Fatalf("cache hit diagnostic missing: %v", diagnostics)
+	}
+}
+
+func TestOpenCodeDiagnosticsReportRevisionChangeDuringRead(t *testing.T) {
+	root := t.TempDir()
+	writeNormalizerFixture(t, root)
+	database := filepath.Join(root, "opencode.db")
+	info, err := os.Stat(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changedAt := info.ModTime().Add(time.Second)
+	var diagnostics []string
+	if _, err := Load(root, IngestOptions{
+		CacheDir: t.TempDir(),
+		Diagnostic: func(message string) {
+			diagnostics = append(diagnostics, message)
+			if strings.HasPrefix(message, "opencode source: reading database ") {
+				if err := os.Chtimes(database, changedAt, changedAt); err != nil {
+					t.Fatalf("change source revision: %v", err)
+				}
+			}
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !containsDiagnostic(diagnostics, "opencode cache skipped; source revision changed: before=") {
+		t.Fatalf("revision change diagnostic missing: %v", diagnostics)
+	}
+}
+
 func TestLoadInvalidatesOpenCodeCacheForDatabaseAndWALChanges(t *testing.T) {
 	root := t.TempDir()
 	writeNormalizerFixture(t, root)

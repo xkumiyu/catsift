@@ -19,11 +19,6 @@ Codexのsession・user prompt・Tool・Skill利用を、system logではなく�
 - **WHEN** userが `catsift stats --source ctx` を実行し、ctxの選択scopeにCodexとOpenCodeの履歴がある
 - **THEN** システムは `Agents: Codex, OpenCode` を表示し、両AgentのSessions、Turns、User Prompts、Tool Calls、Skill Uses (turn)、およびSkill Uses (session)を合算して出力する
 
-#### Scenario: sourceと入力pathをcompactに表示する
-
-- **WHEN** userが `catsift stats --source ctx --ctx-data-root /path/to/ctx-data` を実行する
-- **THEN** システムは `Source: ctx (/path/to/ctx-data)` を1行で表示し、別の `History` または `Data root` context行を追加しない
-
 #### Scenario: 対象履歴が空である
 
 - **WHEN** 読取対象に有効な利用Eventが存在しない
@@ -86,27 +81,12 @@ Codexのsession・user prompt・Tool・Skill利用を、system logではなく�
 - **THEN** システムはその利用をTotalへ1回だけ加算する
 
 ### Requirement: 期間とhistory sourceを各統計commandで指定できる
-`stats`、`tools`、`skills`は共通して`--source codex|ctx|opencode`、`--days`、sourceに応じた`--codex-home`、`--ctx-data-root`、または`--opencode-home`、および`--color auto|always|never`を受け付けなければならない（SHALL）。`--source`の既定値は`codex`でなければならず（SHALL）、`--codex-home`はCodex source、`--ctx-data-root`はctx source、`--opencode-home`はOpenCode sourceでのみ有効でなければならない（MUST）。同一実行でCodex、ctx、およびOpenCodeを複数同時に入力へ含めてはならない（MUST NOT）。filterとsource解決はすべての出力形式で同じ結果集合へ適用しなければならない（SHALL）。
+`stats`、`tools`、`skills`は共通して`--source codex|ctx|opencode`、`--days`、および`--color auto|always|never`を受け付けなければならない（SHALL）。`--source`の既定値は`codex`でなければならず（SHALL）。同一実行でCodex、ctx、およびOpenCodeを複数同時に入力へ含めてはならない（MUST NOT）。filterとsource解決はすべての出力形式で同じ結果集合へ適用しなければならない（SHALL）。
 
 #### Scenario: source未指定時はCodexを使用する
 
 - **WHEN** userが `catsift stats` を実行する
 - **THEN** システムは既存のCodex home解決規則に従ってCodexだけを入力sourceにする
-
-#### Scenario: ctx sourceとdata rootを指定する
-
-- **WHEN** userが `catsift stats --source ctx --ctx-data-root /path/to/ctx` を実行する
-- **THEN** システムは指定されたctx data rootだけを入力scopeとして使用する
-
-#### Scenario: OpenCode sourceとhomeを指定する
-
-- **WHEN** userが`catsift stats --source opencode --opencode-home /path/to/opencode`を実行する
-- **THEN** システムは指定されたOpenCode data rootだけを入力scopeとして使用する
-
-#### Scenario: source固有optionを誤って組み合わせる
-
-- **WHEN** userが`--source ctx --codex-home /path`、`--source codex --ctx-data-root /path`、または`--source opencode --ctx-data-root /path`を指定する
-- **THEN** システムはoption errorをstderrへ出力し、reportを生成せず非0で終了する
 
 #### Scenario: Codexとctxを同時に指定する
 
@@ -117,12 +97,8 @@ Codexのsession・user prompt・Tool・Skill利用を、system logではなく�
 - **WHEN** userが `catsift skills --days 30` を実行する
 - **THEN** システムはcutoff以後の観測だけからSkill統計を生成する
 
-#### Scenario: 別のCodex homeを集計する
-- **WHEN** userが `catsift stats --codex-home /tmp/codex-home` を実行する
-- **THEN** システムは指定先だけをsourceとしてoverviewを生成する
-
 ### Requirement: human-readable report・JSONを提供する
-各統計commandは既定で、report内容を示すheading、入力source、対象Agent一覧、適用中のfilterをlabel付きcontext行、明確なsectionまたはcolumn heading、整列した値、および必要なfooterを持つhuman-readable static reportを出力しなければならない（SHALL）。human-readable reportの`Source`はsourceのdisplay nameを表示し、Codexでは有効なCodex homeを、ctxでは明示された`--ctx-data-root`を、OpenCodeでは有効なOpenCode data rootを括弧内へ表示しなければならない（SHALL）。source pathは`Source`行へ含め、別の`History`または`Data root` context行を追加してはならない（MUST NOT）。複数Agentの表示はcanonical IDの決定的な順序に対応するdisplay nameをcomma区切りで示し、context行を中点で連結してはならない（MUST NOT）。countは桁区切りして右揃えにし、tableのLast Usedはtimezoneを含む簡潔なlocal日時で表示しなければならない（SHALL）。`--json`でmachine-readable出力へ切り替えられなければならず（SHALL）、JSONはhuman-readable reportと同じfilter・集計結果を表し、`source`とcanonical Agent IDの`agents` arrayを含まなければならない（SHALL）。既存の`agent` string fieldは後方互換のため保持し、単一Agentでは従来の値、複数Agentではcanonical IDを決定的順序でcomma区切りした値を格納しなければならない（SHALL）。JSONのfield順、timestamp形式、およびwarningをstdoutへ混入させない規則を維持しなければならない（SHALL）。
+各統計commandは既定で、report内容を示すheading、入力source、対象Agent一覧、適用中のfilterをlabel付きcontext行、明確なsectionまたはcolumn heading、整列した値、および必要なfooterを持つhuman-readable static reportを出力しなければならない（SHALL）。human-readable reportの`Source`はsourceのdisplay nameと、取得できる場合は有効なsource pathを括弧内へ表示しなければならない（SHALL）。source pathを表示する場合は`Source`行へ含め、別の`History`または`Data root` context行を追加してはならない（MUST NOT）。複数Agentの表示はcanonical IDの決定的な順序に対応するdisplay nameをcomma区切りで示し、context行を中点で連結してはならない（MUST NOT）。countは桁区切りして右揃えにし、tableのLast Usedはtimezoneを含む簡潔なlocal日時で表示しなければならない（SHALL）。`--json`でmachine-readable出力へ切り替えられなければならず（SHALL）、JSONはhuman-readable reportと同じfilter・集計結果を表し、`source`とcanonical Agent IDの`agents` arrayを含まなければならない（SHALL）。既存の`agent` string fieldは後方互換のため保持し、単一Agentでは従来の値、複数Agentではcanonical IDを決定的順序でcomma区切りした値を格納しなければならない（SHALL）。JSONのfield順、timestamp形式、およびwarningをstdoutへ混入させない規則を維持しなければならない（SHALL）。
 
 `Period`は`last`、`from`、`through`などのoption入力をそのまま表示せず、実際に集計へ含まれたレコードの最初の日から最後の日までを、常に`YYYY-MM-DD to YYYY-MM-DD`形式で表示しなければならない（SHALL）。対象レコードがない場合は`no data`と表示しなければならない（SHALL）。
 
@@ -143,12 +119,12 @@ Token usageをhuman-readable reportへ表示する場合、`Total Tokens`を親�
 #### Scenario: 複数Agentのhuman-readable reportを表示する
 
 - **WHEN** ctx sourceのscopeにCodexとOpenCodeが含まれる
-- **THEN** システムは `Source: ctx` と `Agents: Codex, OpenCode` を別々のcontext行へ出力する。`--ctx-data-root`が指定された場合はSource行を `Source: ctx (/path/to/ctx-data)` とする
+- **THEN** システムは `Source: ctx` と `Agents: Codex, OpenCode` を別々のcontext行へ出力する
 
 #### Scenario: OpenCode sourceのhuman-readable reportを表示する
 
-- **WHEN** userが`catsift stats --source opencode --opencode-home /path/to/opencode`を実行する
-- **THEN** システムは`Source: OpenCode (/path/to/opencode)`、`Agents: OpenCode`、対象期間、およびOpenCodeから集計した値を表示する
+- **WHEN** userが`catsift stats --source opencode`を実行する
+- **THEN** システムは`Source: OpenCode`、有効なdata root、`Agents: OpenCode`、対象期間、およびOpenCodeから集計した値を表示する
 
 #### Scenario: JSONを出力する
 
@@ -266,7 +242,7 @@ human-readable reportは取得可能なterminal幅へ収まるようにlayoutを
 
 ### Requirement: unused viewが既存の履歴filterとoutput optionを継承する
 
-`skills --unused`は`--days`、`--codex-home`、`--ctx-data-root`、`--opencode-home`、`--strict`、`--group-by`、`--color`、`--json`、`--verbose`、および`--strict-input`を既存の`skills` commandと同じvalidation、履歴source、warning、終了codeの規則で受け付けなければならない（SHALL）。`--codex-home`、`--ctx-data-root`、および`--opencode-home`は履歴sourceだけを変更し、Skill inventoryの既定scopeを暗黙に変更してはならない（MUST NOT）。
+`skills --unused`は`--days`、`--source`、`--strict`、`--group-by`、`--color`、`--json`、`--verbose`、および`--strict-input`を既存の`skills` commandと同じvalidation、履歴source、warning、終了codeの規則で受け付けなければならない（SHALL）。source選択は履歴だけを変更し、Skill inventoryの既定scopeを暗黙に変更してはならない（MUST NOT）。
 
 #### Scenario: days filterをunused判定へ適用する
 
@@ -285,29 +261,24 @@ human-readable reportは取得可能なterminal幅へ収まるようにlayoutを
 
 #### Scenario: OpenCode sourceでunused viewを使う
 
-- **WHEN** userが`catsift skills --source opencode --opencode-home /path/to/opencode --unused`を実行する
-- **THEN** システムは指定されたOpenCode履歴だけを使用済み判定へ使い、inventoryの既定scopeは変更しない
+- **WHEN** userが`catsift skills --source opencode --unused`を実行する
+- **THEN** システムは有効なOpenCode履歴だけを使用済み判定へ使い、inventoryの既定scopeは変更しない
 
 ### Requirement: Usage Explorerを既定入口として提供する
 
-interactive terminalでcommandを省略した`catsift`は、既存のhistory source選択、期間、source固有root、cache、およびwarningの規則を継承してTUI Usage Explorerを起動しなければならない（SHALL）。Usage Explorerは履歴をread-onlyで扱い、既存の`stats`、`tools`、`skills`を置き換えてはならない（MUST NOT）。
+interactive terminalでcommandを省略した`catsift`は、既存のhistory source選択、cache、およびwarningの規則を継承してTUI Usage Explorerを起動しなければならない（SHALL）。Usage Explorerの期間はTUI上で変更でき、static report用の`--days`、`--from`、`--to` optionを受け付けてはならない（MUST NOT）。Usage Explorerは履歴をread-onlyで扱い、既存の`stats`、`tools`、`skills`を置き換えてはならない（MUST NOT）。
 
-CLIとTUIは同じnormalized data、scope filter、warning、および集計意味論を使用しなければならない（SHALL）。ただしCLIはstaticなsummaryとmachine-readable output、TUIは一覧からdetailへ辿るinteractive viewとして、それぞれの用途に適した表示量を提供してよい（MAY）。
+CLIとTUIは同じnormalized data、scope filter、warning、および集計意味論を使用しなければならない（SHALL）。TUIの`Period`は実際に集計されたdata範囲を表示し、`Daily activity`も同じ日付範囲を表示しなければならない（SHALL）。指定されたperiodと一致しない場合は`Input notes`で差分を説明し、period確定直後にはtab直下に`Notice:` messageを表示幅に合わせて折り返し表示してtab移動またはclearまで保持しなければならない（SHALL）。ただしCLIはstaticなsummaryとmachine-readable output、TUIは一覧からdetailへ辿るinteractive viewとして、それぞれの用途に適した表示量を提供してよい（MAY）。
 
 #### Scenario: commandなしでUsage Explorerを起動する
 
-- **WHEN** userがinteractive terminalで `catsift --source codex --days 30` を実行する
-- **THEN** システムは既存のCodex sourceと30日間のfilterを使ってUsage Explorerを起動し、Overviewを表示する
+- **WHEN** userがinteractive terminalで `catsift --source codex` を実行する
+- **THEN** システムは既存のCodex sourceを使ってUsage Explorerを起動し、Overviewを表示する
 
-#### Scenario: Codex履歴でUsage Explorerを起動する
+#### Scenario: TUIで期間をfilterする
 
-- **WHEN** userが `catsift --source codex --days 30` を実行する
-- **THEN** システムは既存のCodex sourceと30日間のfilterを使ってTUIを起動し、Overviewを表示する
-
-#### Scenario: ctx rootを指定してUsage Explorerを起動する
-
-- **WHEN** userが `catsift --source ctx --ctx-data-root /path/to/ctx` を実行する
-- **THEN** システムは指定されたctx data rootだけを読み込み、ctxのsource/Agent contextをTUIへ表示する
+- **WHEN** userがUsage Explorerで`d`を押し、`30`を入力して確定する
+- **THEN** システムは直近30日間のperiod filterをTUIの全viewへ適用する
 
 #### Scenario: 既存static commandを実行する
 
@@ -342,7 +313,7 @@ Usage Explorerはinteractive terminal向けの出力だけを提供し、`--json
 - **WHEN** 一部履歴のparseをskipして残りから有効な結果を生成できる
 - **THEN** システムはTUIを起動し、warning countまたはdiagnosticsを確認できる状態にする
 
-#### Scenario: sourceを解決できない
+#### Scenario: sourceのdata rootを解決できない
 
-- **WHEN** 指定されたsource rootが存在しない、または読み込み不能である
+- **WHEN** 選択したsourceのdata rootが存在しない、または読み込み不能である
 - **THEN** システムはTUIを起動せず、errorをstderrへ出力して非0で終了する

@@ -9,7 +9,7 @@ source、Model、Skill、Sessionごとの利用状況を表示するツールで
 > CatSiftは次の履歴を読み取ります。
 > - Codexのローカル履歴
 > - OpenCodeのローカル履歴
-> - [ctx](https://github.com/ctxrs/ctx)のevent stream
+> - [ctx](https://github.com/ctxrs/ctx)のevent stream (experimental)
 
 ## Quick start
 
@@ -18,6 +18,8 @@ source、Model、Skill、Sessionごとの利用状況を表示するツールで
 ```sh
 npx catsift
 ```
+
+![CatSiftの画面例](docs/images/catsift-overview.svg)
 
 ## Installation
 
@@ -52,25 +54,14 @@ catsift
 | Skills | [Skill usage](#skill-usage-fields)、evidence state、関連Session |
 | Sessions | Session metadataと時系列のTurn詳細 |
 
-必要に応じてsourceと期間を指定します。
-
-```sh
-catsift --source codex --days 30
-catsift --source ctx --ctx-data-root /path/to/ctx --days 30
-catsift --source opencode --opencode-home /path/to/opencode --days 30
-```
-
-1回の実行で読み取るsourceは1つです。
+期間やキーワードで利用状況の絞り込みや、リストをソートできます。詳細は、TUI内で`?`を押すと表示されます。
 
 ## Common options
 
 これらのoptionは、[interactive mode](#usage)と[CLI mode](#cli-usage)の両方で利用できます。
 
-- `--source`で履歴source（`codex`、`ctx`、`opencode`）を選択します。
-- `--days N`で対象を直近N日間に制限します。
-- `--from YYYY-MM-DD`と`--to YYYY-MM-DD`でUTCの暦日範囲（指定日を含む）を指定します。どちらか一方だけでも指定できます。`--days`とは併用できません。
+- `--source`で履歴source（`codex`、`opencode`、`ctx`）を1つ以上選択します。カンマ区切りまたはoptionの複数指定に対応します。デフォルトは`codex`と`opencode`です。
 - `--strict-input`で入力recordがskipされた場合にnon-zeroで終了します。
-- `--verbose`で入力とcacheの診断情報を表示します。
 
 ## Skill usage fields
 
@@ -97,7 +88,9 @@ activation modeとevidence stateは独立した軸です。1つの利用に複�
 | `catsift tools` | canonical Tool名ごとの利用状況を表示 |
 | `catsift skills` | Skillの利用状況とevidence stateを表示 |
 
-CLI専用の`--json`でmachine-readableな出力を生成します。
+`--json`でmachine-readableな出力を生成します。
+
+期間で利用状況をfilterできます。詳細は各commandの`--help`を参照してください。
 
 ### Usage overview
 
@@ -107,19 +100,19 @@ catsift stats
 
 ```text
 USAGE OVERVIEW
-Source: Codex (~/.codex)
-Agents: Codex
+Source: Codex (~/.codex), OpenCode (~/.local/share/opencode)
+Agents: Codex, OpenCode
 Period: 2026-01-01 to 2026-01-31
 
 Activity
   Sessions                    123
   Turns                       456
   User Prompts                789
-  Tool Calls                1,234
+  Tool Calls                   42
 
 Skill Usage
-  By turn                      42
-  By session                   24
+  By turn                       9
+  By session                    6
 
 Token Usage
   Total Tokens                3.16B
@@ -141,8 +134,8 @@ catsift skills --view mode
 
 ```text
 SKILL USAGE
-Source: Codex (~/.codex)
-Agents: Codex
+Source: Codex (~/.codex), OpenCode (~/.local/share/opencode)
+Agents: Codex, OpenCode
 Period: 2026-01-01 to 2026-01-31
 Group by: turn
 Strict: false
@@ -164,14 +157,14 @@ catsift tools
 
 ```text
 TOOL USAGE
-Source: Codex (~/.codex)
-Agents: Codex
+Source: Codex (~/.codex), OpenCode (~/.local/share/opencode)
+Agents: Codex, OpenCode
 Period: 2026-01-01 to 2026-01-31
 Layer: effective
 
 Tool       Calls  Failures  Last Used
 ────────────────────────────────────────────────────
-shell          42         0  2026-09-01 12:34 JST
+shell          42         0  2026-01-31 12:34 JST
 
 1 tool, 42 calls total
 ```
@@ -204,7 +197,7 @@ catsift skills --unused
 inventoryのidentityはcanonical skill nameと絶対physical pathの組み合わせです。
 そのため、異なるpathに同名Skillがある場合、その名前が未使用なら別々のrowとして表示されます。
 使用済み判定はcanonical name単位のままです。
-選択したctx agentのいずれかがその名前を使用していれば、その名前のinventory rowはすべて使用済みとみなします。
+選択したhistory sourceのいずれかのAgentがその名前を使用していれば、その名前のinventory rowはすべて使用済みとみなします。
 
 ## Cache
 
@@ -212,7 +205,8 @@ inventoryのidentityはcanonical skill nameと絶対physical pathの組み合わ
 
 ## Data handling
 
-CatSiftはCodexの履歴、ctxの公開されたevent stream、またはOpenCodeのlocal databaseだけを
-読み取り、選択したdataを変更しません。履歴を外部へ送信しません。
+CatSiftは選択したCodexの履歴、ctxの公開されたevent stream、またはOpenCodeのlocal databaseを
+読み取ります。選択した履歴dataを変更せず、履歴を外部へ送信しません。
+`skills --unused`では、インストール済みSkill inventoryも読み取ります。
 TUIとreportには、prompt本文、command本文、Tool arguments、Skill bodies、
 provider payload、その他のraw event detailsを表示・含めません。

@@ -10,6 +10,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/xkumiyu/catsift/internal/query"
 	"github.com/xkumiyu/catsift/internal/usage"
 )
@@ -202,16 +203,19 @@ func TestHeaderCompactsMetadataWhenItFits(t *testing.T) {
 	if len(metadataLines) != 1 {
 		t.Fatalf("header should compact metadata into one line when it fits: %q", metadataLines)
 	}
-	for _, want := range []string{"Source:", "Agents:", "Period:", "Filters:"} {
+	for _, want := range []string{"Source:", "Agents:", "Period:"} {
 		if !strings.Contains(metadataLines[0], want) {
 			t.Fatalf("compact header missing %q: %q", want, metadataLines[0])
 		}
+	}
+	if strings.Contains(metadataLines[0], "Filters:") {
+		t.Fatalf("compact header should not contain Filters: %q", metadataLines[0])
 	}
 }
 
 func TestHeaderKeepsMetadataRowsWhenTheyDoNotFit(t *testing.T) {
 	state := NewState(explorerInput(), query.Filter{}, nil)
-	state.Width = 90
+	state.Width = 60
 
 	var metadataLines []string
 	for _, line := range state.headerLines() {
@@ -221,6 +225,39 @@ func TestHeaderKeepsMetadataRowsWhenTheyDoNotFit(t *testing.T) {
 	}
 	if len(metadataLines) != 2 {
 		t.Fatalf("header should keep metadata on two lines when compact form does not fit: %q", metadataLines)
+	}
+}
+
+func TestSourceFilterTogglesSourcesIndependently(t *testing.T) {
+	input := explorerInput()
+	opencodeSource := usage.NewOpenCodeSourceRef("/private/opencode.db", "")
+	opencodeSession := usage.NewSession("opencode-session", opencodeSource)
+	opencodeTurn := usage.NewTurn("opencode-session", "turn", 1, opencodeSource)
+	opencodeTurn.StartedAt = time.Date(2026, 1, 3, 3, 4, 5, 0, time.UTC)
+	opencodeTurn.EndedAt = opencodeTurn.StartedAt.Add(time.Minute)
+	input.Turns = append(input.Turns, opencodeTurn)
+	input.Sessions = append(input.Sessions, opencodeSession)
+	input.Agents = []string{"codex", "opencode"}
+	input.Source = ""
+	input.Sources = usage.AllSourceKinds()
+
+	state := NewState(input, query.Filter{Sources: usage.AllSourceKinds()}, nil)
+	state.Width = 100
+	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
+	if !strings.Contains(state.View(), "Sources") || !strings.Contains(state.View(), "[x] Codex") {
+		t.Fatalf("source filter view = %s", state.View())
+	}
+	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
+	state.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	if len(state.Filter.Sources) != 2 || state.Filter.Sources[0] != usage.SourceCtx || state.Filter.Sources[1] != usage.SourceOpenCode {
+		t.Fatalf("source visibility = %#v", state.Filter.Sources)
+	}
+	if state.ReadModel.Overview.Turns != 1 || state.ReadModel.Overview.Sources[0] != usage.SourceCtx {
+		t.Fatalf("source-filtered overview = %#v", state.ReadModel.Overview)
+	}
+	if strings.Contains(state.View(), "Codex (~/.codex)") {
+		t.Fatalf("disabled source remains in header: %s", state.View())
 	}
 }
 
@@ -302,7 +339,7 @@ func TestSessionTableReservesRightMarginForRelativeTime(t *testing.T) {
 		EndedAt:     time.Now().UTC().Add(-time.Minute),
 	}
 	cells := sessionCellsForRow(100, row)
-	if got := cells[len(cells)-1].width; got != 10 {
+	if got := cells[len(cells)-1].width; got != 12 {
 		t.Fatalf("session table should use a compact relative-time column: width=%d cells=%#v", got, cells)
 	}
 	line := renderTableRow(100, false, cells)
@@ -326,6 +363,84 @@ func TestSessionTableKeepsRelativeLastUsedValue(t *testing.T) {
 		if !strings.Contains(line, want) {
 			t.Fatalf("session table truncated LAST USED value at width %d (rendered=%d cells=%#v): %q", width, lipgloss.Width(line), cells, line)
 		}
+	}
+}
+
+func TestSessionListRowsMatchSessionDisplayFormat(t *testing.T) {
+	const title = "Implement usage explorer"
+	const id = "01a094e0"
+
+	tests := []struct {
+		name          string
+		titledCells   []tableCell
+		untitledCells []tableCell
+	}{
+		{
+			name:          "sessions",
+			titledCells:   sessionCellsForRow(120, query.SessionSummary{Title: title, ID: "01a094e0-0e59-7493-a4b0-3681af2c63e3"}),
+			untitledCells: sessionCellsForRow(120, query.SessionSummary{ID: "01a094e0-0e59-7493-a4b0-3681af2c63e3"}),
+		},
+		{
+			name: "model detail",
+			titledCells: modelSessionCellsForRow(120, query.ModelSessionUsage{
+				Title: title, ID: "01a094e0-0e59-7493-a4b0-3681af2c63e3", Source: usage.SourceCodex, Agent: "codex",
+			}),
+			untitledCells: modelSessionCellsForRow(120, query.ModelSessionUsage{
+				ID: "01a094e0-0e59-7493-a4b0-3681af2c63e3", Source: usage.SourceCodex, Agent: "codex",
+			}),
+		},
+		{
+			name: "skill detail",
+			titledCells: skillSessionCellsForRow(120, query.SkillSessionUsage{
+				Title: title, SessionID: "01a094e0-0e59-7493-a4b0-3681af2c63e3", Source: usage.SourceCodex, Agent: "codex",
+			}),
+			untitledCells: skillSessionCellsForRow(120, query.SkillSessionUsage{
+				SessionID: "01a094e0-0e59-7493-a4b0-3681af2c63e3", Source: usage.SourceCodex, Agent: "codex",
+			}),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			titledLine := renderTableRow(120, false, tt.titledCells)
+			if !strings.Contains(titledLine, title) || strings.Contains(titledLine, "("+id+")") {
+				t.Fatalf("titled session row = %q, want title without ID", titledLine)
+			}
+			untitledLine := renderTableRow(120, false, tt.untitledCells)
+			if !strings.Contains(untitledLine, mutedStyle.Render("("+id+")")) {
+				t.Fatalf("untitled session row = %q, want muted short ID", untitledLine)
+			}
+		})
+	}
+}
+
+func TestSelectedSessionRowHighlightsEntireLine(t *testing.T) {
+	const width = 80
+	cells := sessionCellsForRow(width, query.SessionSummary{ID: "01a094e0-0e59-7493-a4b0-3681af2c63e3"})
+	unmutedCells := append([]tableCell(nil), cells...)
+	unmutedCells[0].muted = false
+
+	line := renderTableRow(width, true, cells)
+	if got := lipgloss.Width(line); got != width {
+		t.Fatalf("selected session row width = %d, want %d: %q", got, width, line)
+	}
+	if want := renderTableRow(width, true, unmutedCells); line != want {
+		t.Fatalf("selected session row should keep row highlight across ID: got %q, want %q", line, want)
+	}
+}
+
+func TestSessionTableKeepsLastUsedAwayFromRightEdge(t *testing.T) {
+	row := query.SessionSummary{
+		Title:       "feat/add-tui-usage-explorer をレビューする",
+		ProjectPath: "/home/kumi/src/github.com/xkumiyu/catsift.feat-add-tui-usage-explorer",
+		EndedAt:     time.Now().UTC().Add(-3 * time.Hour),
+	}
+	line := renderTableRow(100, false, sessionCellsForRow(100, row))
+	if lipgloss.Width(line) > 98 {
+		t.Fatalf("session table should leave two trailing columns: rendered=%d line=%q", lipgloss.Width(line), line)
+	}
+	if !strings.HasSuffix(strings.TrimRight(line, " "), "3h ago") {
+		t.Fatalf("session table should keep the complete relative-time value: %q", line)
 	}
 }
 
@@ -473,8 +588,15 @@ func TestSearchFiltersSkillRows(t *testing.T) {
 	}
 	state.Width = 120
 	detailView := state.View()
-	if !strings.Contains(detailView, "Skill detail") || !strings.Contains(detailView, "Skill: git") || strings.Contains(detailView, "Skills >") || !strings.Contains(detailView, "Sessions") || !strings.Contains(detailView, "1/1") || strings.Contains(detailView, "Sessions 1  |") || !strings.Contains(detailView, "TURNS") || !strings.Contains(detailView, "LAST USED") || !strings.Contains(detailView, "FIRST USED") || strings.Contains(detailView, "USES") || strings.Contains(detailView, "Uses 1") {
-		t.Fatalf("skill detail should list session rows: %s", detailView)
+	for _, want := range []string{"Skill detail", "Skill: git", "Sessions", "1/1", "TURNS", "LAST USED"} {
+		if !strings.Contains(detailView, want) {
+			t.Fatalf("skill detail missing %q: %s", want, detailView)
+		}
+	}
+	for _, unwanted := range []string{"Skills >", "Sessions 1  |", "FIRST USED", "USES", "Uses 1"} {
+		if strings.Contains(detailView, unwanted) {
+			t.Fatalf("skill detail contains obsolete text %q: %s", unwanted, detailView)
+		}
 	}
 	if !strings.Contains(detailView, "Usage mode:") || !strings.Contains(detailView, "Explicit 1") || !strings.Contains(detailView, "Evidence:") || !strings.Contains(detailView, "Confirmed 1") || strings.Contains(detailView, "=") {
 		t.Fatalf("skill detail should use human-readable counts: %s", detailView)
@@ -515,6 +637,196 @@ func TestSessionFiltersCanSelectAgentAndProject(t *testing.T) {
 		if state.Route != RouteOverview || test.want(state.Filter) == "" {
 			t.Fatalf("session filter %q = route:%q filter:%#v", test.key, state.Route, state.Filter)
 		}
+	}
+}
+
+func TestPeriodInputParsesRelativeAndCalendarRanges(t *testing.T) {
+	now := time.Date(2026, 1, 10, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		input string
+		from  time.Time
+		to    time.Time
+	}{
+		{input: "all"},
+		{input: "7", from: now.Add(-7 * 24 * time.Hour), to: now},
+		{input: "2026-01-02", from: time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC), to: time.Date(2026, 1, 3, 0, 0, 0, 0, time.UTC)},
+		{input: "2026-01-02..2026-01-04", from: time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC), to: time.Date(2026, 1, 5, 0, 0, 0, 0, time.UTC)},
+		{input: "2026-01-02..", from: time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)},
+		{input: "..2026-01-04", to: time.Date(2026, 1, 5, 0, 0, 0, 0, time.UTC)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			from, to, err := parsePeriodInput(tt.input, now)
+			if err != nil {
+				t.Fatalf("parsePeriodInput(%q) error = %v", tt.input, err)
+			}
+			if !from.Equal(tt.from) || !to.Equal(tt.to) {
+				t.Fatalf("parsePeriodInput(%q) = %v, %v; want %v, %v", tt.input, from, to, tt.from, tt.to)
+			}
+		})
+	}
+}
+
+func TestPeriodInputRejectsInvalidRanges(t *testing.T) {
+	now := time.Date(2026, 1, 10, 12, 0, 0, 0, time.UTC)
+	for _, input := range []string{"0", "yesterday", "2026-01-04..2026-01-02", "2026-01-01..2026-01-02..2026-01-03"} {
+		if _, _, err := parsePeriodInput(input, now); err == nil {
+			t.Errorf("parsePeriodInput(%q) unexpectedly succeeded", input)
+		}
+	}
+}
+
+func TestPeriodKeyAppliesAndClearsFilter(t *testing.T) {
+	now := time.Date(2026, 1, 10, 12, 0, 0, 0, time.UTC)
+	state := NewState(explorerInput(), query.Filter{}, nil)
+	state.now = now
+	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	if !state.periodEditing {
+		t.Fatal("d should start period input")
+	}
+	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("7")})
+	state.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if state.periodEditing || !state.Filter.From.Equal(now.Add(-7*24*time.Hour)) || !state.Filter.To.Equal(now) {
+		t.Fatalf("period filter = editing:%v filter:%#v", state.periodEditing, state.Filter)
+	}
+	overview := strings.Join(state.overviewLines(), "\n")
+	if state.ReadModel.Overview.Turns != 0 || strings.Contains(state.View(), "Filters:") || !strings.Contains(overview, "Input notes") || !strings.Contains(overview, "No usage found for the selected period.") {
+		t.Fatalf("period filter was not applied: overview=%#v view=%s", state.ReadModel.Overview, state.View())
+	}
+
+	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	state.periodInput = "all"
+	state.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if !state.Filter.From.IsZero() || !state.Filter.To.IsZero() || state.ReadModel.Overview.Turns != 1 {
+		t.Fatalf("cleared period filter = %#v overview=%#v", state.Filter, state.ReadModel.Overview)
+	}
+}
+
+func TestPeriodInfoReportsRequestedAndActualBoundaries(t *testing.T) {
+	state := NewState(explorerInput(), query.Filter{
+		From: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		To:   time.Date(2026, 1, 11, 0, 0, 0, 0, time.UTC),
+	}, nil)
+	state.now = time.Date(2026, 1, 11, 0, 0, 0, 0, time.UTC)
+	header := strings.Join(state.headerLines(), "\n")
+	overview := strings.Join(state.overviewLines(), "\n")
+	if strings.Contains(header, "info:") {
+		t.Fatalf("period info should not be in header: %s", header)
+	}
+	for _, want := range []string{
+		"Input notes",
+		"2026-01-02 to 2026-01-02",
+		"selected period starts before the first usage record (2026-01-02)",
+		"selected period ends after the last usage record (2026-01-02)",
+	} {
+		if !strings.Contains(header+"\n"+overview, want) {
+			t.Fatalf("period view missing %q: header=%s overview=%s", want, header, overview)
+		}
+	}
+	if strings.Contains(header, "Filters:") || strings.Contains(header, "period=") || strings.Contains(overview, "period=") {
+		t.Fatalf("period view contains obsolete filter summary: header=%s overview=%s", header, overview)
+	}
+}
+
+func TestPeriodInfoIsHiddenWhenActualRangeMatches(t *testing.T) {
+	state := NewState(explorerInput(), query.Filter{
+		From: time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC),
+		To:   time.Date(2026, 1, 3, 0, 0, 0, 0, time.UTC),
+	}, nil)
+	view := strings.Join(append(state.headerLines(), state.overviewLines()...), "\n")
+	for _, note := range []string{"selected period starts before", "selected period ends after", "No usage found for the selected period."} {
+		if strings.Contains(view, note) {
+			t.Fatalf("period view reported a false mismatch: %s", view)
+		}
+	}
+}
+
+func TestPeriodApplyShowsInlineNotice(t *testing.T) {
+	state := NewState(explorerInput(), query.Filter{}, nil)
+	state.Width = 80
+	state.now = time.Date(2026, 1, 10, 12, 0, 0, 0, time.UTC)
+	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	state.periodInput = "2026-01-01..2026-01-11"
+	_, cmd := state.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("period mismatch notice should not use a timer")
+	}
+	headerLines := state.headerLines()
+	header := strings.Join(headerLines, "\n")
+	for _, want := range []string{
+		"Notice: Period partially covered",
+		"requested: 2026-01-01 to 2026-01-11;",
+		"actual:",
+		"2026-01-02 to 2026-01-02)",
+	} {
+		if !strings.Contains(header, want) {
+			t.Fatalf("period notice missing %q: %s", want, header)
+		}
+	}
+	if strings.Contains(header, "clears when") || strings.Contains(header, "press Tab") || strings.Contains(header, "dismiss") {
+		t.Fatalf("period notice should not contain operation instructions: %s", header)
+	}
+	tabsIndex, noticeIndex := -1, -1
+	dividerIndex := -1
+	for index, line := range headerLines {
+		if strings.Contains(line, "Overview") && strings.Contains(line, "Models") {
+			tabsIndex = index
+		}
+		if strings.Contains(line, "Notice:") {
+			noticeIndex = index
+		}
+		if strings.Contains(line, strings.Repeat("-", state.Width)) {
+			dividerIndex = index
+		}
+	}
+	if noticeIndex != tabsIndex+1 {
+		t.Fatalf("period notice should be directly below tabs: tabs=%d notice=%d header=%s", tabsIndex, noticeIndex, header)
+	}
+	if dividerIndex-noticeIndex < 2 {
+		t.Fatalf("period notice should wrap without truncation: %s", header)
+	}
+	for _, line := range headerLines[noticeIndex:dividerIndex] {
+		if strings.HasPrefix(ansi.Strip(line), "  ") {
+			t.Fatalf("period notice continuation should not be indented: %q", line)
+		}
+		if lipgloss.Width(line) > state.Width || strings.Contains(line, "…") {
+			t.Fatalf("period notice line was truncated or exceeded width: %q", line)
+		}
+	}
+	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	if header := strings.Join(state.headerLines(), "\n"); strings.Contains(header, "Notice:") {
+		t.Fatalf("period notice survived tab movement: %s", header)
+	}
+}
+
+func TestPeriodApplyNoDataNoticeStaysVisible(t *testing.T) {
+	state := NewState(explorerInput(), query.Filter{}, nil)
+	state.Width = 120
+	state.now = time.Date(2026, 1, 10, 12, 0, 0, 0, time.UTC)
+	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	state.periodInput = "2027-01-01"
+	_, cmd := state.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("no-data notice should remain visible")
+	}
+	header := strings.Join(state.headerLines(), "\n")
+	if !strings.Contains(header, "Notice: No usage found for the selected period.") {
+		t.Fatalf("no-data period notice missing: %s", header)
+	}
+}
+
+func TestClearTUIFiltersClearsPeriod(t *testing.T) {
+	state := NewState(explorerInput(), query.Filter{
+		From: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		To:   time.Date(2026, 1, 3, 0, 0, 0, 0, time.UTC),
+	}, nil)
+	state.periodNotice = "info: stale period notice"
+	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	if !state.Filter.From.IsZero() || !state.Filter.To.IsZero() {
+		t.Fatalf("clear retained period filter: %#v", state.Filter)
+	}
+	if state.periodNotice != "" {
+		t.Fatalf("clear retained period notice: %q", state.periodNotice)
 	}
 }
 
@@ -831,6 +1143,119 @@ func TestHelpAndTabNavigation(t *testing.T) {
 	}
 }
 
+func TestSortKeyCyclesListPresets(t *testing.T) {
+	old := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	middle := old.Add(24 * time.Hour)
+	newer := middle.Add(24 * time.Hour)
+	key := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}}
+
+	state := NewState(explorerInput(), query.Filter{}, nil)
+	state.ReadModel.Models = []query.ModelSummary{
+		{Model: usage.NewModelRef("codex", "old"), Turns: 1, Sessions: 1, LastUsed: old},
+		{Model: usage.NewModelRef("codex", "new"), Turns: 1, Sessions: 1, LastUsed: newer},
+		{Model: usage.NewModelRef("codex", "middle"), Turns: 1, Sessions: 1, LastUsed: middle},
+	}
+	state.Route, state.Selected, state.Offset = RouteModels, 2, 2
+	state.Update(key)
+	if got := []string{state.filteredModels()[0].Model.Name, state.filteredModels()[1].Model.Name, state.filteredModels()[2].Model.Name}; !reflect.DeepEqual(got, []string{"new", "middle", "old"}) {
+		t.Fatalf("models last-used sort = %#v", got)
+	}
+	if state.Selected != 0 || state.Offset != 0 || !strings.Contains(state.View(), "Models [Last Used]") {
+		t.Fatalf("models sort state = selected:%d offset:%d view:%s", state.Selected, state.Offset, state.View())
+	}
+	state.Update(key)
+	if got := []string{state.filteredModels()[0].Model.Name, state.filteredModels()[1].Model.Name, state.filteredModels()[2].Model.Name}; !reflect.DeepEqual(got, []string{"middle", "new", "old"}) {
+		t.Fatalf("models name sort = %#v", got)
+	}
+	state.Update(key)
+	if got := []string{state.filteredModels()[0].Model.Name, state.filteredModels()[1].Model.Name, state.filteredModels()[2].Model.Name}; !reflect.DeepEqual(got, []string{"old", "new", "middle"}) {
+		t.Fatalf("models default sort = %#v", got)
+	}
+
+	state = NewState(explorerInput(), query.Filter{}, nil)
+	state.ReadModel.Skills = []query.SkillSummary{
+		{Name: "zeta", Uses: 1, LastUsed: newer},
+		{Name: "alpha", Uses: 1, LastUsed: old},
+		{Name: "beta", Uses: 1, LastUsed: middle},
+	}
+	state.Route = RouteSkills
+	state.Update(key)
+	if got := []string{state.filteredSkills()[0].Name, state.filteredSkills()[1].Name, state.filteredSkills()[2].Name}; !reflect.DeepEqual(got, []string{"zeta", "beta", "alpha"}) {
+		t.Fatalf("skills last-used sort = %#v", got)
+	}
+	state.Update(key)
+	if got := []string{state.filteredSkills()[0].Name, state.filteredSkills()[1].Name, state.filteredSkills()[2].Name}; !reflect.DeepEqual(got, []string{"alpha", "beta", "zeta"}) {
+		t.Fatalf("skills name sort = %#v", got)
+	}
+
+	state = NewState(explorerInput(), query.Filter{}, nil)
+	state.ReadModel.Sessions = []query.SessionSummary{
+		{Key: "z", ID: "z", Title: "zeta", Turns: 1, EndedAt: old},
+		{Key: "a", ID: "a", Title: "alpha", Turns: 2, EndedAt: newer},
+		{Key: "b", ID: "b", Title: "beta", Turns: 3, EndedAt: middle},
+	}
+	state.Route = RouteSessions
+	state.Update(key)
+	if got := []string{state.filteredSessions()[0].Title, state.filteredSessions()[1].Title, state.filteredSessions()[2].Title}; !reflect.DeepEqual(got, []string{"alpha", "beta", "zeta"}) {
+		t.Fatalf("sessions name sort = %#v", got)
+	}
+	state.Update(key)
+	if got := []string{state.filteredSessions()[0].Title, state.filteredSessions()[1].Title, state.filteredSessions()[2].Title}; !reflect.DeepEqual(got, []string{"beta", "alpha", "zeta"}) {
+		t.Fatalf("sessions turns sort = %#v", got)
+	}
+}
+
+func TestSortKeyReordersDetailSessions(t *testing.T) {
+	source := usage.NewCodexSourceRef("history.jsonl", 1, "")
+	model := usage.NewModelRef("codex", "gpt-example")
+	old := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	newer := old.Add(24 * time.Hour)
+
+	oldTurn := usage.NewTurn("old", "old-turn", 1, source)
+	oldTurn.StartedAt = old
+	oldTurn.EndedAt = old.Add(time.Minute)
+	oldTurn.ObserveModelAt(model, old, source)
+	secondOldTurn := usage.NewTurn("old", "second-old-turn", 2, source)
+	secondOldTurn.StartedAt = old.Add(time.Hour)
+	secondOldTurn.EndedAt = secondOldTurn.StartedAt.Add(time.Minute)
+	secondOldTurn.ObserveModelAt(model, secondOldTurn.StartedAt, source)
+	newTurn := usage.NewTurn("new", "new-turn", 1, source)
+	newTurn.StartedAt = newer
+	newTurn.EndedAt = newer.Add(time.Minute)
+	newTurn.ObserveModelAt(model, newer, source)
+	for _, turn := range []*usage.Turn{&oldTurn, &secondOldTurn, &newTurn} {
+		turn.SkillEvidence = []usage.SkillEvidence{usage.NewSkillEvidence(turn.SessionID, turn.ID, "review", usage.ModeExplicit, usage.MethodExplicitRequest, usage.StateConfirmed, turn.StartedAt, source)}
+	}
+	input := query.Input{
+		Turns:    []usage.Turn{oldTurn, secondOldTurn, newTurn},
+		Sessions: []usage.Session{usage.NewSession("old", source), usage.NewSession("new", source)},
+	}
+
+	state := NewState(input, query.Filter{}, nil)
+	state.Route, state.ParentRoute, state.selectedKey = RouteModelDetail, RouteModels, model.Key()
+	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	view := state.View()
+	if strings.Index(view, "codex/old") > strings.Index(view, "codex/new") || !strings.Contains(view, "Sessions [Turns]") {
+		t.Fatalf("model detail sort = %s", view)
+	}
+
+	state = NewState(input, query.Filter{}, nil)
+	state.Route, state.ParentRoute, state.selectedKey = RouteSkillDetail, RouteSkills, "review"
+	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	view = state.View()
+	if strings.Index(view, "codex/old") > strings.Index(view, "codex/new") || !strings.Contains(view, "Sessions [First Used]") {
+		t.Fatalf("skill detail sort = %s", view)
+	}
+}
+
+func TestHelpAdvertisesListSorting(t *testing.T) {
+	state := NewState(explorerInput(), query.Filter{}, nil)
+	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	if !strings.Contains(state.View(), "s         cycle list sort") {
+		t.Fatalf("help omitted sort action: %s", state.View())
+	}
+}
+
 func TestQuitKeysHaveConsistentTUISemantics(t *testing.T) {
 	quit := func(t *testing.T, state *State, key tea.KeyMsg) {
 		t.Helper()
@@ -914,9 +1339,6 @@ func TestSessionsSearchMatchesFullSessionID(t *testing.T) {
 	state.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if !strings.Contains(state.View(), "(01a094e0)") {
 		t.Fatalf("session ID search omitted matching session: %s", state.View())
-	}
-	if !strings.Contains(state.View(), mutedStyle.Render("(01a094e0)")) {
-		t.Fatalf("session ID fallback should be muted: %s", state.View())
 	}
 }
 
@@ -1005,12 +1427,17 @@ func TestListLastUsedUsesRelativeTime(t *testing.T) {
 		t.Fatalf("session LAST = %q, want relative time", got)
 	}
 
-	skillSessionCells := skillSessionCells(120, &query.SkillSessionUsage{FirstUsed: lastUsed.Add(-time.Hour), LastUsed: lastUsed})
-	if got := skillSessionCells[len(skillSessionCells)-3].value; got != "14d ago" {
-		t.Fatalf("skill session FIRST USED = %q, want relative time", got)
+	skillSessionRowCells := skillSessionCells(120, &query.SkillSessionUsage{FirstUsed: lastUsed.Add(-time.Hour), LastUsed: lastUsed})
+	if got := skillSessionRowCells[len(skillSessionRowCells)-1].value; got != "14d ago" {
+		t.Fatalf("skill session LAST USED = %q, want relative time in final column", got)
 	}
-	if got := skillSessionCells[len(skillSessionCells)-2].value; got != "14d ago" {
-		t.Fatalf("skill session LAST USED = %q, want relative time", got)
+	if got := skillSessionCells(120, nil)[len(skillSessionCells(120, nil))-1].value; got != "LAST USED" {
+		t.Fatalf("skill session LAST USED header = %q, want final column", got)
+	}
+	for _, cell := range skillSessionCells(120, nil) {
+		if cell.value == "FIRST USED" {
+			t.Fatalf("skill detail contains removed column %q", cell.value)
+		}
 	}
 }
 

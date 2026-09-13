@@ -114,17 +114,12 @@
 
 ### Requirement: unused viewが既存の履歴filterとoutput optionを継承する
 
-`skills --unused` は `--source codex|ctx`、`--days`、sourceに応じた `--codex-home` または `--ctx-data-root`、`--strict`、`--group-by`、`--color`、`--json`、`--verbose`、および `--strict-input` を通常の `skills` commandと同じvalidation、履歴source、warning、終了codeの規則で受け付けなければならない（SHALL）。`--source` の既定値は `codex` でなければならず（SHALL）。source固有でない `--root` はSkill inventoryのscopeだけを変更し、履歴sourceやAgent一覧を暗黙に変更してはならない（MUST NOT）。
+`skills --unused` は `--source codex|ctx`、`--days`、`--strict`、`--group-by`、`--color`、`--json`、`--verbose`、および `--strict-input` を通常の `skills` commandと同じvalidation、履歴source、warning、終了codeの規則で受け付けなければならない（SHALL）。`--source` の既定値は `codex` でなければならず（SHALL）。source固有でない `--root` はSkill inventoryのscopeだけを変更し、履歴sourceやAgent一覧を暗黙に変更してはならない（MUST NOT）。
 
 #### Scenario: days filterをunused判定へ適用する
 
 - **WHEN** userが `catsift skills --source ctx --unused --days 30` を実行する
 - **THEN** システムはctxの直近30日間の履歴だけを使用済み判定へ使い、report contextにもその期間を示す
-
-#### Scenario: source固有rootをunused viewへ適用する
-
-- **WHEN** userが `catsift skills --source ctx --unused --ctx-data-root /path/to/ctx` を実行する
-- **THEN** システムは指定ctx data rootの履歴だけを使用し、Skill inventory rootは別途指定されたscopeのまま扱う
 
 #### Scenario: strict filterをunused判定へ適用する
 

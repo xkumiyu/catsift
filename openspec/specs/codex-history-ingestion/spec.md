@@ -7,18 +7,14 @@ Codex がローカルに保存する session JSONL を安全かつ再現可能�
 ## Requirements
 
 ### Requirement: Codex homeを一意に解決する
-システムは `--codex-home`、`CODEX_HOME`、OS user home配下の `.codex` の優先順で Codex homeを解決しなければならない（SHALL）。明示された値が空の場合は次の候補を使用しなければならない（SHALL）。
+システムは `CODEX_HOME`、OS user home配下の `.codex` の優先順で Codex homeを解決しなければならない（SHALL）。環境変数が空の場合は既定値を使用しなければならない（SHALL）。
 
-#### Scenario: CLIでCodex homeを指定する
-- **WHEN** userが `--codex-home /path/to/codex` を指定する
-- **THEN** システムは環境変数や既定値ではなく `/path/to/codex` を読取対象にする
-
-#### Scenario: 環境変数を使用する
-- **WHEN** `--codex-home` がなく、`CODEX_HOME` が空でない
+#### Scenario: CODEX_HOMEを使用する
+- **WHEN** `CODEX_HOME` が空でない
 - **THEN** システムは `CODEX_HOME` の値を読取対象にする
 
 #### Scenario: 既定のCodex homeを使用する
-- **WHEN** CLI指定と `CODEX_HOME` のどちらもない
+- **WHEN** `CODEX_HOME` が空である
 - **THEN** システムは現在のOS user home配下の `.codex` を読取対象にする
 
 ### Requirement: session履歴を発見する
