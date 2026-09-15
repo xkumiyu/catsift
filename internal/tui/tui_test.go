@@ -60,7 +60,7 @@ func TestOverviewUsesStatsContextAndTokenBreakdown(t *testing.T) {
 	state := NewState(input, query.Filter{}, nil)
 	state.Width = 120
 	state.Height = 40
-	view := state.View()
+	view := strings.Join(append(state.headerLines(), state.overviewLines()...), "\n")
 
 	for _, want := range []string{
 		"catsift",
@@ -77,8 +77,10 @@ func TestOverviewUsesStatsContextAndTokenBreakdown(t *testing.T) {
 		"Cache Write Input Tokens",
 		"Output Tokens",
 		"Reasoning Tokens",
-		"DATE",
-		"SESSIONS",
+		"Skill Uses",
+		"Recent Sessions",
+		"Top Skills",
+		"Top Models",
 	} {
 		if !strings.Contains(view, want) {
 			t.Errorf("overview missing %q: %s", want, view)
@@ -88,6 +90,252 @@ func TestOverviewUsesStatsContextAndTokenBreakdown(t *testing.T) {
 		if strings.Contains(view, unwanted) {
 			t.Errorf("overview contains obsolete text %q: %s", unwanted, view)
 		}
+	}
+}
+
+func TestOverviewUsesNamedSummarySections(t *testing.T) {
+	state := NewState(explorerInput(), query.Filter{}, nil)
+	state.Width = 120
+	state.Height = 40
+
+	view := strings.Join(state.overviewLines(), "\n")
+	for _, want := range []string{"Usage summary", "Skill Uses", "Recent Activity", "Recent Sessions", "Top Skills", "Top Models"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("overview missing %q: %s", want, view)
+		}
+	}
+	for _, unwanted := range []string{"Highlights", "Recent sessions:", "Top skills:", "Top models:", "Daily activity", "Skill Usage", "By turn", "By session"} {
+		if strings.Contains(view, unwanted) {
+			t.Fatalf("overview contains activity detail %q: %s", unwanted, view)
+		}
+	}
+}
+
+func TestOverviewSectionsFollowSemanticGroups(t *testing.T) {
+	state := NewState(explorerInput(), query.Filter{}, nil)
+	state.Width = 120
+
+	lines := state.overviewLines()
+	lastIndex := -1
+	for _, section := range []string{
+		"Usage summary",
+		"Skill Uses",
+		"Token Usage",
+		"Top Models",
+		"Recent Activity",
+		"Recent Sessions",
+		"Top Skills",
+	} {
+		index := -1
+		for lineIndex, line := range lines {
+			if strings.Contains(line, section) {
+				index = lineIndex
+				break
+			}
+		}
+		if index <= lastIndex {
+			t.Fatalf("overview section order = %#v, want %q after line %d", lines, section, lastIndex)
+		}
+		lastIndex = index
+	}
+}
+
+func TestJKNavigationWrapsFocusedRowsOnly(t *testing.T) {
+	state := NewState(explorerInput(), query.Filter{}, nil)
+	state.ReadModel.Models = []query.ModelSummary{
+		{Model: usage.NewModelRef("codex", "first")},
+		{Model: usage.NewModelRef("codex", "last")},
+	}
+	state.Route = RouteModels
+	state.Selected, state.Offset = 0, 0
+	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	if state.Selected != 1 {
+		t.Fatalf("k at the first model should wrap to the last: selected=%d", state.Selected)
+	}
+	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	if state.Selected != 0 {
+		t.Fatalf("j at the last model should wrap to the first: selected=%d", state.Selected)
+	}
+
+	state.Route = RouteOverview
+	state.Height = 10
+	maxOffset := state.rowCount() - state.visibleHeight()
+	if maxOffset <= 0 {
+		t.Fatalf("overview should be scrollable for the wrap test: rows=%d visible=%d", state.rowCount(), state.visibleHeight())
+	}
+	state.Selected, state.Offset = maxOffset, maxOffset
+	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	if state.Offset != maxOffset {
+		t.Fatalf("j at the bottom of Overview should stop: offset=%d want=%d", state.Offset, maxOffset)
+	}
+	state.Selected, state.Offset = 0, 0
+	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	if state.Offset != 0 {
+		t.Fatalf("k at the top of Overview should stop: offset=%d", state.Offset)
+	}
+
+	state = NewState(longExplorerInput(), query.Filter{}, nil)
+	state.Route = RouteActivity
+	state.Height = 10
+	maxOffset = state.rowCount() - state.visibleHeight()
+	if maxOffset <= 0 {
+		t.Fatalf("activity should be scrollable for the boundary test: rows=%d visible=%d", state.rowCount(), state.visibleHeight())
+	}
+	state.Selected, state.Offset = maxOffset, maxOffset
+	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	if state.Offset != maxOffset {
+		t.Fatalf("j at the bottom of Activity should stop: offset=%d want=%d", state.Offset, maxOffset)
+	}
+	state.Selected, state.Offset = 0, 0
+	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	if state.Offset != 0 {
+		t.Fatalf("k at the top of Activity should stop: offset=%d", state.Offset)
+	}
+}
+
+func TestOverviewSummaryUsesSeparatedStyledRows(t *testing.T) {
+	model := query.ReadModel{
+		Sessions: []query.SessionSummary{
+			{Title: "first session", ID: "session-1", EndedAt: time.Now().UTC().Add(-2 * time.Hour)},
+			{Title: "second session", ID: "session-2", EndedAt: time.Now().UTC().Add(-3 * time.Hour)},
+			{Title: "third session", ID: "session-3", EndedAt: time.Now().UTC().Add(-4 * time.Hour)},
+		},
+		Skills: []query.SkillSummary{
+			{Name: "review", Uses: 3},
+			{Name: "deploy", Uses: 2},
+			{Name: "docs", Uses: 1},
+		},
+		Models: []query.ModelSummary{
+			{Model: usage.NewModelRef("openai", "token-heavy"), TokenUsage: usage.TokenUsage{TotalTokens: 1_200}, TokenUsageAvailable: true},
+			{Model: usage.NewModelRef("openai", "turn-heavy"), TokenUsage: usage.TokenUsage{TotalTokens: 100}, TokenUsageAvailable: true},
+			{Model: usage.NewModelRef("openai", "small"), TokenUsage: usage.TokenUsage{TotalTokens: 50}, TokenUsageAvailable: true},
+		},
+	}
+
+	lines := overviewTopModelsLines(model, 100)
+	lines = append(lines, "")
+	lines = append(lines, overviewRecentSessionLines(model, 100)...)
+	lines = append(lines, "")
+	lines = append(lines, overviewTopSkillsLines(model, 100)...)
+	if len(lines) != 14 || lines[4] != "" || lines[9] != "" {
+		t.Fatalf("overview summary layout = %#v", lines)
+	}
+	for _, want := range []string{
+		sectionStyle.Render("Recent Sessions"),
+		sectionStyle.Render("Top Skills"),
+		sectionStyle.Render("Top Models"),
+		identityStyle.Render("first session"),
+		"2h ago",
+		identityStyle.Render("review"),
+		identityStyle.Render("openai/token-heavy"),
+		"1.2k tokens",
+	} {
+		if !strings.Contains(strings.Join(lines, "\n"), want) {
+			t.Fatalf("overview summary missing styled value %q: %#v", want, lines)
+		}
+	}
+	if strings.Contains(strings.Join(lines, "\n"), ", ") {
+		t.Fatalf("overview summary should use one item per row: %#v", lines)
+	}
+	if strings.Contains(strings.Join(lines, "\n"), mutedStyle.Render("2h ago")) {
+		t.Fatalf("overview summary values should use the normal color: %#v", lines)
+	}
+	if !strings.Contains(lines[1], "token-heavy") {
+		t.Fatalf("top models should be ordered by token usage: %#v", lines)
+	}
+	rowWidth := -1
+	for _, line := range lines {
+		if !strings.HasPrefix(line, "  ") {
+			continue
+		}
+		if rowWidth == -1 {
+			rowWidth = lipgloss.Width(line)
+		} else if lipgloss.Width(line) != rowWidth {
+			t.Fatalf("overview summary rows should align values: %#v", lines)
+		}
+	}
+}
+
+func TestOverviewActivityPreviewShowsRecentSevenDays(t *testing.T) {
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	trend := make([]query.UsageTrend, 8)
+	for index := range trend {
+		trend[index] = query.UsageTrend{
+			Date:     start.AddDate(0, 0, index),
+			Turns:    index + 1,
+			Sessions: 1,
+		}
+	}
+
+	lines := overviewActivityPreview(query.OverviewView{Trend: trend}, 100)
+	if len(lines) != 9 {
+		t.Fatalf("overview activity preview rows = %d, want heading, header, and seven days: %#v", len(lines), lines)
+	}
+	view := strings.Join(lines, "\n")
+	for _, want := range []string{"Recent Activity", "2026-01-02", "2026-01-08"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("overview activity preview missing %q: %s", want, view)
+		}
+	}
+	if strings.Contains(view, "2026-01-01") {
+		t.Fatalf("overview activity preview should keep the latest seven days: %s", view)
+	}
+}
+
+func TestModelsDefaultSortUsesTokenUsage(t *testing.T) {
+	input := explorerInput()
+	when := time.Date(2026, 1, 2, 4, 4, 5, 0, time.UTC)
+	source := input.Turns[0].Source
+	low := usage.NewModelRef("codex", "low-token")
+	high := usage.NewModelRef("codex", "high-token")
+	input.Turns[0].ModelObservations = nil
+	input.Turns[0].TokenUsage = nil
+	input.Turns[0].TokenUsageEvents = nil
+	input.Turns[0].ObserveModelAt(low, when, source)
+	input.Turns[0].AddTokenUsageForModelAt(low, when, usage.TokenUsage{TotalTokens: 100})
+
+	turn := usage.NewTurn("s", "turn-2", 2, source)
+	turn.StartedAt = when.Add(time.Minute)
+	turn.EndedAt = turn.StartedAt.Add(time.Minute)
+	turn.ObserveModelAt(high, turn.StartedAt, source)
+	turn.AddTokenUsageForModelAt(high, turn.StartedAt, usage.TokenUsage{TotalTokens: 1_000})
+	input.Turns = append(input.Turns, turn)
+
+	state := NewState(input, query.Filter{}, nil)
+	state.Route = RouteModels
+	rows := state.filteredModels()
+	if len(rows) < 2 || rows[0].Model.Name != "high-token" {
+		t.Fatalf("models default sort = %#v, want token usage order", rows)
+	}
+	if !strings.Contains(state.View(), "Models [Token Usage]") {
+		t.Fatalf("models default sort label = %s", state.View())
+	}
+}
+
+func TestActivityViewSwitchesDailyAndMonthly(t *testing.T) {
+	state := NewState(longExplorerInput(), query.Filter{}, nil)
+	state.Width = 120
+	state.Height = 40
+	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+
+	if state.Route != RouteActivity {
+		t.Fatalf("activity route = %q", state.Route)
+	}
+	daily := state.View()
+	for _, want := range []string{"Activity [Daily]", "DATE", "SESSIONS", "2026-01-02", "2026-01-03"} {
+		if !strings.Contains(daily, want) {
+			t.Fatalf("daily activity missing %q: %s", want, daily)
+		}
+	}
+
+	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	monthly := state.View()
+	if !strings.Contains(monthly, "Activity [Monthly]") || !strings.Contains(monthly, "2026-01") {
+		t.Fatalf("monthly activity = %s", monthly)
+	}
+	monthlyRows := strings.Join(state.viewActivity(40), "\n")
+	if strings.Contains(monthlyRows, "2026-01-02") || strings.Contains(monthlyRows, "2026-01-03") {
+		t.Fatalf("monthly activity still uses daily dates: %s", monthlyRows)
 	}
 }
 
@@ -146,7 +394,7 @@ func TestOverviewRendersHumanReadableWarningSummary(t *testing.T) {
 	}
 
 	state := NewState(input, query.Filter{}, nil)
-	view := state.View()
+	view := strings.Join(state.overviewLines(), "\n")
 	for _, want := range []string{
 		"Input notes",
 		"2 oversized history records skipped",
@@ -261,25 +509,25 @@ func TestSourceFilterTogglesSourcesIndependently(t *testing.T) {
 	}
 }
 
-func TestOverviewUsesTwoColumnsAtWideWidth(t *testing.T) {
+func TestOverviewUsesSingleColumnSections(t *testing.T) {
 	state := NewState(explorerInput(), query.Filter{}, nil)
-	state.Width = 120
-
-	wide := false
-	for _, line := range state.overviewLines() {
-		if strings.Contains(line, "Activity") && strings.Contains(line, "Token Usage") {
-			wide = true
-			break
+	for _, width := range []int{80, 120} {
+		state.Width = width
+		lines := state.overviewLines()
+		for _, line := range lines {
+			if strings.Contains(line, "Usage summary") && strings.Contains(line, "Token Usage") {
+				t.Fatalf("overview sections should stay stacked at width %d: %s", width, strings.Join(lines, "\n"))
+			}
 		}
-	}
-	if !wide {
-		t.Fatalf("wide overview should place activity and token usage side by side: %s", state.View())
-	}
-
-	state.Width = 80
-	for _, line := range state.overviewLines() {
-		if strings.Contains(line, "Activity") && strings.Contains(line, "Token Usage") {
-			t.Fatalf("narrow overview should keep summary sections stacked: %s", state.View())
+		recentIndex := -1
+		for index, line := range lines {
+			if strings.Contains(line, "Recent Sessions") {
+				recentIndex = index
+				break
+			}
+		}
+		if recentIndex < 1 || lines[recentIndex-1] != "" {
+			t.Fatalf("overview should separate Recent Sessions from the previous section at width %d: %#v", width, lines)
 		}
 	}
 }
@@ -287,7 +535,7 @@ func TestOverviewUsesTwoColumnsAtWideWidth(t *testing.T) {
 func TestTUILayoutUsesSpacingInsteadOfPipeSeparators(t *testing.T) {
 	state := NewState(explorerInput(), query.Filter{}, nil)
 	state.Width = 120
-	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'4'}})
+	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'5'}})
 	state.Update(tea.KeyMsg{Type: tea.KeyEnter})
 
 	view := state.View()
@@ -567,7 +815,7 @@ func TestSearchFiltersSkillRows(t *testing.T) {
 	input.Turns = append(input.Turns, extra)
 
 	state := NewState(input, query.Filter{}, nil)
-	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
+	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'4'}})
 	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
 	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g', 'i', 't'}})
 	state.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -609,14 +857,14 @@ func TestSearchFiltersSkillRows(t *testing.T) {
 
 func TestDetailHeaderKeepsTopLevelTab(t *testing.T) {
 	state := NewState(explorerInput(), query.Filter{}, nil)
-	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
+	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'4'}})
 	state.Update(tea.KeyMsg{Type: tea.KeyEnter})
 
 	view := state.View()
 	if strings.Contains(view, "catsift / Skill detail") {
 		t.Fatalf("detail route should not replace the top-level header: %s", view)
 	}
-	if !strings.Contains(view, "[3] Skills") {
+	if !strings.Contains(view, "[4] Skills") {
 		t.Fatalf("detail route should keep Skills as active top-level tab: %s", view)
 	}
 }
@@ -632,7 +880,7 @@ func TestSessionFiltersCanSelectAgentAndProject(t *testing.T) {
 		{key: 'p', want: func(filter query.Filter) string { return filter.Project }},
 	} {
 		state := NewState(input, query.Filter{}, nil)
-		state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'4'}})
+		state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'5'}})
 		state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{test.key}})
 		if state.Route != RouteOverview || test.want(state.Filter) == "" {
 			t.Fatalf("session filter %q = route:%q filter:%#v", test.key, state.Route, state.Filter)
@@ -839,7 +1087,7 @@ func TestBoundLinesTruncatesWithoutWrapping(t *testing.T) {
 	}
 }
 
-func TestOverviewScrollsThroughAllDailyActivityRows(t *testing.T) {
+func TestActivityScrollsThroughAllDailyRows(t *testing.T) {
 	input := explorerInput()
 	source := input.Turns[0].Source
 	for i := 0; i < 18; i++ {
@@ -851,12 +1099,13 @@ func TestOverviewScrollsThroughAllDailyActivityRows(t *testing.T) {
 
 	state := NewState(input, query.Filter{}, nil)
 	state.Update(tea.WindowSizeMsg{Width: 90, Height: 14})
+	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
 	if state.rowCount() <= state.visibleHeight() {
-		t.Fatalf("overview should be scrollable: rows=%d visible=%d", state.rowCount(), state.visibleHeight())
+		t.Fatalf("activity should be scrollable: rows=%d visible=%d", state.rowCount(), state.visibleHeight())
 	}
 	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
 	if state.Offset == 0 {
-		t.Fatalf("one j key should scroll the overview: offset=%d", state.Offset)
+		t.Fatalf("one j key should scroll activity: offset=%d", state.Offset)
 	}
 	state.Update(tea.KeyMsg{Type: tea.KeyEnd})
 	maxOffset := state.rowCount() - state.visibleHeight()
@@ -871,7 +1120,7 @@ func TestOverviewScrollsThroughAllDailyActivityRows(t *testing.T) {
 	for i := 0; i < state.rowCount(); i++ {
 		state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
 	}
-	if state.Offset == 0 || !strings.Contains(state.View(), "01-20") {
+	if state.Offset == 0 || !strings.Contains(strings.Join(state.viewActivity(30), "\n"), "2026-01-20") {
 		t.Fatalf("end did not reveal the latest daily row: offset=%d view=%s", state.Offset, state.View())
 	}
 
@@ -879,13 +1128,13 @@ func TestOverviewScrollsThroughAllDailyActivityRows(t *testing.T) {
 	seenFirstDailyRow := false
 	for i := 0; i < state.rowCount(); i++ {
 		state.Update(tea.KeyMsg{Type: tea.KeyDown})
-		if strings.Contains(state.View(), "01-03") {
+		if strings.Contains(strings.Join(state.viewActivity(30), "\n"), "2026-01-03") {
 			seenFirstDailyRow = true
 			break
 		}
 	}
 	if !seenFirstDailyRow {
-		t.Fatalf("scrolling overview never revealed the first daily row: %s", state.View())
+		t.Fatalf("scrolling activity never revealed the first daily row: %s", state.View())
 	}
 }
 
@@ -895,7 +1144,7 @@ func TestStateRoutesDetailsAndMaintainsViewport(t *testing.T) {
 	if state.Width != 60 || state.Height != 8 {
 		t.Fatalf("window size = %dx%d", state.Width, state.Height)
 	}
-	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
 	if state.Route != RouteModels || state.Selected != 0 {
 		t.Fatalf("models route = %#v", state)
 	}
@@ -915,7 +1164,7 @@ func TestStateRoutesDetailsAndMaintainsViewport(t *testing.T) {
 		t.Fatalf("selection should stay within one row: selected=%d offset=%d", state.Selected, state.Offset)
 	}
 
-	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
+	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'4'}})
 	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
 	if state.Filter.Skill != "review" || state.ReadModel.Overview.SkillUses != 1 {
 		t.Fatalf("skill filter = %#v overview=%#v", state.Filter, state.ReadModel.Overview)
@@ -934,7 +1183,7 @@ func TestStateWindowsLongModelListAndKeepsSelectedRowVisible(t *testing.T) {
 	}
 	state := NewState(input, query.Filter{}, nil)
 	state.Update(tea.WindowSizeMsg{Width: 50, Height: 10})
-	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
 	for i := 0; i < 8; i++ {
 		state.updateSelection(1)
 	}
@@ -956,7 +1205,7 @@ func TestStateSearchReloadAndBoundedView(t *testing.T) {
 		return input, nil
 	})
 	state.Update(tea.WindowSizeMsg{Width: 32, Height: 6})
-	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
 	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
 	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g', 'p', 't'}})
 	state.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -996,7 +1245,7 @@ func TestStateSearchReloadAndBoundedView(t *testing.T) {
 func TestDetailViewKeepsRowsAndFooterWithinTheFrame(t *testing.T) {
 	state := NewState(longExplorerInput(), query.Filter{}, nil)
 	state.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
-	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'4'}})
+	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'5'}})
 	state.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	view := state.View()
 	if !strings.Contains(view, "Turns") || strings.Contains(view, "1/25") || strings.Contains(view, "Turns 25  |") {
@@ -1023,7 +1272,7 @@ func TestTurnDetailShowsMetadataAndReturnsToSession(t *testing.T) {
 	input := explorerInput()
 	input.Turns[0].RuntimeTools = []usage.ToolObservation{{CanonicalName: "exec", Arguments: "secret", Source: input.Turns[0].Source}}
 	state := NewState(input, query.Filter{}, nil)
-	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'4'}})
+	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'5'}})
 	state.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state.Update(tea.KeyMsg{Type: tea.KeyEnter})
 
@@ -1051,7 +1300,7 @@ func TestTurnDetailShowsMetadataAndReturnsToSession(t *testing.T) {
 func TestSessionDetailMovesSelectionAndScrollsViewport(t *testing.T) {
 	state := NewState(longExplorerInput(), query.Filter{}, nil)
 	state.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
-	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'4'}})
+	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'5'}})
 	state.Update(tea.KeyMsg{Type: tea.KeyEnter})
 
 	state.Update(tea.KeyMsg{Type: tea.KeyDown})
@@ -1070,7 +1319,7 @@ func TestSessionDetailMovesSelectionAndScrollsViewport(t *testing.T) {
 	input.Turns = input.Turns[:2]
 	state = NewState(input, query.Filter{}, nil)
 	state.Update(tea.WindowSizeMsg{Width: 80, Height: 40})
-	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'4'}})
+	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'5'}})
 	state.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state.Update(tea.KeyMsg{Type: tea.KeyDown})
 	if state.Selected != 1 || state.Offset != 0 {
@@ -1080,7 +1329,7 @@ func TestSessionDetailMovesSelectionAndScrollsViewport(t *testing.T) {
 
 func TestNestedDetailsReturnToThePreviousSelectionContext(t *testing.T) {
 	state := NewState(explorerInput(), query.Filter{}, nil)
-	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
 	state.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if state.Route != RouteModelDetail {
 		t.Fatalf("model detail route = %q", state.Route)
@@ -1134,12 +1383,20 @@ func TestHelpAndTabNavigation(t *testing.T) {
 		t.Fatal("escape should close help")
 	}
 	state.Update(tea.KeyMsg{Type: tea.KeyTab})
+	if state.Route != RouteActivity {
+		t.Fatalf("tab route = %q, want activity", state.Route)
+	}
+	state.Update(tea.KeyMsg{Type: tea.KeyTab})
 	if state.Route != RouteModels {
-		t.Fatalf("tab route = %q, want models", state.Route)
+		t.Fatalf("second tab route = %q, want models", state.Route)
+	}
+	state.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
+	if state.Route != RouteActivity {
+		t.Fatalf("shift-tab route = %q, want activity", state.Route)
 	}
 	state.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
 	if state.Route != RouteOverview {
-		t.Fatalf("shift-tab route = %q, want overview", state.Route)
+		t.Fatalf("second shift-tab route = %q, want overview", state.Route)
 	}
 }
 
@@ -1170,6 +1427,9 @@ func TestSortKeyCyclesListPresets(t *testing.T) {
 	state.Update(key)
 	if got := []string{state.filteredModels()[0].Model.Name, state.filteredModels()[1].Model.Name, state.filteredModels()[2].Model.Name}; !reflect.DeepEqual(got, []string{"old", "new", "middle"}) {
 		t.Fatalf("models default sort = %#v", got)
+	}
+	if !strings.Contains(state.View(), "Models [Token Usage]") {
+		t.Fatalf("models default sort label = %s", state.View())
 	}
 
 	state = NewState(explorerInput(), query.Filter{}, nil)
@@ -1279,7 +1539,7 @@ func TestQuitKeysHaveConsistentTUISemantics(t *testing.T) {
 	quit(t, state, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
 
 	state = NewState(explorerInput(), query.Filter{}, nil)
-	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
 	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
 	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
 	if !state.searching || state.searchInput != "q" {
@@ -1290,12 +1550,12 @@ func TestQuitKeysHaveConsistentTUISemantics(t *testing.T) {
 
 func TestFooterHidesUnavailableFilterAction(t *testing.T) {
 	state := NewState(explorerInput(), query.Filter{}, nil)
-	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'4'}})
+	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'5'}})
 	if strings.Contains(state.View(), "f filter") {
 		t.Fatalf("sessions footer advertises unavailable filter action: %s", state.View())
 	}
 
-	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
 	if !strings.Contains(state.View(), "f filter") {
 		t.Fatalf("models footer omitted available filter action: %s", state.View())
 	}
@@ -1303,7 +1563,7 @@ func TestFooterHidesUnavailableFilterAction(t *testing.T) {
 
 func TestListHeadingsUsePositionWithoutParenthesizedCount(t *testing.T) {
 	state := NewState(explorerInput(), query.Filter{}, nil)
-	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
+	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'4'}})
 	view := state.View()
 	if strings.Contains(view, "Skills (") || !strings.Contains(view, "Skills") || !strings.Contains(view, "1/1") {
 		t.Fatalf("skills heading should show name and position only: %s", view)
@@ -1315,7 +1575,7 @@ func TestSessionsListPrefersSourceSessionTitle(t *testing.T) {
 	input.Sessions[0].Title = "Implement usage explorer"
 	input.Turns[0].Aborted = true
 	state := NewState(input, query.Filter{}, nil)
-	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'4'}})
+	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'5'}})
 	view := state.View()
 	if !strings.Contains(view, "Implement usage explorer") || !strings.Contains(view, "SESSION") || !strings.Contains(view, "PROJECT") || !strings.Contains(view, "LAST") || strings.Contains(view, "SESSION NAME") {
 		t.Fatalf("sessions list omitted compact metadata: %s", view)
@@ -1333,7 +1593,7 @@ func TestSessionsSearchMatchesFullSessionID(t *testing.T) {
 	input.Sessions[0].Key = ""
 	input.Turns[0].SessionID = input.Sessions[0].ID
 	state := NewState(input, query.Filter{}, nil)
-	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'4'}})
+	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'5'}})
 	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
 	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("01a094e0-0e59-7493-a4b0-3681af2c63e3")})
 	state.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -1345,7 +1605,7 @@ func TestSessionsSearchMatchesFullSessionID(t *testing.T) {
 func TestSessionsListFitsNarrowTerminal(t *testing.T) {
 	state := NewState(explorerInput(), query.Filter{}, nil)
 	state.Update(tea.WindowSizeMsg{Width: 32, Height: 10})
-	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'4'}})
+	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'5'}})
 	view := state.View()
 	if !strings.Contains(view, "SESSION") || !strings.Contains(view, "LAST USED") || strings.Contains(view, "SESSION NAME") {
 		t.Fatalf("narrow sessions list omitted compact columns: %s", view)
@@ -1362,7 +1622,7 @@ func TestSessionDetailShowsFullIDAndAbortedStatus(t *testing.T) {
 	input.Sessions[0].Title = "Implement usage explorer"
 	input.Turns[0].Aborted = true
 	state := NewState(input, query.Filter{}, nil)
-	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'4'}})
+	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'5'}})
 	state.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	view := state.View()
 	for _, want := range []string{"Session name: Implement usage explorer", "Session ID: s", "Status: aborted"} {
@@ -1444,11 +1704,11 @@ func TestListLastUsedUsesRelativeTime(t *testing.T) {
 func TestViewsExposeUsageMetadataWithoutInternalSessionSeparator(t *testing.T) {
 	state := NewState(explorerInput(), query.Filter{}, nil)
 	state.Width = 240
-	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
+	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'4'}})
 	if view := state.View(); !strings.Contains(view, "explicit-request 1") || strings.Contains(view, "explicit-request=1") {
 		t.Fatalf("skills view omitted method counts: %s", view)
 	}
-	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'4'}})
+	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'5'}})
 	state.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	view := state.View()
 	if strings.Contains(view, "Provider session:") || strings.Contains(view, "ctx session:") || !strings.Contains(view, "Created:") || strings.Contains(view, "\x00") {

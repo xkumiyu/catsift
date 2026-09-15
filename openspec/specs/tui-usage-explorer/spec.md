@@ -6,19 +6,26 @@
 
 ## Requirements
 
-### Requirement: TUIは四つの探索対象を提供する
+### Requirement: TUIは五つの探索対象を提供する
 
-システムはTUIでOverview、Models、Skills、Sessionsのtop-level viewを提供しなければならない（SHALL）。Overviewは対象scopeのSession、Turn、prompt、Token、Tool、Skill利用状況を表示しなければならない（SHALL）。ModelsはproviderとModel nameごとの利用状況を表示し、SkillsはSkill名ごとの利用状況を表示し、SessionsはSession一覧を表示しなければならない（SHALL）。
+システムはTUIでOverview、Activity、Models、Skills、Sessionsのtop-level viewを提供しなければならない（SHALL）。Overviewは対象scopeの利用状況summary（Skill Usesを含む）、直近7日間のRecent Activity、最近のSession、上位Model、および上位Skillを個別のsectionで表示し、利用状況summary、Token Usage、Top Models、Recent Activity、Recent Sessions、Top Skillsの順に配置しなければならない（SHALL）。Activityは対象scopeのactivityを日別または月別で表示しなければならない（SHALL）。ModelsはproviderとModel nameごとのToken usageを表示し、Token dataがないsourceではTurn数へfallbackしなければならない（SHALL）。SkillsはSkill名ごとの利用状況を表示し、SessionsはSession一覧を表示しなければならない（SHALL）。
 
 #### Scenario: Overviewを表示する
 
 - **WHEN** userがTUIを起動してOverview viewを選択する
-- **THEN** システムは対象source、Agent、期間と、Session、Turn、prompt、Token、Tool、Skill利用状況を表示する
+- **THEN** システムは対象source、Agent、期間、およびSkill Usesを含む利用状況summary、Token Usage、Top Models、Recent Activity、Recent Sessions、Top Skillsを個別のsectionとして順に表示する
+
+#### Scenario: Activityを表示する
+
+- **WHEN** userがActivity viewを選択する
+- **THEN** システムは対象scopeのactivityを日別に表示し、各rowに日付、Turn数、およびSession数を表示する
+- **AND** userが月別表示へ切り替えた場合、システムは同じscopeのactivityを月単位に集約して表示し、同一Sessionを月内で重複カウントしない
 
 #### Scenario: Model一覧を表示する
 
 - **WHEN** userがModels viewを選択する
-- **THEN** システムはModelのprovider・name、Session数、Turn数、Token usage、およびfirst/last usedを決定的な順序で表示する
+- **THEN** システムはModelのprovider・name、Session数、Turn数、Token usage、およびfirst/last usedを表示する
+- **AND** システムはToken dataが利用できる場合はToken usageの降順、利用できない場合はTurn数の降順をprimary sortとして適用する
 
 #### Scenario: Skill一覧を表示する
 
@@ -126,6 +133,12 @@ TUIはterminalの幅と高さに応じて一覧をviewport内へ表示しなけ�
 
 - **WHEN** terminal幅が複数paneまたは全columnの表示に不足する
 - **THEN** システムはSession名称と最終利用時刻などの主要metadataを残したcompact viewへ切り替え、rowを誤解を招く形で折り返さない
+
+#### Scenario: 行フォーカスのあるビューで上下移動を端で循環させる
+
+- **WHEN** userがModels、Skills、Sessions、またはdetail viewで`j`/`k`または上下キーを押し、一覧またはdetail rowの端を越える
+- **THEN** システムは反対側の端へwrapして表示する
+- **AND** OverviewとActivityでは、表示範囲の端で移動を停止する
 
 ### Requirement: warningとreload状態をTUI内で確認できる
 

@@ -45,12 +45,13 @@ go install github.com/xkumiyu/catsift/cmd/catsift@latest
 catsift
 ```
 
-ローカルのAgent利用状況を、次の4つのviewで確認できます。
+ローカルのAgent利用状況を、次の5つのviewで確認できます。
 
 | View | 表示内容 |
 | --- | --- |
-| Overview | 利用状況の合計と日別activity |
-| Models | providerおよびModelごとの利用状況と関連Session |
+| Overview | 利用状況の合計、Recent Activity、最近のSession、上位Skill/Model |
+| Activity | 日別または月別activity |
+| Models | providerおよびModelごとのToken usageと関連Session |
 | Skills | [Skill usage](#skill-usage-fields)、evidence state、関連Session |
 | Sessions | Session metadataと時系列のTurn詳細 |
 

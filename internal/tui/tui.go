@@ -29,6 +29,7 @@ type Route string
 
 const (
 	RouteOverview           Route = "overview"
+	RouteActivity           Route = "activity"
 	RouteModels             Route = "models"
 	RouteSkills             Route = "skills"
 	RouteSessions           Route = "sessions"
@@ -140,6 +141,7 @@ type State struct {
 	help              bool
 	sortMode          sortMode
 	history           []navigationContext
+	activityMonthly   bool
 	sourcePath        string
 	sourcePaths       map[usage.SourceKind]string
 	sourceFilterOpen  bool
@@ -166,11 +168,6 @@ var (
 	infoStyle     = lipgloss.NewStyle().Faint(true)
 	warningStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("11"))
 	selectedStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Background(lipgloss.Color("24"))
-)
-
-const (
-	overviewTwoColumnMinWidth = 100
-	overviewColumnGap         = 3
 )
 
 func NewState(input query.Input, filter query.Filter, reload ReloadFunc) *State {
@@ -266,10 +263,12 @@ func (state *State) updateKey(message tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "1":
 		state.setRoute(RouteOverview)
 	case "2":
-		state.setRoute(RouteModels)
+		state.setRoute(RouteActivity)
 	case "3":
-		state.setRoute(RouteSkills)
+		state.setRoute(RouteModels)
 	case "4":
+		state.setRoute(RouteSkills)
+	case "5":
 		state.setRoute(RouteSessions)
 	case "/":
 		if isSearchableRoute(state.Route) {
@@ -281,6 +280,11 @@ func (state *State) updateKey(message tea.KeyMsg) (tea.Model, tea.Cmd) {
 		state.periodInput = ""
 		state.Status = ""
 		state.clearPeriodNotice()
+	case "m":
+		if state.Route == RouteActivity {
+			state.activityMonthly = !state.activityMonthly
+			state.Selected, state.Offset = 0, 0
+		}
 	case "r":
 		return state, state.startReload()
 	case "o":
@@ -327,21 +331,21 @@ func (state *State) updateKey(message tea.KeyMsg) (tea.Model, tea.Cmd) {
 			state.cycleRoute(-1)
 		}
 	case "up", "k":
-		state.updateSelection(-1)
+		state.updateSelectionWrap(-1)
 	case "down", "j":
-		state.updateSelection(1)
+		state.updateSelectionWrap(1)
 	case "pgup":
 		state.updateSelection(-state.visibleHeight())
 	case "pgdown":
 		state.updateSelection(state.visibleHeight())
 	case "home":
-		if state.Route == RouteOverview {
+		if state.Route == RouteOverview || state.Route == RouteActivity {
 			state.scrollOverview(-state.rowCount())
 		} else {
 			state.Selected, state.Offset = 0, 0
 		}
 	case "end":
-		if state.Route == RouteOverview {
+		if state.Route == RouteOverview || state.Route == RouteActivity {
 			state.scrollOverview(state.rowCount())
 		} else {
 			state.Selected = state.rowCount() - 1
@@ -583,7 +587,9 @@ func (state *State) setRoute(route Route) {
 
 func sortOptions(route Route) []sortOption {
 	switch route {
-	case RouteModels, RouteSkills:
+	case RouteModels:
+		return []sortOption{{sortDefault, "Token Usage"}, {sortLastUsed, "Last Used"}, {sortName, "Name"}}
+	case RouteSkills:
 		return []sortOption{{sortDefault, "Usage"}, {sortLastUsed, "Last Used"}, {sortName, "Name"}}
 	case RouteSessions:
 		return []sortOption{{sortDefault, "Last Used"}, {sortName, "Name"}, {sortTurns, "Turns"}}
@@ -627,7 +633,7 @@ func (state *State) cycleSort() {
 }
 
 func (state *State) cycleRoute(delta int) {
-	routes := []Route{RouteOverview, RouteModels, RouteSkills, RouteSessions}
+	routes := []Route{RouteOverview, RouteActivity, RouteModels, RouteSkills, RouteSessions}
 	current := state.topRoute()
 	index := 0
 	for i, route := range routes {
@@ -1010,6 +1016,8 @@ func (state *State) rowCount() int {
 	switch state.Route {
 	case RouteOverview:
 		return len(state.overviewLines())
+	case RouteActivity:
+		return len(state.activityRows())
 	case RouteModels:
 		return len(state.filteredModels())
 	case RouteSkills:
@@ -1062,7 +1070,7 @@ func (state *State) frameBodyHeight() int {
 
 func (state *State) routePrefixLines() int {
 	switch state.Route {
-	case RouteModels, RouteSkills, RouteSessions:
+	case RouteActivity, RouteModels, RouteSkills, RouteSessions:
 		return 3
 	case RouteModelDetail, RouteSkillDetail:
 		return 6
@@ -1089,7 +1097,15 @@ func (state *State) sessionDetailPrefixLines() int {
 }
 
 func (state *State) updateSelection(delta int) {
-	if state.Route == RouteOverview {
+	state.updateSelectionBy(delta, false)
+}
+
+func (state *State) updateSelectionWrap(delta int) {
+	state.updateSelectionBy(delta, true)
+}
+
+func (state *State) updateSelectionBy(delta int, wrap bool) {
+	if state.Route == RouteOverview || state.Route == RouteActivity {
 		state.scrollOverview(delta)
 		return
 	}
@@ -1098,7 +1114,13 @@ func (state *State) updateSelection(delta int) {
 		state.Selected, state.Offset = 0, 0
 		return
 	}
-	state.Selected += delta
+	if wrap && delta < 0 && state.Selected == 0 {
+		state.Selected = count - 1
+	} else if wrap && delta > 0 && state.Selected == count-1 {
+		state.Selected = 0
+	} else {
+		state.Selected += delta
+	}
 	state.clampSelection()
 	visible := state.visibleHeight()
 	if state.Selected < state.Offset {
@@ -1303,9 +1325,10 @@ func (state *State) tabsLine() string {
 		name  string
 	}{
 		{key: "1", route: RouteOverview, name: "Overview"},
-		{key: "2", route: RouteModels, name: "Models"},
-		{key: "3", route: RouteSkills, name: "Skills"},
-		{key: "4", route: RouteSessions, name: "Sessions"},
+		{key: "2", route: RouteActivity, name: "Activity"},
+		{key: "3", route: RouteModels, name: "Models"},
+		{key: "4", route: RouteSkills, name: "Skills"},
+		{key: "5", route: RouteSessions, name: "Sessions"},
 	}
 	parts := make([]string, 0, len(routes))
 	active := state.topRoute()
@@ -1315,7 +1338,7 @@ func (state *State) tabsLine() string {
 	}
 	raw := strings.Join(parts, "  ")
 	if lipgloss.Width(raw) > width {
-		parts = []string{"[1] Ovr", "[2] Mdl", "[3] Skl", "[4] Ses"}
+		parts = []string{"[1] Ovr", "[2] Act", "[3] Mdl", "[4] Skl", "[5] Ses"}
 		for i, item := range routes {
 			if item.route == active {
 				parts[i] = "[" + item.key + "] *"
@@ -1340,20 +1363,22 @@ func (state *State) footerLines() []string {
 	case state.searching:
 		value = "Enter apply   Esc cancel"
 	case state.Route == RouteTurnDetail:
-		value = "b/Esc back   1-4 switch   ? help   q quit"
+		value = "b/Esc back   1-5 switch   ? help   q quit"
 	case state.isDetail():
-		value = "j/k scroll   b/Esc back   1-4 switch   ? help   q quit"
+		value = "j/k scroll   b/Esc back   1-5 switch   ? help   q quit"
 		if isSortableRoute(state.Route) {
-			value = "j/k scroll   s sort   b/Esc back   1-4 switch   ? help   q quit"
+			value = "j/k scroll   s sort   b/Esc back   1-5 switch   ? help   q quit"
 		}
 		if state.canOpenSelected() {
-			value = "j/k move   Enter open   b/Esc back   1-4 switch   ? help   q quit"
+			value = "j/k move   Enter open   b/Esc back   1-5 switch   ? help   q quit"
 			if isSortableRoute(state.Route) {
-				value = "j/k move   Enter open   s sort   b/Esc back   1-4 switch   ? help   q quit"
+				value = "j/k move   Enter open   s sort   b/Esc back   1-5 switch   ? help   q quit"
 			}
 		}
 	case state.Route == RouteOverview:
-		value = "j/k scroll   Home/End jump   d period   1-4 switch   o sources   r reload   ? help   q quit"
+		value = "j/k scroll   Home/End jump   d period   1-5 switch   o sources   r reload   ? help   q quit"
+	case state.Route == RouteActivity:
+		value = "j/k scroll   m daily/monthly   d period   1-5 switch   o sources   r reload   ? help   q quit"
 	case state.Route == RouteModels || state.Route == RouteSkills:
 		value = "j/k move   / search rows   s sort   f filter   d period   o sources   r reload   ? help   q quit"
 		if state.canOpenSelected() {
@@ -1382,10 +1407,10 @@ func (state *State) viewHelp() string {
 		titleStyle.Render(truncate("catsift / Help", width)),
 		"",
 		sectionStyle.Render("Navigation"),
-		"  1-4       switch Overview, Models, Skills, Sessions",
+		"  1-5       switch Overview, Activity, Models, Skills, Sessions",
 		"  Tab       next view",
 		"  Shift+Tab previous view",
-		"  j/k       move selection; scroll Overview",
+		"  j/k       move; focused rows wrap; scroll Overview",
 		"  Home/End  jump to beginning/end",
 		"  PgUp/PgDn scroll one page",
 		"  Enter     open detail",
@@ -1400,6 +1425,7 @@ func (state *State) viewHelp() string {
 		"  d         set period: all, N, YYYY-MM-DD[..YYYY-MM-DD]",
 		"  r         reload snapshot",
 		"  s         cycle list sort",
+		"  m         switch Activity daily/monthly",
 		"  c         clear TUI filters",
 		"  ?/Esc     close help",
 		"  q/Ctrl+C  quit",
@@ -1413,6 +1439,8 @@ func (state *State) viewRoute(height int) []string {
 	switch state.Route {
 	case RouteOverview:
 		return state.viewOverview(height)
+	case RouteActivity:
+		return state.viewActivity(height)
 	case RouteModels:
 		return state.viewModels(height)
 	case RouteSkills:
@@ -1448,38 +1476,76 @@ func (state *State) viewOverview(height int) []string {
 	return lines[start : start+height]
 }
 
+func (state *State) activityRows() []query.UsageTrend {
+	return state.ReadModel.Activity(state.activityMonthly)
+}
+
+func (state *State) activityLabel() string {
+	if state.activityMonthly {
+		return "Monthly"
+	}
+	return "Daily"
+}
+
+func (state *State) viewActivity(height int) []string {
+	rows := state.activityRows()
+	width := state.renderWidth()
+	lines := []string{
+		primaryListHeading("Activity ["+state.activityLabel()+"]", len(rows), state.Selected, width),
+		mutedStyle.Render("m switch daily/monthly"),
+	}
+	if len(rows) == 0 {
+		return append(lines, mutedStyle.Render("No activity in this scope."))
+	}
+	maxTurns := 1
+	for _, row := range rows {
+		if row.Turns > maxTurns {
+			maxTurns = row.Turns
+		}
+	}
+	barWidth := trendBarWidth(width)
+	lines = append(lines, renderTableHeader(width, activityTrendCells(width, nil, "", state.activityMonthly)))
+	rowHeight := height - len(lines)
+	if rowHeight < 1 {
+		rowHeight = 1
+	}
+	start, end := window(len(rows), state.Offset, rowHeight)
+	for index := start; index < end; index++ {
+		row := rows[index]
+		barLength := row.Turns * barWidth / maxTurns
+		if row.Turns > 0 && barLength == 0 {
+			barLength = 1
+		}
+		bar := strings.Repeat("#", barLength)
+		lines = append(lines, renderTableRow(width, false, activityTrendCells(width, &row, bar, state.activityMonthly)))
+	}
+	return fitBody(lines, height)
+}
+
 func (state *State) overviewLines() []string {
 	view := state.ReadModel.Overview
 	width := state.renderWidth()
 	lines := []string{titleStyle.Render("Overview"), ""}
 	activityLines := overviewActivityLines(view, width)
 	tokenLines := overviewTokenLines(view, width)
-	if width >= overviewTwoColumnMinWidth {
-		lines = append(lines, joinOverviewColumns(activityLines, tokenLines, width)...)
-	} else {
-		lines = append(lines, activityLines...)
+	lines = append(lines, activityLines...)
+	lines = append(lines, "")
+	lines = append(lines, tokenLines...)
+	if topModels := overviewTopModelsLines(state.ReadModel, width); len(topModels) > 0 {
 		lines = append(lines, "")
-		lines = append(lines, tokenLines...)
+		lines = append(lines, topModels...)
 	}
-
-	if len(view.Trend) > 0 {
-		lines = append(lines, "", sectionStyle.Render("Daily activity"))
-		maxTurns := 1
-		for _, point := range view.Trend {
-			if point.Turns > maxTurns {
-				maxTurns = point.Turns
-			}
-		}
-		barWidth := trendBarWidth(width)
-		lines = append(lines, renderTableHeader(width, trendCells(width, nil, "")))
-		for _, point := range view.Trend {
-			barLength := point.Turns * barWidth / maxTurns
-			if point.Turns > 0 && barLength == 0 {
-				barLength = 1
-			}
-			bar := strings.Repeat("#", barLength)
-			lines = append(lines, renderTableRow(width, false, trendCells(width, &point, bar)))
-		}
+	if activityPreview := overviewActivityPreview(view, width); len(activityPreview) > 0 {
+		lines = append(lines, "")
+		lines = append(lines, activityPreview...)
+	}
+	if recentSessions := overviewRecentSessionLines(state.ReadModel, width); len(recentSessions) > 0 {
+		lines = append(lines, "")
+		lines = append(lines, recentSessions...)
+	}
+	if topSkills := overviewTopSkillsLines(state.ReadModel, width); len(topSkills) > 0 {
+		lines = append(lines, "")
+		lines = append(lines, topSkills...)
 	}
 	periodInfo := state.periodInfoLines()
 	for _, group := range []struct {
@@ -1590,14 +1656,11 @@ func overviewActivityLines(view query.OverviewView, width int) []string {
 		{label: "Turns", value: formatInt(view.Turns)},
 		{label: "User Prompts", value: formatInt(view.UserPrompts)},
 		{label: "Tool Calls", value: formatInt(view.ToolCalls)},
-		{label: "By turn", value: formatInt(view.SkillUses)},
-		{label: "By session", value: formatInt(view.SkillUsesSession)},
+		{label: "Skill Uses", value: formatInt(view.SkillUses)},
 	}
 	metricLines := overviewMetricLines(metrics, width)
-	lines := []string{sectionStyle.Render("Activity")}
-	lines = append(lines, metricLines[:4]...)
-	lines = append(lines, "", sectionStyle.Render("Skill Usage"))
-	return append(lines, metricLines[4:]...)
+	lines := []string{sectionStyle.Render("Usage summary")}
+	return append(lines, metricLines...)
 }
 
 func overviewTokenLines(view query.OverviewView, width int) []string {
@@ -1621,6 +1684,111 @@ func overviewTokenLines(view query.OverviewView, width int) []string {
 	return append([]string{sectionStyle.Render("Token Usage")}, overviewMetricLines(metrics, width)...)
 }
 
+const (
+	overviewActivityDays         = 7
+	overviewSummaryNameMaxWidth  = 48
+	overviewSummaryValueMaxWidth = 16
+	overviewSummaryValueMinWidth = 8
+)
+
+func overviewActivityPreview(view query.OverviewView, width int) []string {
+	if len(view.Trend) == 0 {
+		return nil
+	}
+	start := len(view.Trend) - overviewActivityDays
+	if start < 0 {
+		start = 0
+	}
+	rows := view.Trend[start:]
+	maxTurns := 1
+	for _, row := range rows {
+		if row.Turns > maxTurns {
+			maxTurns = row.Turns
+		}
+	}
+	barWidth := trendBarWidth(width)
+	lines := []string{
+		sectionStyle.Render("Recent Activity"),
+		renderTableHeader(width, activityTrendCells(width, nil, "", false)),
+	}
+	for _, row := range rows {
+		barLength := row.Turns * barWidth / maxTurns
+		if row.Turns > 0 && barLength == 0 {
+			barLength = 1
+		}
+		bar := strings.Repeat("#", barLength)
+		lines = append(lines, renderTableRow(width, false, activityTrendCells(width, &row, bar, false)))
+	}
+	return lines
+}
+
+func overviewRecentSessionLines(model query.ReadModel, width int) []string {
+	if len(model.Sessions) == 0 {
+		return nil
+	}
+	lines := []string{sectionStyle.Render("Recent Sessions")}
+	limit := minInt(3, len(model.Sessions))
+	for _, row := range model.Sessions[:limit] {
+		label := sessionDisplayName(row.Title, row.ID)
+		if row.Aborted {
+			label = "! " + label
+		}
+		lines = append(lines, overviewSummaryRow(width, label, formatRelativeTime(row.EndedAt)))
+	}
+	return lines
+}
+
+func overviewTopSkillsLines(model query.ReadModel, width int) []string {
+	if len(model.Skills) == 0 {
+		return nil
+	}
+	lines := []string{sectionStyle.Render("Top Skills")}
+	limit := minInt(3, len(model.Skills))
+	for _, row := range model.Skills[:limit] {
+		lines = append(lines, overviewSummaryRow(width, row.Name, formatInt(row.Uses)+" uses"))
+	}
+	return lines
+}
+
+func overviewTopModelsLines(model query.ReadModel, width int) []string {
+	if len(model.Models) == 0 {
+		return nil
+	}
+	lines := []string{sectionStyle.Render("Top Models")}
+	limit := minInt(3, len(model.Models))
+	for _, row := range model.Models[:limit] {
+		name := row.Model.Provider + "/" + row.Model.Name
+		value := formatTokenTotal(row.TokenUsage, row.TokenUsageAvailable) + " tokens"
+		if !row.TokenUsageAvailable {
+			value = formatInt(row.Turns) + " turns"
+		}
+		lines = append(lines, overviewSummaryRow(width, name, value))
+	}
+	return lines
+}
+
+func overviewSummaryRow(width int, name, detail string) string {
+	available := maxInt(1, width-4)
+	valueWidth := minInt(overviewSummaryValueMaxWidth, maxInt(overviewSummaryValueMinWidth, available/3))
+	if valueWidth >= available {
+		valueWidth = maxInt(1, available/2)
+	}
+	nameWidth := available - valueWidth
+	if nameWidth > overviewSummaryNameMaxWidth {
+		nameWidth = overviewSummaryNameMaxWidth
+	}
+	if nameWidth < 1 {
+		nameWidth = 1
+	}
+	nameValue := truncate(safeDisplay(name), nameWidth)
+	detailValue := truncate(safeDisplay(detail), valueWidth)
+	line := "  " + padRightDisplay(identityStyle.Render(nameValue), nameWidth) + "  " + padLeftDisplay(detailValue, valueWidth)
+	if lipgloss.Width(line) > width {
+		return ansi.Truncate(line, width, "…")
+	}
+	return line
+}
+
 type overviewMetricSpec struct {
 	label  string
 	value  string
@@ -1637,26 +1805,6 @@ func overviewMetricLines(metrics []overviewMetricSpec, width int) []string {
 	lines := make([]string, len(metrics))
 	for index, metric := range metrics {
 		lines[index] = overviewMetric(metric.label, metric.value, metric.indent, labelWidth, valueWidth, width)
-	}
-	return lines
-}
-
-func joinOverviewColumns(left, right []string, width int) []string {
-	leftWidth := (width - overviewColumnGap) / 2
-	rightWidth := width - overviewColumnGap - leftWidth
-	lineCount := maxInt(len(left), len(right))
-	lines := make([]string, 0, lineCount)
-	for i := 0; i < lineCount; i++ {
-		leftValue, rightValue := "", ""
-		if i < len(left) {
-			leftValue = left[i]
-		}
-		if i < len(right) {
-			rightValue = right[i]
-		}
-		lines = append(lines,
-			padRightDisplay(leftValue, leftWidth)+strings.Repeat(" ", overviewColumnGap)+padRightDisplay(rightValue, rightWidth),
-		)
 	}
 	return lines
 }
@@ -1904,12 +2052,27 @@ func trendBarWidth(width int) int {
 	}
 }
 
-func trendCells(width int, row *query.UsageTrend, bar string) []tableCell {
-	barWidth := trendBarWidth(width)
-	if row == nil {
-		return []tableCell{{value: "DATE", width: 8}, {value: "ACTIVITY", width: barWidth}, {value: "TURNS", width: 7, right: true}, {value: "SESSIONS", width: 9, right: true}}
+func activityTrendCells(width int, row *query.UsageTrend, bar string, monthly bool) []tableCell {
+	dateWidth := 10
+	date := "DATE"
+	activity, turns, sessions := "ACTIVITY", "TURNS", "SESSIONS"
+	if monthly {
+		dateWidth = 7
 	}
-	return []tableCell{{value: row.Date.Format("01-02"), width: 8}, {value: bar, width: barWidth}, {value: formatInt(row.Turns), width: 7, right: true}, {value: formatInt(row.Sessions), width: 9, right: true}}
+	if row != nil {
+		if monthly {
+			date = row.Date.Format("2006-01")
+		} else {
+			date = row.Date.Format("2006-01-02")
+		}
+		activity, turns, sessions = bar, formatInt(row.Turns), formatInt(row.Sessions)
+	}
+	return []tableCell{
+		{value: date, width: dateWidth},
+		{value: activity, width: trendBarWidth(width)},
+		{value: turns, width: 7, right: true},
+		{value: sessions, width: 9, right: true},
+	}
 }
 
 func (state *State) periodInfoLines() []string {
@@ -2409,6 +2572,13 @@ func formatCompactInt(value int64) string {
 
 func maxInt(left, right int) int {
 	if left > right {
+		return left
+	}
+	return right
+}
+
+func minInt(left, right int) int {
+	if left < right {
 		return left
 	}
 	return right

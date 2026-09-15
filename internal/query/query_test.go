@@ -56,7 +56,7 @@ func TestBuildReadModelFiltersAndSortsSyntheticSnapshotDeterministically(t *test
 	if model.Overview.TokenUsage.TotalTokens != 15 {
 		t.Fatalf("overview token usage = %#v", model.Overview.TokenUsage)
 	}
-	if len(model.Models) != 3 || model.Models[0].Model != usage.UnknownModel() || model.Models[2].Model != usage.NewModelRef("codex", "model-a") {
+	if len(model.Models) != 3 || model.Models[0].Model != usage.NewModelRef("codex", "model-b") || model.Models[1].Model != usage.UnknownModel() || model.Models[2].Model != usage.NewModelRef("codex", "model-a") {
 		t.Fatalf("models = %#v", model.Models)
 	}
 	if len(model.Sessions) != 2 || model.Sessions[0].Key == model.Sessions[1].Key {
@@ -128,6 +128,43 @@ func TestRowsUseLastUsedAsAggregateTieBreaker(t *testing.T) {
 	})
 	if got := skills[0].Name; got != "beta" {
 		t.Fatalf("skill tie-break = %q, want newer skill first", got)
+	}
+}
+
+func TestModelRowsPreferTokenUsage(t *testing.T) {
+	models := modelRows(map[string]*modelAccumulator{
+		"turn-heavy": {
+			model:    usage.NewModelRef("openai", "turn-heavy"),
+			sessions: map[string]struct{}{"session": {}},
+			turns:    map[string]struct{}{"turn-1": {}, "turn-2": {}},
+			tokens:   usage.TokenUsage{TotalTokens: 100},
+			tokenSet: true,
+		},
+		"token-heavy": {
+			model:    usage.NewModelRef("openai", "token-heavy"),
+			sessions: map[string]struct{}{"session": {}},
+			turns:    map[string]struct{}{"turn-1": {}},
+			tokens:   usage.TokenUsage{TotalTokens: 1_000},
+			tokenSet: true,
+		},
+	})
+	if got := models[0].Model.Name; got != "token-heavy" {
+		t.Fatalf("model usage order = %q, want token-heavy first", got)
+	}
+	fallback := modelRows(map[string]*modelAccumulator{
+		"few-turns": {
+			model:    usage.NewModelRef("ctx", "few-turns"),
+			sessions: map[string]struct{}{"session": {}},
+			turns:    map[string]struct{}{"turn-1": {}},
+		},
+		"many-turns": {
+			model:    usage.NewModelRef("ctx", "many-turns"),
+			sessions: map[string]struct{}{"session": {}},
+			turns:    map[string]struct{}{"turn-1": {}, "turn-2": {}},
+		},
+	})
+	if got := fallback[0].Model.Name; got != "many-turns" {
+		t.Fatalf("token-unavailable model order = %q, want many-turns first", got)
 	}
 }
 
@@ -243,6 +280,40 @@ func TestBuildOverviewTrendUsesActualPeriodBounds(t *testing.T) {
 		if !model.Overview.Trend[index].Date.Equal(wantDate) {
 			t.Fatalf("trend[%d].Date = %v, want %v", index, model.Overview.Trend[index].Date, wantDate)
 		}
+	}
+}
+
+func TestReadModelActivityMonthlyDeduplicatesSessions(t *testing.T) {
+	source := usage.NewCodexSourceRef("fixture", 1, "1")
+	model := usage.NewModelRef("codex", "gpt-example")
+	turn := func(id string, ordinal int, started time.Time) usage.Turn {
+		value := usage.NewTurn("session", id, ordinal, source)
+		value.StartedAt = started
+		value.EndedAt = started.Add(time.Minute)
+		value.UserPrompts = 1
+		value.ObserveModelAt(model, started, source)
+		value.AddTokenUsageForModelAt(model, started, usage.TokenUsage{TotalTokens: 10})
+		return value
+	}
+	readModel := Build(Input{
+		Turns: []usage.Turn{
+			turn("jan-1", 1, time.Date(2026, 1, 2, 10, 0, 0, 0, time.UTC)),
+			turn("jan-2", 2, time.Date(2026, 1, 3, 10, 0, 0, 0, time.UTC)),
+			turn("feb-1", 3, time.Date(2026, 2, 1, 10, 0, 0, 0, time.UTC)),
+		},
+		Sessions: []usage.Session{usage.NewSession("session", source)},
+		Source:   usage.SourceCodex,
+	}, Filter{Source: usage.SourceCodex})
+
+	rows := readModel.Activity(true)
+	if len(rows) != 2 {
+		t.Fatalf("monthly activity rows = %#v, want two months", rows)
+	}
+	if !rows[0].Date.Equal(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)) || rows[0].Sessions != 1 || rows[0].Turns != 2 || rows[0].TokenUsage.TotalTokens != 20 {
+		t.Fatalf("January activity = %#v", rows[0])
+	}
+	if !rows[1].Date.Equal(time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)) || rows[1].Sessions != 1 || rows[1].Turns != 1 || rows[1].TokenUsage.TotalTokens != 10 {
+		t.Fatalf("February activity = %#v", rows[1])
 	}
 }
 

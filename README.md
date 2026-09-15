@@ -49,8 +49,9 @@ Explore local agent usage with the following views:
 
 | View | Shows |
 | --- | --- |
-| Overview | Usage totals and daily activity |
-| Models | Usage by provider and model, with related sessions |
+| Overview | Usage totals, recent activity, recent sessions, and top skills/models |
+| Activity | Daily or monthly activity |
+| Models | Token usage by provider and model, with related sessions |
 | Skills | [Skill usage](#skill-usage-fields), evidence state, and related sessions |
 | Sessions | Session metadata and chronological turn details |
 

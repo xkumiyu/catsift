@@ -199,6 +199,7 @@ type TurnSummary struct {
 	TokenUsageAvailable bool             `json:"token_usage_available"`
 	Tools               []string         `json:"tools,omitempty"`
 	Skills              []string         `json:"skills,omitempty"`
+	activityDate        time.Time
 }
 
 // ReadModel is the complete safe model consumed by renderers. Detail maps
@@ -367,6 +368,83 @@ func (model ReadModel) SkillDetail(name string) (SkillDetail, bool) {
 func (model ReadModel) SessionDetail(key string) (SessionDetail, bool) {
 	value, ok := model.sessionDetails[key]
 	return value, ok
+}
+
+// Activity returns the overview trend at daily or monthly granularity. Monthly
+// session counts are deduplicated from the selected session turn details rather
+// than summed from daily rows.
+func (model ReadModel) Activity(monthly bool) []UsageTrend {
+	daily := append([]UsageTrend(nil), model.Overview.Trend...)
+	if !monthly {
+		return daily
+	}
+
+	values := make(map[time.Time]*monthlyActivityAccumulator)
+	for _, point := range daily {
+		month := monthBucket(point.Date)
+		current := values[month]
+		if current == nil {
+			current = &monthlyActivityAccumulator{date: month, sessions: make(map[string]struct{})}
+			values[month] = current
+		}
+		current.turns += point.Turns
+		current.prompts += point.UserPrompts
+		current.tools += point.ToolCalls
+		current.skills += point.SkillUses
+		current.tokens.Add(point.TokenUsage)
+		current.tokenAvailable = current.tokenAvailable || point.TokenUsageAvailable
+	}
+	for key, detail := range model.sessionDetails {
+		for _, turn := range detail.Turns {
+			if turn.activityDate.IsZero() {
+				continue
+			}
+			month := monthBucket(turn.activityDate)
+			current := values[month]
+			if current == nil {
+				current = &monthlyActivityAccumulator{date: month, sessions: make(map[string]struct{})}
+				values[month] = current
+			}
+			current.sessions[key] = struct{}{}
+		}
+	}
+
+	months := make([]time.Time, 0, len(values))
+	for month := range values {
+		months = append(months, month)
+	}
+	sort.Slice(months, func(i, j int) bool { return months[i].Before(months[j]) })
+	result := make([]UsageTrend, 0, len(months))
+	for _, month := range months {
+		current := values[month]
+		result = append(result, UsageTrend{
+			Date:                current.date,
+			Sessions:            len(current.sessions),
+			Turns:               current.turns,
+			UserPrompts:         current.prompts,
+			ToolCalls:           current.tools,
+			SkillUses:           current.skills,
+			TokenUsage:          current.tokens,
+			TokenUsageAvailable: current.tokenAvailable,
+		})
+	}
+	return result
+}
+
+type monthlyActivityAccumulator struct {
+	date           time.Time
+	sessions       map[string]struct{}
+	turns          int
+	prompts        int
+	tools          int
+	skills         int
+	tokens         usage.TokenUsage
+	tokenAvailable bool
+}
+
+func monthBucket(when time.Time) time.Time {
+	when = when.UTC()
+	return time.Date(when.Year(), when.Month(), 1, 0, 0, 0, 0, time.UTC)
 }
 
 type selectedTurn struct {
@@ -1173,7 +1251,13 @@ func modelRows(values map[string]*modelAccumulator) []ModelSummary {
 		result = append(result, ModelSummary{Model: value.model, Sessions: len(value.sessions), Turns: len(value.turns), UserPrompts: value.prompts, ToolCalls: value.tools, SkillUses: value.skills, TokenUsage: value.tokens, TokenUsageAvailable: value.tokenSet, FirstUsed: value.first, LastUsed: value.last})
 	}
 	sort.Slice(result, func(i, j int) bool {
-		if result[i].Turns != result[j].Turns {
+		if result[i].TokenUsageAvailable != result[j].TokenUsageAvailable {
+			return result[i].TokenUsageAvailable
+		}
+		if result[i].TokenUsageAvailable && result[i].TokenUsage.TotalTokens != result[j].TokenUsage.TotalTokens {
+			return result[i].TokenUsage.TotalTokens > result[j].TokenUsage.TotalTokens
+		}
+		if !result[i].TokenUsageAvailable && result[i].Turns != result[j].Turns {
 			return result[i].Turns > result[j].Turns
 		}
 		if result[i].Sessions != result[j].Sessions {
@@ -1527,7 +1611,7 @@ func (model *ReadModel) buildDetails(index *sessionIndex, sessionKeys map[string
 			for _, use := range usage.MergeSkillEvidence(turn.SkillEvidence) {
 				skillNames[use.SkillName] = struct{}{}
 			}
-			detail.Turns = append(detail.Turns, TurnSummary{ID: turn.ID, Ordinal: turn.Ordinal, StartedAt: turn.StartedAt, EndedAt: turn.EndedAt, Aborted: turn.Aborted, Models: modelsForTurn(turn), TokenUsage: tokenUsageForTurn(turn), TokenUsageAvailable: len(tokenEvents(turn)) > 0, Tools: sortedStrings(toolNames), Skills: sortedStrings(skillNames)})
+			detail.Turns = append(detail.Turns, TurnSummary{ID: turn.ID, Ordinal: turn.Ordinal, StartedAt: turn.StartedAt, EndedAt: turn.EndedAt, Aborted: turn.Aborted, Models: modelsForTurn(turn), TokenUsage: tokenUsageForTurn(turn), TokenUsageAvailable: len(tokenEvents(turn)) > 0, Tools: sortedStrings(toolNames), Skills: sortedStrings(skillNames), activityDate: turnBucket(turn)})
 		}
 		model.sessionDetails[session.Key] = detail
 	}
