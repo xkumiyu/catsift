@@ -12,6 +12,7 @@ import (
 	"time"
 	"unicode"
 
+	"charm.land/lipgloss/v2"
 	"github.com/xkumiyu/catsift/internal/aggregate"
 	"github.com/xkumiyu/catsift/internal/cache"
 	"github.com/xkumiyu/catsift/internal/codex"
@@ -28,13 +29,8 @@ import (
 const usageText = `Usage:
   catsift [options]
   catsift <command> [options]
-  catsift --help
-  catsift --version
 
-Default:
-  In an interactive terminal, catsift opens the read-only TUI.
-  Explore model, skill, and session details from the Overview.
-  Use stats, activity, models, tools, skills, or sessions for non-interactive reports.
+Run catsift without a command in an interactive terminal to open the read-only TUI.
 
 Commands:
   stats     Show an overview of agent usage
@@ -44,17 +40,12 @@ Commands:
   skills    Show skill usage and evidence state
   sessions  Show session usage and details
 
-Usage options:
+Options:
   --source SOURCE   codex, ctx, or opencode; repeatable or comma-separated (default: codex, opencode)
   --verbose         Show input/cache diagnostics and TUI source-load timings
   --strict-input    Exit non-zero when input records are skipped
-
-Report options:
-  See "catsift stats --help", "catsift activity --help", "catsift models --help", "catsift tools --help", "catsift skills --help", or "catsift sessions --help".
-
-Options:
-  --help       Show this help
-  --version    Show the catsift version
+  --help            Show this help
+  --version         Show the catsift version
 
 Run "catsift <command> --help" for command-specific options.
 `
@@ -211,6 +202,182 @@ Keys:
 
 const dateLayout = "2006-01-02"
 const usageExplorerKind = "__usage_explorer__"
+
+var (
+	helpHeadingStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("12"))
+	helpCommandStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("14"))
+	helpOptionStyle  = helpCommandStyle
+	helpMutedStyle   = lipgloss.NewStyle().Faint(true)
+)
+
+func renderHelp(text string, capabilities output.TerminalCapabilities) string {
+	if !capabilities.ColorsEnabled() {
+		return text
+	}
+	lines := strings.Split(text, "\n")
+	inUsage, inCommands, inOptions, inDetail := false, false, false, false
+	for index, line := range lines {
+		if strings.HasPrefix(line, "Usage:") {
+			lines[index] = helpHeadingStyle.Render("Usage:") + styleHelpInvocation(strings.TrimPrefix(line, "Usage:"))
+			inUsage, inCommands, inOptions, inDetail = strings.TrimSpace(strings.TrimPrefix(line, "Usage:")) == "", false, false, false
+			continue
+		}
+		switch line {
+		case "Commands:":
+			lines[index] = helpHeadingStyle.Render(line)
+			inUsage, inCommands, inOptions, inDetail = false, true, false, false
+			continue
+		case "Options:":
+			lines[index] = helpHeadingStyle.Render(line)
+			inUsage, inCommands, inOptions, inDetail = false, false, true, false
+			continue
+		case "Detail:":
+			lines[index] = helpHeadingStyle.Render(line)
+			inUsage, inCommands, inOptions, inDetail = false, false, false, true
+			continue
+		case "Keys:":
+			lines[index] = helpHeadingStyle.Render(line)
+			inUsage, inCommands, inOptions, inDetail = false, false, false, false
+			continue
+		}
+		if strings.TrimSpace(line) == "" {
+			inUsage, inCommands, inOptions, inDetail = false, false, false, false
+			continue
+		}
+		trimmed := strings.TrimLeft(line, " \t")
+		if inUsage && strings.HasPrefix(trimmed, "catsift ") {
+			lines[index] = styleHelpInvocation(line)
+		} else if inCommands {
+			lines[index] = styleHelpNamedLine(line, helpCommandStyle)
+		} else if inOptions && strings.HasPrefix(trimmed, "-") {
+			lines[index] = styleHelpOptionLine(line)
+		} else if inDetail && strings.HasPrefix(trimmed, "catsift ") {
+			lines[index] = styleHelpInvocation(line)
+		} else {
+			lines[index] = styleHelpMuted(line)
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func styleHelpNamedLine(line string, style lipgloss.Style) string {
+	trimmed := strings.TrimLeft(line, " \t")
+	nameEnd := strings.IndexFunc(trimmed, unicode.IsSpace)
+	if nameEnd < 0 {
+		nameEnd = len(trimmed)
+	}
+	indent := len(line) - len(trimmed)
+	return line[:indent] + style.Render(trimmed[:nameEnd]) + styleHelpMuted(trimmed[nameEnd:])
+}
+
+func styleHelpOptionLine(line string) string {
+	trimmed := strings.TrimLeft(line, " \t")
+	nameEnd := strings.IndexFunc(trimmed, unicode.IsSpace)
+	if nameEnd < 0 {
+		nameEnd = len(trimmed)
+	}
+	indent := len(line) - len(trimmed)
+	suffix := trimmed[nameEnd:]
+	valueStart := strings.IndexFunc(suffix, func(r rune) bool { return !unicode.IsSpace(r) })
+	if valueStart < 0 {
+		return line[:indent] + helpOptionStyle.Render(trimmed[:nameEnd]) + styleHelpMuted(suffix)
+	}
+	valueEnd := strings.IndexFunc(suffix[valueStart:], unicode.IsSpace)
+	if valueEnd < 0 {
+		valueEnd = len(suffix)
+	} else {
+		valueEnd += valueStart
+	}
+	value := suffix[valueStart:valueEnd]
+	if !isHelpPlaceholder(value) {
+		return line[:indent] + helpOptionStyle.Render(trimmed[:nameEnd]) + styleHelpMuted(suffix)
+	}
+	return line[:indent] + helpOptionStyle.Render(trimmed[:nameEnd]) + suffix[:valueStart] + helpMutedStyle.Render(value) + styleHelpMuted(suffix[valueEnd:])
+}
+
+func isHelpPlaceholder(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, r := range value {
+		if (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '_' && r != '-' && r != '/' {
+			return false
+		}
+	}
+	return true
+}
+
+func styleHelpInvocation(line string) string {
+	trimmed := strings.TrimLeft(line, " \t")
+	indent := len(line) - len(trimmed)
+	const commandPrefix = "catsift "
+	if !strings.HasPrefix(trimmed, commandPrefix) {
+		return line[:indent] + styleHelpMuted(trimmed)
+	}
+	commands := []string{"stats", "activity", "models", "tools", "skills", "sessions"}
+	for _, command := range commands {
+		if trimmed == commandPrefix+command || strings.HasPrefix(trimmed, commandPrefix+command+" ") {
+			nameEnd := len(commandPrefix) + len(command)
+			return line[:indent] + helpCommandStyle.Render("catsift") + " " + helpCommandStyle.Render(command) + styleHelpMuted(trimmed[nameEnd:])
+		}
+	}
+	return line[:indent] + helpCommandStyle.Render("catsift") + styleHelpMuted(trimmed[len("catsift"):])
+}
+
+func styleHelpMuted(text string) string {
+	var styled strings.Builder
+	position := 0
+	for position < len(text) {
+		start, end := nextHelpMutedSpan(text, position)
+		if start < 0 {
+			break
+		}
+		styled.WriteString(text[position:start])
+		styled.WriteString(helpMutedStyle.Render(text[start:end]))
+		position = end
+	}
+	if position == 0 {
+		return text
+	}
+	styled.WriteString(text[position:])
+	return styled.String()
+}
+
+func nextHelpMutedSpan(text string, from int) (int, int) {
+	for index := from; index < len(text); index++ {
+		var close byte
+		switch text[index] {
+		case '[':
+			close = ']'
+		case '<':
+			close = '>'
+		case '(':
+			relativeEnd := strings.IndexByte(text[index+1:], ')')
+			if relativeEnd < 0 {
+				continue
+			}
+			end := index + 1 + relativeEnd
+			if strings.Contains(strings.ToLower(text[index+1:end]), "default") {
+				return index, end + 1
+			}
+		default:
+			continue
+		}
+		if end := strings.IndexByte(text[index+1:], close); end >= 0 {
+			return index, index + 2 + end
+		}
+	}
+	return -1, -1
+}
+
+func writeHelp(w io.Writer, text string) {
+	_, noColor := os.LookupEnv("NO_COLOR")
+	capabilities := output.TerminalCapabilities{ColorMode: output.ColorAuto, NoColor: noColor}
+	if file, ok := w.(*os.File); ok {
+		capabilities = output.DetectCapabilities(file, output.ColorAuto, noColor)
+	}
+	_, _ = io.WriteString(w, renderHelp(text, capabilities))
+}
 
 func commandUsage(kind string) string {
 	switch kind {
@@ -785,14 +952,14 @@ func runWithCtxLoader(args []string, stdout, stderr io.Writer, loadCtx ctxHistor
 			requested := strings.ToLower(args[1])
 			if requested == "stats" || requested == "activity" || requested == "models" || requested == "tools" || requested == "skills" || requested == "sessions" {
 				if len(args) > 2 && strings.EqualFold(args[2], "detail") && isDetailKind(requested) {
-					_, _ = io.WriteString(stdout, detailUsageText(requested))
+					writeHelp(stdout, detailUsageText(requested))
 					return 0
 				}
-				_, _ = io.WriteString(stdout, commandUsage(requested))
+				writeHelp(stdout, commandUsage(requested))
 				return 0
 			}
 		}
-		_, _ = io.WriteString(stdout, usageText)
+		writeHelp(stdout, usageText)
 		return 0
 	}
 	if kind == "--version" {
@@ -801,7 +968,7 @@ func runWithCtxLoader(args []string, stdout, stderr io.Writer, loadCtx ctxHistor
 	}
 	if kind != "stats" && kind != "activity" && kind != "models" && kind != "tools" && kind != "skills" && kind != "sessions" && kind != usageExplorerKind {
 		diagnostics.errorf("unknown command %q", args[0])
-		_, _ = io.WriteString(stderr, "\n"+usageText)
+		writeHelp(stderr, "\n"+usageText)
 		return 2
 	}
 	if len(args) > 1 && strings.EqualFold(args[1], "detail") && !isDetailKind(kind) {
@@ -815,9 +982,9 @@ func runWithCtxLoader(args []string, stdout, stderr io.Writer, loadCtx ctxHistor
 	}
 	if hasOption(commandArgs, "--help") || hasOption(commandArgs, "-h") {
 		if detailMode {
-			_, _ = io.WriteString(stdout, detailUsageText(kind))
+			writeHelp(stdout, detailUsageText(kind))
 		} else {
-			_, _ = io.WriteString(stdout, commandUsage(kind))
+			writeHelp(stdout, commandUsage(kind))
 		}
 		return 0
 	}
@@ -834,10 +1001,10 @@ func runWithCtxLoader(args []string, stdout, stderr io.Writer, loadCtx ctxHistor
 	flags.SetOutput(stderr)
 	flags.Usage = func() {
 		if detailMode {
-			_, _ = fmt.Fprint(stderr, detailUsageText(kind))
+			writeHelp(stderr, detailUsageText(kind))
 			return
 		}
-		_, _ = fmt.Fprint(stderr, commandUsage(kind))
+		writeHelp(stderr, commandUsage(kind))
 	}
 	var sourceValues sourceList
 	flags.Var(&sourceValues, "source", "history sources (repeatable or comma-separated)")

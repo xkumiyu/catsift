@@ -1268,12 +1268,17 @@ func TestRunHelpIsScopedToCommand(t *testing.T) {
 	if code := run([]string{"--help"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("root help exit=%d stderr=%s", code, stderr.String())
 	}
-	for _, want := range []string{"Usage:", "catsift [options]", "catsift <command> [options]", "--source SOURCE", "Report options", "stats", "tools", "skills", "--version"} {
+	for _, want := range []string{"Usage:", "catsift [options]", "catsift <command> [options]", "Options:", "--source SOURCE", "--verbose", "--strict-input", "stats", "tools", "skills", "  --help            Show this help", "  --version         Show the catsift version", "Run \"catsift <command> --help\" for command-specific options."} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Errorf("root help missing %q: %s", want, stdout.String())
 		}
 	}
-	for _, unwanted := range []string{"--days", "--from", "--to", "--layer", "--strict", "--json", "catsift tui", "tui       Explore usage interactively"} {
+	for _, unwanted := range []string{"Usage options:", "Report options:", "Default:", "  catsift --help\n", "  catsift --version\n", "catsift tui", "tui       Explore usage interactively"} {
+		if strings.Contains(stdout.String(), unwanted) {
+			t.Errorf("root help contains obsolete section or usage %q: %s", unwanted, stdout.String())
+		}
+	}
+	for _, unwanted := range []string{"--days", "--from", "--to", "--layer", "--strict", "--json"} {
 		if helpContainsOption(stdout.String(), unwanted) {
 			t.Errorf("root help contains command option %q: %s", unwanted, stdout.String())
 		}
@@ -1359,6 +1364,55 @@ func TestRunHelpDocumentsDefaults(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestRenderHelpAddsTerminalStyles(t *testing.T) {
+	colored := renderHelp(usageText, output.TerminalCapabilities{ColorMode: output.ColorAlways})
+	if !strings.Contains(colored, "\x1b[") {
+		t.Fatalf("colored help contains no ANSI styles: %q", colored)
+	}
+	if helpCommandStyle.Render("name") != helpOptionStyle.Render("name") {
+		t.Fatalf("command and option styles differ")
+	}
+	for _, want := range []string{
+		helpCommandStyle.Render("catsift"),
+		helpHeadingStyle.Render("Commands:"),
+		helpCommandStyle.Render("stats"),
+		helpOptionStyle.Render("--source"),
+		helpMutedStyle.Render("SOURCE"),
+		helpMutedStyle.Render("[options]"),
+		helpMutedStyle.Render("<command>"),
+		helpMutedStyle.Render("(default: codex, opencode)"),
+	} {
+		if !strings.Contains(colored, want) {
+			t.Errorf("colored help missing styled text %q: %q", want, colored)
+		}
+	}
+	if strings.Contains(colored, "\x1b[1m") || strings.Contains(colored, "\x1b[1;") {
+		t.Fatalf("colored help contains bold styling: %q", colored)
+	}
+	commandHelp := renderHelp(statsUsageText, output.TerminalCapabilities{ColorMode: output.ColorAlways})
+	for _, want := range []string{
+		helpCommandStyle.Render("stats"),
+		helpOptionStyle.Render("--days"),
+		helpMutedStyle.Render("(N >= 1; default: all time)"),
+	} {
+		if !strings.Contains(commandHelp, want) {
+			t.Errorf("command help missing styled text %q: %q", want, commandHelp)
+		}
+	}
+
+	plain := renderHelp(usageText, output.TerminalCapabilities{ColorMode: output.ColorNever})
+	if plain != usageText {
+		t.Fatalf("plain help changed: got %q, want %q", plain, usageText)
+	}
+}
+
+func TestRenderHelpRespectsNoColor(t *testing.T) {
+	got := renderHelp(usageText, output.TerminalCapabilities{ColorMode: output.ColorAuto, IsTTY: true, NoColor: true})
+	if got != usageText {
+		t.Fatalf("NO_COLOR help changed: got %q, want %q", got, usageText)
 	}
 }
 
