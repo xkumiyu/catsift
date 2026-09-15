@@ -89,12 +89,17 @@ Run a subcommand to execute CatSift in CLI mode.
 | Command | Description |
 | --- | --- |
 | `catsift stats` | Show an overview of agent usage |
+| `catsift activity` | Show daily activity |
+| `catsift models` | Show model usage and details |
 | `catsift tools` | Show tool usage by canonical name |
 | `catsift skills` | Show skill usage and evidence state |
+| `catsift sessions` | Show session usage and details |
 
-The `--json` option emits machine-readable output.
+Use a command's `detail` subcommand to view one model, skill, or session.
 
-Filter usage by period. See each command's `--help` output for details.
+Use `--json` to emit machine-readable output.
+
+See each command's `--help` output for details.
 
 ### Usage overview
 
@@ -122,7 +127,7 @@ Token Usage
   Total Tokens                3.16B
     Input Tokens              3.14B
       Cached Tokens           3.06B
-    Output Tokens              13.3M
+    Output Tokens             13.3M
       Reasoning Tokens        6.40M
 ```
 
@@ -153,26 +158,6 @@ openspec-apply-change             2         1        0      3
 2 skills, 9 uses total
 ```
 
-### Tool usage
-
-```sh
-catsift tools
-```
-
-```text
-TOOL USAGE
-Source: Codex (~/.codex), OpenCode (~/.local/share/opencode)
-Agents: Codex, OpenCode
-Period: 2026-01-01 to 2026-01-31
-Layer: effective
-
-Tool       Calls  Failures  Last Used
-────────────────────────────────────────────────────
-shell          42         0  2026-01-31 12:34 JST
-
-1 tool, 42 calls total
-```
-
 ### Skill command options
 
 #### Skill usage view
@@ -190,6 +175,12 @@ The default `--view auto` selects `compact`, `mode`, or `all` from the terminal 
 
 Use `--group-by` to group usage by turn or session, and `--strict` to include
 only `Confirmed` usage.
+
+Use `skills detail NAME` to show one Skill's deduplicated detail and related sessions:
+
+```sh
+catsift skills detail review
+```
 
 #### Unused skills
 

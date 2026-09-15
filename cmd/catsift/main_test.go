@@ -308,6 +308,290 @@ func TestRunVersionFlag(t *testing.T) {
 	}
 }
 
+func TestRunListsCLIReadModelCommandsAndScopedOptions(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"--help"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("root help exit=%d stderr=%q", code, stderr.String())
+	}
+	for _, want := range []string{"activity", "models", "sessions"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Errorf("root help missing %q: %s", want, stdout.String())
+		}
+	}
+
+	for _, test := range []struct {
+		args []string
+		want string
+	}{
+		{args: []string{"help", "models"}, want: "catsift models detail PROVIDER/NAME"},
+		{args: []string{"help", "sessions"}, want: "catsift sessions detail ID"},
+		{args: []string{"help", "activity"}, want: "Usage: catsift activity"},
+		{args: []string{"help", "skills"}, want: "catsift skills detail NAME"},
+		{args: []string{"help", "stats"}, want: "Usage: catsift stats"},
+		{args: []string{"models", "detail", "--help"}, want: "Usage: catsift models detail PROVIDER/NAME"},
+		{args: []string{"sessions", "detail", "--help"}, want: "Usage: catsift sessions detail ID"},
+		{args: []string{"help", "skills", "detail"}, want: "Usage: catsift skills detail NAME"},
+	} {
+		stdout.Reset()
+		stderr.Reset()
+		if code := run(test.args, &stdout, &stderr); code != 0 || !strings.Contains(stdout.String(), test.want) {
+			t.Fatalf("args=%v exit=%d stdout=%q stderr=%q, want %q", test.args, code, stdout.String(), stderr.String(), test.want)
+		}
+		if strings.Contains(stdout.String(), "--trend") {
+			t.Fatalf("args=%v still documents removed --trend option: %q", test.args, stdout.String())
+		}
+	}
+}
+
+func TestRunRejectsReadModelOptionsOutsideTheirCommands(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "removed trend option", args: []string{"stats", "--trend"}, want: "flag provided but not defined: -trend"},
+		{name: "model option removed", args: []string{"models", "--model", "codex/gpt"}, want: "flag provided but not defined: -model"},
+		{name: "skill option removed", args: []string{"skills", "--skill", "review"}, want: "flag provided but not defined: -skill"},
+		{name: "session option removed", args: []string{"sessions", "--session", "session-1"}, want: "flag provided but not defined: -session"},
+		{name: "detail group by", args: []string{"skills", "detail", "review", "--group-by", "session"}, want: "--group-by cannot be combined with skills detail"},
+		{name: "detail unused", args: []string{"skills", "detail", "review", "--unused"}, want: "--unused cannot be combined with skills detail"},
+		{name: "trend on TUI", args: []string{"--trend"}, want: "flag provided but not defined: -trend"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if code := run(test.args, &stdout, &stderr); code != 2 || stdout.Len() != 0 || !strings.Contains(stderr.String(), test.want) {
+				t.Fatalf("exit=%d stdout=%q stderr=%q, want %q", code, stdout.String(), stderr.String(), test.want)
+			}
+		})
+	}
+}
+
+func syntheticQueryHistory() ctxHistoryLoader {
+	return func(string, ctxsource.IngestOptions) (ctxsource.IngestResult, error) {
+		firstWhen := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+		secondWhen := firstWhen.Add(2 * time.Hour)
+		model := usage.NewModelRef("codex", "gpt-example")
+		firstSource := usage.NewCtxSourceRef("/private/history.jsonl", "codex", "provider-001", "ctx-001", "event-001")
+		secondSource := usage.NewCtxSourceRef("/private/history.jsonl", "codex", "provider-002", "ctx-002", "event-002")
+		firstSession := usage.NewSession("session-001", firstSource)
+		firstSession.Title = "Review session"
+		firstSession.ProjectPath = "/workspace/project"
+		secondSession := usage.NewSession("session-002", secondSource)
+		secondSession.ProjectPath = "/workspace/other"
+
+		first := usage.NewTurn("session-001", "turn-001", 1, firstSource)
+		first.StartedAt = firstWhen
+		first.EndedAt = firstWhen.Add(time.Minute)
+		first.UserPrompts = 1
+		first.UserPromptTimes = []time.Time{firstWhen}
+		first.AddTokenUsageForModelAt(model, firstWhen, usage.TokenUsage{InputTokens: 5, OutputTokens: 2, TotalTokens: 7})
+		first.RuntimeTools = []usage.ToolObservation{{SessionID: "session-001", TurnID: "turn-001", RawName: "exec", CanonicalName: "shell", Arguments: "prompt-secret", Timestamp: firstWhen, Layer: usage.LayerRuntime, Status: usage.StatusSuccess, Source: firstSource}}
+		first.SkillEvidence = []usage.SkillEvidence{usage.NewSkillEvidence("session-001", "turn-001", "review", usage.ModeExplicit, usage.MethodStructuredTool, usage.StateConfirmed, firstWhen, firstSource)}
+
+		second := usage.NewTurn("session-001", "turn-002", 2, firstSource)
+		second.StartedAt = secondWhen
+		second.EndedAt = secondWhen.Add(time.Minute)
+		second.UserPrompts = 1
+		second.UserPromptTimes = []time.Time{secondWhen}
+		second.AddTokenUsageForModelAt(model, secondWhen, usage.TokenUsage{InputTokens: 3, OutputTokens: 1, TotalTokens: 4})
+		second.SkillEvidence = []usage.SkillEvidence{usage.NewSkillEvidence("session-001", "turn-002", "review", usage.ModeImplicit, usage.MethodImplicitAccess, usage.StateInferred, secondWhen, firstSource)}
+
+		other := usage.NewTurn("session-002", "turn-003", 1, secondSource)
+		other.StartedAt = secondWhen.Add(time.Hour)
+		other.EndedAt = other.StartedAt.Add(time.Minute)
+		other.ObserveModelAt(model, other.StartedAt, secondSource)
+
+		return ctxsource.IngestResult{
+			Turns:    []usage.Turn{first, second, other},
+			Sessions: []usage.Session{firstSession, secondSession},
+			Agents:   []string{"codex"},
+		}, nil
+	}
+}
+
+func TestRunQueryReportsUseTheTUIReadModel(t *testing.T) {
+	loader := syntheticQueryHistory()
+	var stdout, stderr bytes.Buffer
+	if code := runWithCtxLoader([]string{"activity", "--source", "ctx", "--json"}, &stdout, &stderr, loader); code != 0 {
+		t.Fatalf("activity exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	var activity struct {
+		Rows []struct {
+			Date     string `json:"date"`
+			Sessions int    `json:"sessions"`
+			Turns    int    `json:"turns"`
+		} `json:"rows"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &activity); err != nil {
+		t.Fatal(err)
+	}
+	if len(activity.Rows) != 1 || activity.Rows[0].Sessions != 2 || activity.Rows[0].Turns != 3 {
+		t.Fatalf("activity = %#v", activity)
+	}
+	var activityDocument map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &activityDocument); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := activityDocument["sessions"]; ok {
+		t.Fatalf("activity unexpectedly includes stats overview: %s", stdout.String())
+	}
+	if strings.Contains(stdout.String(), "prompt-secret") || strings.Contains(stdout.String(), "history.jsonl") {
+		t.Fatalf("activity leaked unsafe data: %s", stdout.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithCtxLoader([]string{"activity", "--source", "ctx", "--color", "never"}, &stdout, &stderr, loader); code != 0 {
+		t.Fatalf("activity human exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "ACTIVITY") || !strings.Contains(stdout.String(), "Daily Trend") || !strings.Contains(stdout.String(), "2026-01-02") || strings.Contains(stdout.String(), "USAGE OVERVIEW") {
+		t.Fatalf("activity human report = %q", stdout.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithCtxLoader([]string{"stats", "--source", "ctx", "--json"}, &stdout, &stderr, loader); code != 0 {
+		t.Fatalf("stats exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	var stats map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &stats); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := stats["trend"]; ok {
+		t.Fatalf("stats unexpectedly includes removed trend: %s", stdout.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithCtxLoader([]string{"models", "--source", "ctx", "--json"}, &stdout, &stderr, loader); code != 0 {
+		t.Fatalf("models exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	var models struct {
+		Rows []struct {
+			Model struct {
+				Provider string `json:"provider"`
+				Name     string `json:"name"`
+			} `json:"model"`
+			Sessions int `json:"sessions"`
+			Turns    int `json:"turns"`
+		} `json:"rows"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &models); err != nil {
+		t.Fatal(err)
+	}
+	if len(models.Rows) != 1 || models.Rows[0].Model.Provider != "codex" || models.Rows[0].Model.Name != "gpt-example" || models.Rows[0].Sessions != 2 || models.Rows[0].Turns != 3 {
+		t.Fatalf("models = %#v", models)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithCtxLoader([]string{"models", "detail", "CODEX/GPT-EXAMPLE", "--source", "ctx", "--json"}, &stdout, &stderr, loader); code != 0 {
+		t.Fatalf("model detail exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	var modelDetail struct {
+		Summary struct {
+			Turns int `json:"turns"`
+		} `json:"summary"`
+		Sessions []struct {
+			Project string `json:"project"`
+		} `json:"sessions"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &modelDetail); err != nil {
+		t.Fatal(err)
+	}
+	if modelDetail.Summary.Turns != 3 || len(modelDetail.Sessions) != 2 || !strings.Contains(stdout.String(), "/workspace/project") {
+		t.Fatalf("model detail = %#v", modelDetail)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithCtxLoader([]string{"skills", "detail", "REVIEW", "--source", "ctx", "--json"}, &stdout, &stderr, loader); code != 0 {
+		t.Fatalf("skill detail exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	var skillDetail struct {
+		Summary struct {
+			Uses      int `json:"uses"`
+			Sessions  int `json:"sessions"`
+			Confirmed int `json:"confirmed"`
+			Inferred  int `json:"inferred"`
+		} `json:"summary"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &skillDetail); err != nil {
+		t.Fatal(err)
+	}
+	if skillDetail.Summary.Uses != 2 || skillDetail.Summary.Sessions != 1 || skillDetail.Summary.Confirmed != 1 || skillDetail.Summary.Inferred != 1 {
+		t.Fatalf("skill detail = %#v", skillDetail)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithCtxLoader([]string{"skills", "detail", "review", "--source", "ctx", "--strict", "--json"}, &stdout, &stderr, loader); code != 0 {
+		t.Fatalf("strict skill detail exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &skillDetail); err != nil {
+		t.Fatal(err)
+	}
+	if skillDetail.Summary.Uses != 1 || skillDetail.Summary.Confirmed != 1 || skillDetail.Summary.Inferred != 0 {
+		t.Fatalf("strict skill detail = %#v", skillDetail)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithCtxLoader([]string{"sessions", "detail", "session-001", "--source", "ctx", "--json"}, &stdout, &stderr, loader); code != 0 {
+		t.Fatalf("session detail exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	var sessionDetail struct {
+		Summary struct {
+			ID string `json:"id"`
+		} `json:"summary"`
+		Turns []struct {
+			ID     string   `json:"id"`
+			Tools  []string `json:"tools"`
+			Skills []string `json:"skills"`
+			Status string   `json:"status"`
+		} `json:"turns"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &sessionDetail); err != nil {
+		t.Fatal(err)
+	}
+	if sessionDetail.Summary.ID != "session-001" || len(sessionDetail.Turns) != 2 || sessionDetail.Turns[0].ID != "turn-001" || sessionDetail.Turns[0].Tools[0] != "shell" || sessionDetail.Turns[0].Skills[0] != "review" || sessionDetail.Turns[0].Status != "done" {
+		t.Fatalf("session detail = %#v", sessionDetail)
+	}
+	if strings.Contains(stdout.String(), "prompt-secret") || strings.Contains(stdout.String(), "history.jsonl") {
+		t.Fatalf("session detail leaked unsafe data: %s", stdout.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithCtxLoader([]string{"sessions", "detail", "session", "--source", "ctx", "--json"}, &stdout, &stderr, loader); code != 2 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "ambiguous") || !strings.Contains(stderr.String(), "session-001") || !strings.Contains(stderr.String(), "session-002") {
+		t.Fatalf("ambiguous session exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithCtxLoader([]string{"models", "detail", "codex/missing", "--source", "ctx", "--json"}, &stdout, &stderr, loader); code != 2 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "was not found") {
+		t.Fatalf("missing model exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+
+	warningLoader := func(root string, options ctxsource.IngestOptions) (ctxsource.IngestResult, error) {
+		result, err := loader(root, options)
+		result.Warnings = []usage.Warning{{Reason: "malformed_json", Path: "/private/history.jsonl", Line: 7, Count: 1}}
+		return result, err
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithCtxLoader([]string{"sessions", "--source", "ctx", "--json"}, &stdout, &stderr, warningLoader); code != 0 {
+		t.Fatalf("warning session list exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	var warningValue map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &warningValue); err != nil {
+		t.Fatalf("warning query stdout is not JSON: %v (%s)", err, stdout.String())
+	}
+	if strings.Contains(stdout.String(), "malformed_json") || !strings.Contains(stderr.String(), "warning: skipped 1 record") {
+		t.Fatalf("warning routing stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+}
+
 func TestRunDefaultsToTUIWithoutCommand(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	if code := run(nil, &stdout, &stderr); code != 1 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "interactive terminal") || !strings.Contains(stderr.String(), "catsift stats") {

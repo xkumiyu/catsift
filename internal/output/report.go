@@ -14,6 +14,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 	"github.com/xkumiyu/catsift/internal/aggregate"
+	"github.com/xkumiyu/catsift/internal/query"
 	"github.com/xkumiyu/catsift/internal/skillinventory"
 	"github.com/xkumiyu/catsift/internal/usage"
 	"golang.org/x/term"
@@ -106,6 +107,7 @@ type ReportContext struct {
 	SkillUsageView SkillUsageView
 	SkillRoots     []string
 	Strict         bool
+	Trend          []query.UsageTrend
 	ReferenceTime  time.Time
 	Location       *time.Location
 }
@@ -272,7 +274,7 @@ func (c ReportContext) jsonSources() []usage.SourceKind {
 }
 
 // RenderHuman renders a static, non-interactive report. kind is one of stats,
-// tools, or skills.
+// activity, tools, or skills.
 func RenderHuman(kind string, ctx ReportContext, report aggregate.Report, capabilities TerminalCapabilities) string {
 	width := capabilities.Width
 	if width <= 0 {
@@ -296,6 +298,8 @@ func RenderHuman(kind string, ctx ReportContext, report aggregate.Report, capabi
 	switch kind {
 	case "stats":
 		lines = append(lines, "", renderStats(report.Overview, styled))
+	case "activity":
+		lines = append(lines, "", renderUsageTrend(ctx.Trend, capabilities.Width, styled))
 	case "tools":
 		lines = append(lines, "")
 		if body := renderTools(report.Tools, ctx, width, styled); body != "" {
@@ -328,10 +332,30 @@ func RenderHuman(kind string, ctx ReportContext, report aggregate.Report, capabi
 	return strings.TrimRight(strings.Join(lines, "\n"), "\n") + "\n"
 }
 
+func renderUsageTrend(rows []query.UsageTrend, width int, styled bool) string {
+	if width <= 0 {
+		width = 80
+	}
+	lines := []string{styleHeader("Daily Trend", styled)}
+	dateWidth, sessionsWidth, turnsWidth := 10, 8, 6
+	header := padRight(styleHeader("Date", styled), dateWidth) + "  " + padLeft(styleHeader("Sessions", styled), sessionsWidth) + "  " + padLeft(styleHeader("Turns", styled), turnsWidth)
+	lines = append(lines, header, tableRule(lipgloss.Width(header), styled))
+	if len(rows) == 0 {
+		return strings.Join(append(lines, styleNotice("No activity in the selected period.", styled)), "\n")
+	}
+	for _, row := range rows {
+		line := padRight(row.Date.UTC().Format("2006-01-02"), dateWidth) + "  " + padLeft(formatCount(row.Sessions), sessionsWidth) + "  " + padLeft(formatCount(row.Turns), turnsWidth)
+		lines = append(lines, truncate(line, width))
+	}
+	return strings.Join(lines, "\n")
+}
+
 func reportHeading(kind string, ctx ReportContext) string {
 	switch kind {
 	case "stats":
 		return "USAGE OVERVIEW"
+	case "activity":
+		return "ACTIVITY"
 	case "tools":
 		return "TOOL USAGE"
 	case "skills":
@@ -1103,6 +1127,18 @@ func RenderJSON(kind string, ctx ReportContext, report aggregate.Report) ([]byte
 		Period        string             `json:"period"`
 	}{1, ctx.agentID(), string(ctx.sourceKind()), ctx.jsonSources(), ctx.agentIDs(), ctx.period()}
 	switch kind {
+	case "activity":
+		value := struct {
+			SchemaVersion int                `json:"schema_version"`
+			Agent         string             `json:"agent"`
+			Source        string             `json:"source"`
+			Sources       []usage.SourceKind `json:"sources,omitempty"`
+			Agents        []string           `json:"agents"`
+			Period        string             `json:"period"`
+			GeneratedAt   string             `json:"generated_at"`
+			Rows          []trendJSON        `json:"rows"`
+		}{base.SchemaVersion, base.Agent, base.Source, base.Sources, base.Agents, base.Period, formatMachineTime(ctx.ReferenceTime), queryTrendJSON(ctx.Trend)}
+		return json.MarshalIndent(value, "", "  ")
 	case "stats":
 		value := struct {
 			SchemaVersion         int                `json:"schema_version"`
@@ -1189,6 +1225,20 @@ func RenderJSON(kind string, ctx ReportContext, report aggregate.Report) ([]byte
 	default:
 		return nil, fmt.Errorf("unknown report kind %q", kind)
 	}
+}
+
+type trendJSON struct {
+	Date     string `json:"date"`
+	Sessions int    `json:"sessions"`
+	Turns    int    `json:"turns"`
+}
+
+func queryTrendJSON(rows []query.UsageTrend) []trendJSON {
+	result := make([]trendJSON, 0, len(rows))
+	for _, row := range rows {
+		result = append(result, trendJSON{Date: formatMachineTime(row.Date), Sessions: row.Sessions, Turns: row.Turns})
+	}
+	return result
 }
 
 func contextLayer(ctx ReportContext) usage.ToolLayer {

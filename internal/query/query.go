@@ -36,6 +36,7 @@ type Filter struct {
 	ModelProvider string
 	ModelName     string
 	Skill         string
+	Strict        bool
 	Search        string
 	From          time.Time
 	To            time.Time
@@ -886,6 +887,9 @@ func filterSkills(values []usage.SkillEvidence, filter Filter) []usage.SkillEvid
 	result := make([]usage.SkillEvidence, 0, len(values))
 	for _, value := range values {
 		if filter.hasSkill() && !strings.EqualFold(value.SkillName, strings.TrimSpace(filter.Skill)) {
+			continue
+		}
+		if filter.Strict && value.State != usage.StateConfirmed {
 			continue
 		}
 		if filter.hasPeriod() && !accept(value.Timestamp, filter.From, filter.To) {

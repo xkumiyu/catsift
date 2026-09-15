@@ -85,12 +85,17 @@ activation modeとevidence stateは独立した軸です。1つの利用に複�
 | Command | Description |
 | --- | --- |
 | `catsift stats` | Agent利用状況の概要を表示 |
+| `catsift activity` | 日別activityを表示 |
+| `catsift models` | Modelごとの利用状況とdetailを表示 |
 | `catsift tools` | canonical Tool名ごとの利用状況を表示 |
 | `catsift skills` | Skillの利用状況とevidence stateを表示 |
+| `catsift sessions` | Sessionの利用状況とdetailを表示 |
+
+1つのModel、Skill、Sessionのdetailは、各commandの`detail` subcommandで表示できます。
 
 `--json`でmachine-readableな出力を生成します。
 
-期間で利用状況をfilterできます。詳細は各commandの`--help`を参照してください。
+詳細は各commandの`--help`を参照してください。
 
 ### Usage overview
 
@@ -118,7 +123,7 @@ Token Usage
   Total Tokens                3.16B
     Input Tokens              3.14B
       Cached Tokens           3.06B
-    Output Tokens              13.3M
+    Output Tokens             13.3M
       Reasoning Tokens        6.40M
 ```
 
@@ -149,26 +154,6 @@ openspec-apply-change             2         1        0      3
 2 skills, 9 uses total
 ```
 
-### Tool usage
-
-```sh
-catsift tools
-```
-
-```text
-TOOL USAGE
-Source: Codex (~/.codex), OpenCode (~/.local/share/opencode)
-Agents: Codex, OpenCode
-Period: 2026-01-01 to 2026-01-31
-Layer: effective
-
-Tool       Calls  Failures  Last Used
-────────────────────────────────────────────────────
-shell          42         0  2026-01-31 12:34 JST
-
-1 tool, 42 calls total
-```
-
 ### Skill command options
 
 #### Skill usage view
@@ -185,6 +170,12 @@ catsift skills --view all      # Both tables
 デフォルトの`--view auto`は、terminal幅に応じて`compact`、`mode`、`all`のいずれかを選択します。
 
 `--group-by`でturn単位またはsession単位に集計し、`--strict`で`Confirmed`の利用だけを集計します。
+
+`skills detail NAME`で1つのSkillのdeduplicated detailと関連Sessionを表示できます。
+
+```sh
+catsift skills detail review
+```
 
 #### Unused skills
 

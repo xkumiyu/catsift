@@ -34,12 +34,15 @@ const usageText = `Usage:
 Default:
   In an interactive terminal, catsift opens the read-only TUI.
   Explore model, skill, and session details from the Overview.
-  Use stats, tools, or skills for non-interactive reports.
+  Use stats, activity, models, tools, skills, or sessions for non-interactive reports.
 
 Commands:
   stats     Show an overview of agent usage
+  activity  Show daily activity
+  models    Show model usage and details
   tools     Show tool usage by canonical name
   skills    Show skill usage and evidence state
+  sessions  Show session usage and details
 
 Usage options:
   --source SOURCE   codex, ctx, or opencode; repeatable or comma-separated (default: codex, opencode)
@@ -47,7 +50,7 @@ Usage options:
   --strict-input    Exit non-zero when input records are skipped
 
 Report options:
-  See "catsift stats --help", "catsift tools --help", or "catsift skills --help".
+  See "catsift stats --help", "catsift activity --help", "catsift models --help", "catsift tools --help", "catsift skills --help", or "catsift sessions --help".
 
 Options:
   --help       Show this help
@@ -59,6 +62,22 @@ Run "catsift <command> --help" for command-specific options.
 const statsUsageText = `Usage: catsift stats [options]
 
 Show an overview of agent usage.
+
+Options:
+  --source SOURCE   codex, ctx, or opencode; repeatable or comma-separated (default: codex, opencode)
+  --days N          Include the last N days (N >= 1; default: all time)
+  --from DATE       Include records on or after DATE (YYYY-MM-DD)
+  --to DATE         Include records before the day after DATE (YYYY-MM-DD)
+  --color MODE      auto, always, or never (default: auto; human report only)
+  --verbose         Show input and cache diagnostic details
+  --strict-input    Exit non-zero when input records are skipped
+  --json            Emit JSON
+  --help            Show this help
+`
+
+const activityUsageText = `Usage: catsift activity [options]
+
+Show daily activity for agent usage.
 
 Options:
   --source SOURCE   codex, ctx, or opencode; repeatable or comma-separated (default: codex, opencode)
@@ -89,6 +108,25 @@ Options:
   --help            Show this help
 `
 
+const modelsUsageText = `Usage: catsift models [options]
+
+Show model usage by provider and model name.
+
+Options:
+  --source SOURCE   codex, ctx, or opencode; repeatable or comma-separated (default: codex, opencode)
+  --days N          Include the last N days (N >= 1; default: all time)
+  --from DATE       Include records on or after DATE (YYYY-MM-DD)
+  --to DATE         Include records before the day after DATE (YYYY-MM-DD)
+  --color MODE      auto, always, or never (default: auto; human report only)
+  --verbose         Show input and cache diagnostic details
+  --strict-input    Exit non-zero when input records are skipped
+  --json            Emit JSON
+  --help            Show this help
+
+Detail:
+  catsift models detail PROVIDER/NAME [options]
+`
+
 const skillsUsageText = `Usage: catsift skills [options]
 
 Show skill usage and evidence state.
@@ -104,6 +142,39 @@ Options:
   --view VIEW       auto, compact, mode, state, or all (default: auto; human report only)
   --unused          Show installed skills with no recorded usage
   --root PATH       Scan a skill root (repeatable; only with --unused; default if omitted: ~/.agents/skills)
+  --verbose         Show input and cache diagnostic details
+  --strict-input    Exit non-zero when input records are skipped
+  --json            Emit JSON
+  --help            Show this help
+
+Detail:
+  catsift skills detail NAME [options]
+`
+
+const sessionsUsageText = `Usage: catsift sessions [options]
+
+Show session usage and turn details.
+
+Options:
+  --source SOURCE   codex, ctx, or opencode; repeatable or comma-separated (default: codex, opencode)
+  --days N          Include the last N days (N >= 1; default: all time)
+  --from DATE       Include records on or after DATE (YYYY-MM-DD)
+  --to DATE         Include records before the day after DATE (YYYY-MM-DD)
+  --color MODE      auto, always, or never (default: auto; human report only)
+  --verbose         Show input and cache diagnostic details
+  --strict-input    Exit non-zero when input records are skipped
+  --json            Emit JSON
+  --help            Show this help
+
+Detail:
+  catsift sessions detail ID [options]
+`
+
+const detailCommonOptionsText = `  --source SOURCE   codex, ctx, or opencode; repeatable or comma-separated (default: codex, opencode)
+  --days N          Include the last N days (N >= 1; default: all time)
+  --from DATE       Include records on or after DATE (YYYY-MM-DD)
+  --to DATE         Include records before the day after DATE (YYYY-MM-DD)
+  --color MODE      auto, always, or never (default: auto; human report only)
   --verbose         Show input and cache diagnostic details
   --strict-input    Exit non-zero when input records are skipped
   --json            Emit JSON
@@ -145,15 +216,64 @@ func commandUsage(kind string) string {
 	switch kind {
 	case "stats":
 		return statsUsageText
+	case "activity":
+		return activityUsageText
+	case "models":
+		return modelsUsageText
 	case "tools":
 		return toolsUsageText
 	case "skills":
 		return skillsUsageText
+	case "sessions":
+		return sessionsUsageText
 	case usageExplorerKind:
 		return explorerUsageText
 	default:
 		return usageText
 	}
+}
+
+func detailUsageText(kind string) string {
+	argument, description := "", ""
+	switch kind {
+	case "models":
+		argument = "PROVIDER/NAME"
+		description = "Show detail for one model."
+	case "skills":
+		argument = "NAME"
+		description = "Show detail for one skill."
+	case "sessions":
+		argument = "ID"
+		description = "Show detail for one session ID or unambiguous fragment."
+	default:
+		return usageText
+	}
+	options := detailCommonOptionsText
+	if kind == "skills" {
+		options = "  --strict          Count confirmed skill evidence only\n" + options
+	}
+	return fmt.Sprintf("Usage: catsift %s detail %s [options]\n\n%s\n\nOptions:\n%s", kind, argument, description, options)
+}
+
+func isDetailKind(kind string) bool {
+	return kind == "models" || kind == "skills" || kind == "sessions"
+}
+
+func splitDetailCommand(kind string, args []string) (bool, string, []string, error) {
+	if !isDetailKind(kind) || len(args) == 0 || !strings.EqualFold(args[0], "detail") {
+		return false, "", args, nil
+	}
+	if len(args) == 1 {
+		return true, "", nil, fmt.Errorf("catsift %s detail requires a selector", kind)
+	}
+	if args[1] == "--help" || args[1] == "-h" {
+		return true, "", args[1:], nil
+	}
+	selector := strings.TrimSpace(args[1])
+	if selector == "" || strings.HasPrefix(selector, "-") {
+		return true, "", nil, fmt.Errorf("catsift %s detail requires a selector", kind)
+	}
+	return true, selector, args[2:], nil
 }
 
 func hasOption(args []string, option string) bool {
@@ -335,6 +455,71 @@ func orderedSourceKinds(values []usage.SourceKind) []usage.SourceKind {
 		}
 	}
 	return result
+}
+
+func parseModelSelector(value string) (usage.ModelRef, error) {
+	parts := strings.Split(strings.TrimSpace(value), "/")
+	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+		return usage.ModelRef{}, errors.New("models detail selector must use provider/name")
+	}
+	return usage.NewModelRef(parts[0], parts[1]), nil
+}
+
+func queryFilterForHistory(history loadedHistory, sources []usage.SourceKind, daysSet bool, days int, from, to, now time.Time) query.Filter {
+	filter := query.Filter{Sources: append([]usage.SourceKind(nil), sources...)}
+	if len(sources) == 1 {
+		filter.Source = sources[0]
+	}
+	if daysSet {
+		filter.From = now.Add(-time.Duration(days) * 24 * time.Hour)
+		filter.To = now
+	} else {
+		filter.From = from
+		filter.To = to
+	}
+	if filter.Source == "" && len(filter.Sources) == 0 {
+		filter.Source = history.Source
+	}
+	return filter
+}
+
+func selectSession(readModel query.ReadModel, selector string) (query.SessionSummary, error) {
+	selector = strings.ToLower(strings.TrimSpace(selector))
+	if selector == "" {
+		return query.SessionSummary{}, errors.New("sessions detail selector must not be empty")
+	}
+	var exact []query.SessionSummary
+	var partial []query.SessionSummary
+	for _, row := range readModel.Sessions {
+		id := strings.ToLower(strings.TrimSpace(row.ID))
+		if id == selector {
+			exact = append(exact, row)
+			continue
+		}
+		if strings.Contains(id, selector) {
+			partial = append(partial, row)
+		}
+	}
+	candidates := exact
+	if len(candidates) == 0 {
+		candidates = partial
+	}
+	switch len(candidates) {
+	case 1:
+		return candidates[0], nil
+	case 0:
+		return query.SessionSummary{}, fmt.Errorf("session %q was not found in the selected scope", selector)
+	default:
+		labels := make([]string, 0, len(candidates))
+		for _, row := range candidates {
+			label := string(row.Source) + "/" + row.ID
+			if row.Agent != "" && row.Agent != "unknown" {
+				label += " agent=" + row.Agent
+			}
+			labels = append(labels, label)
+		}
+		return query.SessionSummary{}, fmt.Errorf("session %q is ambiguous; candidates: %s", selector, strings.Join(labels, ", "))
+	}
 }
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
@@ -598,7 +783,11 @@ func runWithCtxLoader(args []string, stdout, stderr io.Writer, loadCtx ctxHistor
 	if kind == "help" || kind == "--help" || kind == "-h" {
 		if kind == "help" && len(args) > 1 {
 			requested := strings.ToLower(args[1])
-			if requested == "stats" || requested == "tools" || requested == "skills" {
+			if requested == "stats" || requested == "activity" || requested == "models" || requested == "tools" || requested == "skills" || requested == "sessions" {
+				if len(args) > 2 && strings.EqualFold(args[2], "detail") && isDetailKind(requested) {
+					_, _ = io.WriteString(stdout, detailUsageText(requested))
+					return 0
+				}
 				_, _ = io.WriteString(stdout, commandUsage(requested))
 				return 0
 			}
@@ -610,27 +799,46 @@ func runWithCtxLoader(args []string, stdout, stderr io.Writer, loadCtx ctxHistor
 		_, _ = fmt.Fprintf(stdout, "catsift %s\n", appversion.String())
 		return 0
 	}
-	if kind != "stats" && kind != "tools" && kind != "skills" && kind != usageExplorerKind {
+	if kind != "stats" && kind != "activity" && kind != "models" && kind != "tools" && kind != "skills" && kind != "sessions" && kind != usageExplorerKind {
 		diagnostics.errorf("unknown command %q", args[0])
 		_, _ = io.WriteString(stderr, "\n"+usageText)
 		return 2
 	}
-	if hasOption(args[1:], "--help") || hasOption(args[1:], "-h") {
-		_, _ = io.WriteString(stdout, commandUsage(kind))
+	if len(args) > 1 && strings.EqualFold(args[1], "detail") && !isDetailKind(kind) {
+		diagnostics.errorf("detail is only valid for models, skills, or sessions")
+		return 2
+	}
+	detailMode, detailSelector, commandArgs, err := splitDetailCommand(kind, args[1:])
+	if err != nil {
+		diagnostics.errorf("%v", err)
+		return 2
+	}
+	if hasOption(commandArgs, "--help") || hasOption(commandArgs, "-h") {
+		if detailMode {
+			_, _ = io.WriteString(stdout, detailUsageText(kind))
+		} else {
+			_, _ = io.WriteString(stdout, commandUsage(kind))
+		}
 		return 0
 	}
-	if hasOption(args[1:], "--version") {
+	if hasOption(commandArgs, "--version") {
 		diagnostics.errorf("--version is a top-level option; use catsift --version")
 		return 2
 	}
-	if kind != "skills" && hasOption(args[1:], "--group-by") {
+	if kind != "skills" && hasOption(commandArgs, "--group-by") {
 		diagnostics.errorf("--group-by is only valid for skills")
 		return 2
 	}
 
 	flags := flag.NewFlagSet(kind, flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	flags.Usage = func() { _, _ = fmt.Fprint(stderr, commandUsage(kind)) }
+	flags.Usage = func() {
+		if detailMode {
+			_, _ = fmt.Fprint(stderr, detailUsageText(kind))
+			return
+		}
+		_, _ = fmt.Fprint(stderr, commandUsage(kind))
+	}
 	var sourceValues sourceList
 	flags.Var(&sourceValues, "source", "history sources (repeatable or comma-separated)")
 	days := flags.Int("days", 0, "include the last N days")
@@ -650,7 +858,7 @@ func runWithCtxLoader(args []string, stdout, stderr io.Writer, loadCtx ctxHistor
 	verbose := flags.Bool("verbose", false, "show input and cache diagnostic details")
 	strictInput := flags.Bool("strict-input", false, "exit non-zero when input records are skipped")
 	jsonOutput := flags.Bool("json", false, "emit JSON")
-	if err := flags.Parse(args[1:]); err != nil {
+	if err := flags.Parse(commandArgs); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
 		}
@@ -663,6 +871,22 @@ func runWithCtxLoader(args []string, stdout, stderr io.Writer, loadCtx ctxHistor
 	if kind == usageExplorerKind && *jsonOutput {
 		diagnostics.errorf("--json is not supported for the interactive view")
 		return 2
+	}
+	if kind == usageExplorerKind {
+		for _, option := range []struct {
+			name string
+			used bool
+		}{
+			{name: "--color", used: hasOption(commandArgs, "--color")},
+			{name: "--layer", used: hasOption(commandArgs, "--layer")},
+			{name: "--strict", used: hasOption(commandArgs, "--strict")},
+			{name: "--view", used: hasOption(commandArgs, "--view")},
+		} {
+			if option.used {
+				diagnostics.errorf("%s is a report option; use a CLI subcommand", option.name)
+				return 2
+			}
+		}
 	}
 	selectedSources := orderedSourceKinds([]usage.SourceKind(sourceValues))
 	if len(selectedSources) == 0 {
@@ -714,6 +938,20 @@ func runWithCtxLoader(args []string, stdout, stderr io.Writer, loadCtx ctxHistor
 	if *unused && selectedSkillUsageView != output.SkillUsageViewAuto {
 		diagnostics.errorf("--view cannot be combined with --unused")
 		return 2
+	}
+	if kind == "skills" && detailMode {
+		if *unused {
+			diagnostics.errorf("--unused cannot be combined with skills detail")
+			return 2
+		}
+		if hasOption(commandArgs, "--group-by") {
+			diagnostics.errorf("--group-by cannot be combined with skills detail")
+			return 2
+		}
+		if hasOption(commandArgs, "--view") {
+			diagnostics.errorf("--view cannot be combined with skills detail")
+			return 2
+		}
 	}
 	if kind != "skills" && *unused {
 		_, _ = fmt.Fprintln(stderr, "error: --unused is only valid for skills")
@@ -773,6 +1011,15 @@ func runWithCtxLoader(args []string, stdout, stderr io.Writer, loadCtx ctxHistor
 		diagnostics.errorf("--from must not be after --to")
 		return 2
 	}
+	var selectedModel usage.ModelRef
+	if kind == "models" && detailMode {
+		var err error
+		selectedModel, err = parseModelSelector(detailSelector)
+		if err != nil {
+			diagnostics.errorf("%v", err)
+			return 2
+		}
+	}
 
 	now := time.Now().UTC()
 	cacheDir, _ := cache.DefaultDir()
@@ -781,7 +1028,7 @@ func runWithCtxLoader(args []string, stdout, stderr io.Writer, loadCtx ctxHistor
 		diagnostics.write("debug", fmt.Sprintf("cache version: %s schema=%d dir=%q", cache.Version, cache.SchemaVersion, cacheDir))
 	}
 	if kind == usageExplorerKind && !tui.IsInteractive(os.Stdin, stdout) {
-		diagnostics.errorf("%v; use catsift stats, catsift tools, or catsift skills for non-interactive reports", tui.ErrNotInteractive)
+		diagnostics.errorf("%v; use catsift stats, catsift activity, catsift tools, or catsift skills for non-interactive reports", tui.ErrNotInteractive)
 		return 1
 	}
 	progress := newSpinner(stderr, !*jsonOutput && diagnostics.capabilities.IsTTY, diagnostics.capabilities.ColorsEnabled())
@@ -843,6 +1090,114 @@ func runWithCtxLoader(args []string, stdout, stderr io.Writer, loadCtx ctxHistor
 	warnings := history.Warnings
 	agents := history.Agents
 	sourcePath := history.SourcePath
+	period := formatPeriod(turns)
+	periodInfo := formatPeriodInfo(turns, daysSet, *days, fromDate, toDate, now)
+	context := output.ReportContext{Source: history.Source, Sources: history.Sources, SourcePath: sourcePath, SourcePaths: history.SourcePaths, Agents: agents, Agent: legacyAgentValue(agents), Period: period, PeriodInfo: periodInfo, Layer: selectedLayer, SkillGroupBy: selectedGroupBy, SkillUsageView: selectedSkillUsageView, Strict: *strict, ReferenceTime: now, Location: time.Local}
+	if *unused {
+		context.SkillView = output.SkillViewUnused
+	}
+
+	activityReport := kind == "activity"
+	queryReport := kind == "models" || kind == "sessions" || (kind == "skills" && detailMode)
+	var readModel query.ReadModel
+	if queryReport || activityReport {
+		filter := queryFilterForHistory(history, selectedSources, daysSet, *days, fromDate, toDate, now)
+		if kind == "models" && detailMode {
+			filter.Model = selectedModel
+		}
+		if kind == "skills" && detailMode {
+			filter.Skill = detailSelector
+			filter.Strict = *strict
+		}
+		readModel = query.Build(query.SanitizeInput(history.Input), filter)
+	}
+	if activityReport {
+		context.Trend = readModel.Overview.Trend
+	}
+	if activityReport {
+		stopProgress()
+		if *jsonOutput {
+			if err := output.WriteJSON(stdout, kind, context, aggregate.Report{}); err != nil {
+				diagnostics.errorf("render json: %v", err)
+				return 1
+			}
+		} else {
+			capabilities := output.TerminalCapabilities{ColorMode: mode, NoColor: noColor}
+			if file, ok := stdout.(*os.File); ok {
+				capabilities = output.DetectCapabilities(file, mode, capabilities.NoColor)
+			}
+			text := output.RenderHuman(kind, context, aggregate.Report{}, capabilities)
+			if _, err := io.WriteString(stdout, text); err != nil {
+				diagnostics.errorf("write report: %v", err)
+				return 1
+			}
+		}
+		if !*jsonOutput && !*verbose && len(warnings) > 0 {
+			_, _ = io.WriteString(stderr, "\n")
+		}
+		writeWarnings(stderr, warnings, *verbose, diagnostics.capabilities)
+		if *strictInput && len(warnings) > 0 {
+			diagnostics.errorf("input diagnostics encountered (--strict-input)")
+			return 1
+		}
+		return 0
+	}
+	if queryReport {
+		stopProgress()
+		detailKey := ""
+		switch kind {
+		case "models":
+			if detailMode {
+				detailKey = selectedModel.Key()
+				if _, ok := readModel.ModelDetail(detailKey); !ok {
+					diagnostics.errorf("model %q was not found in the selected scope", detailSelector)
+					return 2
+				}
+			}
+		case "skills":
+			if detailMode {
+				detailKey = detailSelector
+			}
+			if _, ok := readModel.SkillDetail(detailKey); !ok {
+				diagnostics.errorf("skill %q was not found in the selected scope", detailKey)
+				return 2
+			}
+		case "sessions":
+			if detailMode {
+				selected, err := selectSession(readModel, detailSelector)
+				if err != nil {
+					diagnostics.errorf("%v", err)
+					return 2
+				}
+				detailKey = selected.Key
+			}
+		}
+		if *jsonOutput {
+			if err := output.WriteQueryJSON(stdout, kind, context, readModel, detailKey); err != nil {
+				diagnostics.errorf("render json: %v", err)
+				return 1
+			}
+		} else {
+			capabilities := output.TerminalCapabilities{ColorMode: mode, NoColor: noColor}
+			if file, ok := stdout.(*os.File); ok {
+				capabilities = output.DetectCapabilities(file, mode, capabilities.NoColor)
+			}
+			text := output.RenderQueryHuman(kind, context, readModel, detailKey, capabilities)
+			if _, err := io.WriteString(stdout, text); err != nil {
+				diagnostics.errorf("write report: %v", err)
+				return 1
+			}
+		}
+		if !*jsonOutput && !*verbose && len(warnings) > 0 {
+			_, _ = io.WriteString(stderr, "\n")
+		}
+		writeWarnings(stderr, warnings, *verbose, diagnostics.capabilities)
+		if *strictInput && len(warnings) > 0 {
+			diagnostics.errorf("input diagnostics encountered (--strict-input)")
+			return 1
+		}
+		return 0
+	}
 	aggregateInput := aggregate.Input{Turns: turns, SessionCount: len(history.Sessions), Warnings: warnings, Source: history.Source, Agents: agents}
 	report := aggregate.Report{}
 	var inventorySnapshot skillinventory.InventorySnapshot
@@ -882,11 +1237,7 @@ func runWithCtxLoader(args []string, stdout, stderr io.Writer, loadCtx ctxHistor
 		}
 		stopProgress()
 	}
-	period := formatPeriod(turns)
-	periodInfo := formatPeriodInfo(turns, daysSet, *days, fromDate, toDate, now)
-	context := output.ReportContext{Source: history.Source, Sources: history.Sources, SourcePath: sourcePath, SourcePaths: history.SourcePaths, Agents: agents, Agent: legacyAgentValue(agents), Period: period, PeriodInfo: periodInfo, Layer: selectedLayer, SkillGroupBy: selectedGroupBy, SkillUsageView: selectedSkillUsageView, Strict: *strict, ReferenceTime: now, Location: time.Local}
 	if *unused {
-		context.SkillView = output.SkillViewUnused
 		context.SkillRoots = append([]string{}, inventorySnapshot.Roots...)
 	}
 	if *jsonOutput {
