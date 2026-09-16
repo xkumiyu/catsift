@@ -1664,24 +1664,38 @@ func overviewActivityLines(view query.OverviewView, width int) []string {
 }
 
 func overviewTokenLines(view query.OverviewView, width int) []string {
+	return tokenUsageLines(view.TokenUsage, view.TokenUsageAvailable, width)
+}
+
+func tokenUsageLines(value usage.TokenUsage, available bool, width int) []string {
 	metrics := make([]overviewMetricSpec, 0, 6)
-	if !view.TokenUsageAvailable && view.TokenUsage == (usage.TokenUsage{}) {
+	if !available && value == (usage.TokenUsage{}) {
 		metrics = append(metrics, overviewMetricSpec{label: "Status", value: "not available"})
 	} else {
 		metrics = append(metrics,
-			overviewMetricSpec{label: "Total Tokens", value: formatTokenTotal(view.TokenUsage, true)},
-			overviewMetricSpec{label: "Input Tokens", value: formatCompactInt(view.TokenUsage.InputTokens), indent: 1},
-			overviewMetricSpec{label: "Cached Tokens", value: formatCompactInt(view.TokenUsage.CachedInputTokens), indent: 2},
+			overviewMetricSpec{label: "Total Tokens", value: formatTokenTotal(value, true)},
+			overviewMetricSpec{label: "Input Tokens", value: formatCompactInt(value.InputTokens), indent: 1},
+			overviewMetricSpec{label: "Cached Tokens", value: formatCompactInt(value.CachedInputTokens), indent: 2},
 		)
-		if view.TokenUsage.CacheWriteInputTokens != 0 {
-			metrics = append(metrics, overviewMetricSpec{label: "Cache Write Input Tokens", value: formatCompactInt(view.TokenUsage.CacheWriteInputTokens), indent: 2})
+		if value.CacheWriteInputTokens != 0 {
+			metrics = append(metrics, overviewMetricSpec{label: "Cache Write Input Tokens", value: formatCompactInt(value.CacheWriteInputTokens), indent: 2})
 		}
 		metrics = append(metrics,
-			overviewMetricSpec{label: "Output Tokens", value: formatCompactInt(view.TokenUsage.OutputTokens), indent: 1},
-			overviewMetricSpec{label: "Reasoning Tokens", value: formatCompactInt(view.TokenUsage.ReasoningOutputTokens), indent: 2},
+			overviewMetricSpec{label: "Output Tokens", value: formatCompactInt(value.OutputTokens), indent: 1},
+			overviewMetricSpec{label: "Reasoning Tokens", value: formatCompactInt(value.ReasoningOutputTokens), indent: 2},
 		)
 	}
 	return append([]string{sectionStyle.Render("Token Usage")}, overviewMetricLines(metrics, width)...)
+}
+
+func tokenBreakdownLines(value usage.TokenUsage, available bool) []string {
+	if !available {
+		return nil
+	}
+	return []string{
+		metadataLine("    ", metadataField{label: "Input", value: formatCompactInt(value.InputTokens)}, metadataField{label: "Cached", value: formatCompactInt(value.CachedInputTokens)}, metadataField{label: "Cache write", value: formatCompactInt(value.CacheWriteInputTokens)}),
+		metadataLine("    ", metadataField{label: "Output", value: formatCompactInt(value.OutputTokens)}, metadataField{label: "Reasoning", value: formatCompactInt(value.ReasoningOutputTokens)}),
+	}
 }
 
 const (
@@ -1975,8 +1989,11 @@ func (state *State) viewSessionDetail(height int) []string {
 			metadataLine("  ", metadataField{label: "Period", value: formatTime(row.StartedAt) + " to " + formatTime(row.EndedAt)}),
 		)
 	}
+	lines = append(lines, metadataLine("  ", metadataField{label: "Prompts", value: formatInt(row.UserPrompts)}, metadataField{label: "Tools", value: formatInt(row.ToolCalls)}, metadataField{label: "Skills", value: formatInt(row.SkillUses)}))
+	lines = append(lines, metadataLine("  ", metadataField{label: "Tokens", value: formatTokenTotal(row.TokenUsage, row.TokenUsageAvailable)}))
+	lines = append(lines, tokenBreakdownLines(row.TokenUsage, row.TokenUsageAvailable)...)
 	lines = append(lines,
-		metadataLine("  ", metadataField{label: "Prompts", value: formatInt(row.UserPrompts)}, metadataField{label: "Tools", value: formatInt(row.ToolCalls)}, metadataField{label: "Skills", value: formatInt(row.SkillUses)}, metadataField{label: "Tokens", value: formatTokenTotal(row.TokenUsage, row.TokenUsageAvailable)}),
+		"",
 		sectionStyle.Render(truncate("Turns", width)),
 		renderTableHeader(width, turnCellsForSession(width, nil, detail.Turns)),
 	)
@@ -2007,9 +2024,12 @@ func (state *State) viewTurnDetail(height int) []string {
 		metadataLine("  ", metadataField{label: "Model", value: emptyDash(modelNames(turn.Models))}, metadataField{label: "Status", value: turnStatus(&turn)}),
 		metadataLine("  ", metadataField{label: "Started", value: formatTime(turn.StartedAt)}, metadataField{label: "Ended", value: formatTime(turn.EndedAt)}),
 		metadataLine("  ", metadataField{label: "Tokens", value: formatTokenTotal(turn.TokenUsage, turn.TokenUsageAvailable)}),
+	}
+	lines = append(lines, tokenBreakdownLines(turn.TokenUsage, turn.TokenUsageAvailable)...)
+	lines = append(lines,
 		metadataLine("  ", metadataField{label: "Tools", value: formatTurnItems(turn.Tools)}),
 		metadataLine("  ", metadataField{label: "Skills", value: formatTurnItems(turn.Skills)}),
-	}
+	)
 	return fitBody(lines, height)
 }
 

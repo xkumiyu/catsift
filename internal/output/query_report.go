@@ -171,8 +171,10 @@ func renderSessionDetail(detail query.SessionDetail, ctx ReportContext, width in
 		{label: "Prompts", value: formatCount(row.UserPrompts)},
 		{label: "Tools", value: formatCount(row.ToolCalls)},
 		{label: "Skills", value: formatCount(row.SkillUses)},
-		{label: "Tokens", value: formatQueryTokens(row.TokenUsage, row.TokenUsageAvailable)},
 	}, styled)
+	lines = append(lines, "")
+	lines = append(lines, renderStatSections([]statSection{{title: "Token Usage", metrics: tokenMetricsForUsage(row.TokenUsage, row.TokenUsageAvailable)}}, styled)...)
+	lines = append(lines, "")
 	lines = append(lines, styleHeader("Turns", styled))
 	values := make([][]string, 0, len(detail.Turns))
 	for _, turn := range detail.Turns {

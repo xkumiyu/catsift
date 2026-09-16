@@ -473,20 +473,24 @@ func renderStats(summary aggregate.Overview, styled bool) string {
 }
 
 func tokenMetrics(summary aggregate.Overview) []statMetric {
-	if !summary.TokenUsageAvailable && summary.TokenUsage == (usage.TokenUsage{}) {
+	return tokenMetricsForUsage(summary.TokenUsage, summary.TokenUsageAvailable)
+}
+
+func tokenMetricsForUsage(value usage.TokenUsage, available bool) []statMetric {
+	if !available && value == (usage.TokenUsage{}) {
 		return []statMetric{{label: "Status", value: "not available"}}
 	}
 	metrics := []statMetric{
-		{label: "Total Tokens", value: formatCompactCount64(summary.TokenUsage.TotalTokens)},
-		{label: "Input Tokens", value: formatCompactCount64(summary.TokenUsage.InputTokens), indent: 1},
-		{label: "Cached Tokens", value: formatCompactCount64(summary.TokenUsage.CachedInputTokens), indent: 2},
+		{label: "Total Tokens", value: formatCompactCount64(value.TotalTokens)},
+		{label: "Input Tokens", value: formatCompactCount64(value.InputTokens), indent: 1},
+		{label: "Cached Tokens", value: formatCompactCount64(value.CachedInputTokens), indent: 2},
 	}
-	if summary.TokenUsage.CacheWriteInputTokens != 0 {
-		metrics = append(metrics, statMetric{label: "Cache Write Input Tokens", value: formatCompactCount64(summary.TokenUsage.CacheWriteInputTokens), indent: 2})
+	if value.CacheWriteInputTokens != 0 {
+		metrics = append(metrics, statMetric{label: "Cache Write Input Tokens", value: formatCompactCount64(value.CacheWriteInputTokens), indent: 2})
 	}
 	metrics = append(metrics,
-		statMetric{label: "Output Tokens", value: formatCompactCount64(summary.TokenUsage.OutputTokens), indent: 1},
-		statMetric{label: "Reasoning Tokens", value: formatCompactCount64(summary.TokenUsage.ReasoningOutputTokens), indent: 2},
+		statMetric{label: "Output Tokens", value: formatCompactCount64(value.OutputTokens), indent: 1},
+		statMetric{label: "Reasoning Tokens", value: formatCompactCount64(value.ReasoningOutputTokens), indent: 2},
 	)
 	return metrics
 }

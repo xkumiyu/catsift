@@ -21,7 +21,14 @@ func queryReportFixture() query.ReadModel {
 	turn.EndedAt = when.Add(time.Minute)
 	turn.UserPrompts = 1
 	turn.UserPromptTimes = []time.Time{when}
-	turn.AddTokenUsageForModelAt(model, when, usage.TokenUsage{TotalTokens: 7})
+	turn.AddTokenUsageForModelAt(model, when, usage.TokenUsage{
+		InputTokens:           5,
+		CachedInputTokens:     2,
+		CacheWriteInputTokens: 1,
+		OutputTokens:          3,
+		ReasoningOutputTokens: 1,
+		TotalTokens:           8,
+	})
 	turn.RuntimeTools = []usage.ToolObservation{{RawName: "exec", CanonicalName: "shell", Arguments: "private-command", Timestamp: when, Layer: usage.LayerRuntime, Source: source}}
 	turn.SkillEvidence = []usage.SkillEvidence{usage.NewSkillEvidence("session-001", "turn-001", "review", usage.ModeExplicit, usage.MethodStructuredTool, usage.StateConfirmed, when, source)}
 	session := usage.NewSession("session-001", source)
@@ -37,6 +44,34 @@ func TestRenderQueryHumanFitsNarrowTerminal(t *testing.T) {
 	for _, line := range strings.Split(strings.TrimSuffix(got, "\n"), "\n") {
 		if width := lipgloss.Width(line); width > 32 {
 			t.Fatalf("line width=%d > 32: %q\n%s", width, line, got)
+		}
+	}
+}
+
+func TestRenderQueryHumanSessionDetailShowsTokenBreakdown(t *testing.T) {
+	model := queryReportFixture()
+	got := RenderQueryHuman("sessions", ReportContext{Source: usage.SourceCodex, Agent: "codex", Period: "all time", Location: time.UTC}, model, model.Sessions[0].Key, TerminalCapabilities{Width: 120, ColorMode: ColorNever})
+
+	for _, metric := range []struct {
+		label string
+		value string
+	}{
+		{label: "Total Tokens", value: "8"},
+		{label: "Input Tokens", value: "5"},
+		{label: "Cached Tokens", value: "2"},
+		{label: "Cache Write Input Tokens", value: "1"},
+		{label: "Output Tokens", value: "3"},
+		{label: "Reasoning Tokens", value: "1"},
+	} {
+		found := false
+		for _, line := range strings.Split(got, "\n") {
+			if strings.Contains(line, metric.label) && strings.HasSuffix(strings.TrimSpace(line), metric.value) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("session detail missing %s=%s:\n%s", metric.label, metric.value, got)
 		}
 	}
 }

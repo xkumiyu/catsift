@@ -1273,8 +1273,65 @@ func TestDetailViewKeepsRowsAndFooterWithinTheFrame(t *testing.T) {
 	}
 }
 
+func TestSessionDetailShowsTokenBreakdown(t *testing.T) {
+	input := explorerInput()
+	tokens := usage.TokenUsage{
+		InputTokens:           10,
+		CachedInputTokens:     4,
+		CacheWriteInputTokens: 2,
+		OutputTokens:          3,
+		ReasoningOutputTokens: 1,
+		TotalTokens:           13,
+	}
+	input.Turns[0].TokenUsage = &tokens
+	input.Turns[0].TokenUsageEvents[0].Usage = tokens
+
+	state := NewState(input, query.Filter{}, nil)
+	state.Width = 120
+	state.Height = 40
+	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'5'}})
+	state.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	view := state.View()
+	if strings.Contains(view, "Token Usage") {
+		t.Fatalf("session detail gives token breakdown an overview-level heading: %s", view)
+	}
+
+	for _, metric := range []struct {
+		label string
+		value string
+	}{
+		{label: "Tokens:", value: "13"},
+		{label: "Input:", value: "10"},
+		{label: "Cached:", value: "4"},
+		{label: "Cache write:", value: "2"},
+		{label: "Output:", value: "3"},
+		{label: "Reasoning:", value: "1"},
+	} {
+		found := false
+		for _, line := range strings.Split(view, "\n") {
+			if strings.Contains(line, metric.label) && strings.Contains(line, " "+metric.value) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("session detail missing %s=%s: %s", metric.label, metric.value, view)
+		}
+	}
+}
+
 func TestTurnDetailShowsMetadataAndReturnsToSession(t *testing.T) {
 	input := explorerInput()
+	tokens := usage.TokenUsage{
+		InputTokens:           5,
+		CachedInputTokens:     2,
+		CacheWriteInputTokens: 1,
+		OutputTokens:          2,
+		ReasoningOutputTokens: 1,
+		TotalTokens:           7,
+	}
+	input.Turns[0].TokenUsage = &tokens
+	input.Turns[0].TokenUsageEvents[0].Usage = tokens
 	input.Turns[0].RuntimeTools = []usage.ToolObservation{{CanonicalName: "exec", Arguments: "secret", Source: input.Turns[0].Source}}
 	state := NewState(input, query.Filter{}, nil)
 	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'5'}})
@@ -1288,6 +1345,27 @@ func TestTurnDetailShowsMetadataAndReturnsToSession(t *testing.T) {
 	for _, want := range []string{"Turn detail", "Turn: turn", "Session: (s)", "Model:", "codex/gpt-example", "Tokens:", "7", "Tools:", "exec", "Skills:", "review", "Status:", "done", "b/Esc back"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("turn detail omitted %q: %s", want, view)
+		}
+	}
+	for _, metric := range []struct {
+		label string
+		value string
+	}{
+		{label: "Input:", value: "5"},
+		{label: "Cached:", value: "2"},
+		{label: "Cache write:", value: "1"},
+		{label: "Output:", value: "2"},
+		{label: "Reasoning:", value: "1"},
+	} {
+		found := false
+		for _, line := range strings.Split(view, "\n") {
+			if strings.Contains(line, metric.label) && strings.Contains(line, " "+metric.value) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("turn detail missing %s=%s: %s", metric.label, metric.value, view)
 		}
 	}
 	for _, unwanted := range []string{"secret", "arguments", "Enter open"} {
