@@ -79,6 +79,18 @@ func Discover(root string) ([]string, error) {
 	return files, nil
 }
 
+// HasHistory reports whether root contains at least one Copilot session event file.
+func HasHistory(root string) (bool, error) {
+	files, err := Discover(root)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return len(files) > 0, nil
+}
+
 func sessionIDFromPath(path string) string {
 	return filepath.Base(filepath.Dir(path))
 }

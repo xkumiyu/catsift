@@ -42,7 +42,7 @@ Commands:
   sessions  Show session usage and details
 
 Options:
-  --source SOURCE   codex, ctx, opencode, or copilot; repeatable or comma-separated (default: codex, opencode)
+  --source SOURCE   codex, copilot, opencode, or ctx; repeatable or comma-separated (default: detected agent histories; ctx is opt-in)
   --verbose         Show input/cache diagnostics and TUI source-load timings
   --strict-input    Exit non-zero when input records are skipped
   --help            Show this help
@@ -56,7 +56,7 @@ const statsUsageText = `Usage: catsift stats [options]
 Show an overview of agent usage.
 
 Options:
-  --source SOURCE   codex, ctx, opencode, or copilot; repeatable or comma-separated (default: codex, opencode)
+  --source SOURCE   codex, copilot, opencode, or ctx; repeatable or comma-separated (default: detected agent histories; ctx is opt-in)
   --days N          Include the last N days (N >= 1; default: all time)
   --from DATE       Include records on or after DATE (YYYY-MM-DD)
   --to DATE         Include records before the day after DATE (YYYY-MM-DD)
@@ -72,7 +72,7 @@ const activityUsageText = `Usage: catsift activity [options]
 Show daily activity for agent usage.
 
 Options:
-  --source SOURCE   codex, ctx, opencode, or copilot; repeatable or comma-separated (default: codex, opencode)
+  --source SOURCE   codex, copilot, opencode, or ctx; repeatable or comma-separated (default: detected agent histories; ctx is opt-in)
   --days N          Include the last N days (N >= 1; default: all time)
   --from DATE       Include records on or after DATE (YYYY-MM-DD)
   --to DATE         Include records before the day after DATE (YYYY-MM-DD)
@@ -88,7 +88,7 @@ const toolsUsageText = `Usage: catsift tools [options]
 Show tool usage by canonical name.
 
 Options:
-  --source SOURCE   codex, ctx, opencode, or copilot; repeatable or comma-separated (default: codex, opencode)
+  --source SOURCE   codex, copilot, opencode, or ctx; repeatable or comma-separated (default: detected agent histories; ctx is opt-in)
   --days N          Include the last N days (N >= 1; default: all time)
   --from DATE       Include records on or after DATE (YYYY-MM-DD)
   --to DATE         Include records before the day after DATE (YYYY-MM-DD)
@@ -105,7 +105,7 @@ const modelsUsageText = `Usage: catsift models [options]
 Show model usage by provider and model name.
 
 Options:
-  --source SOURCE   codex, ctx, opencode, or copilot; repeatable or comma-separated (default: codex, opencode)
+  --source SOURCE   codex, copilot, opencode, or ctx; repeatable or comma-separated (default: detected agent histories; ctx is opt-in)
   --days N          Include the last N days (N >= 1; default: all time)
   --from DATE       Include records on or after DATE (YYYY-MM-DD)
   --to DATE         Include records before the day after DATE (YYYY-MM-DD)
@@ -124,7 +124,7 @@ const skillsUsageText = `Usage: catsift skills [options]
 Show skill usage and evidence state.
 
 Options:
-  --source SOURCE   codex, ctx, opencode, or copilot; repeatable or comma-separated (default: codex, opencode)
+  --source SOURCE   codex, copilot, opencode, or ctx; repeatable or comma-separated (default: detected agent histories; ctx is opt-in)
   --days N          Include the last N days (N >= 1; default: all time)
   --from DATE       Include records on or after DATE (YYYY-MM-DD)
   --to DATE         Include records before the day after DATE (YYYY-MM-DD)
@@ -148,7 +148,7 @@ const sessionsUsageText = `Usage: catsift sessions [options]
 Show session usage and turn details.
 
 Options:
-  --source SOURCE   codex, ctx, opencode, or copilot; repeatable or comma-separated (default: codex, opencode)
+  --source SOURCE   codex, copilot, opencode, or ctx; repeatable or comma-separated (default: detected agent histories; ctx is opt-in)
   --days N          Include the last N days (N >= 1; default: all time)
   --from DATE       Include records on or after DATE (YYYY-MM-DD)
   --to DATE         Include records before the day after DATE (YYYY-MM-DD)
@@ -162,7 +162,7 @@ Detail:
   catsift sessions detail ID [options]
 `
 
-const detailCommonOptionsText = `  --source SOURCE   codex, ctx, opencode, or copilot; repeatable or comma-separated (default: codex, opencode)
+const detailCommonOptionsText = `  --source SOURCE   codex, copilot, opencode, or ctx; repeatable or comma-separated (default: detected agent histories; ctx is opt-in)
   --days N          Include the last N days (N >= 1; default: all time)
   --from DATE       Include records on or after DATE (YYYY-MM-DD)
   --to DATE         Include records before the day after DATE (YYYY-MM-DD)
@@ -179,7 +179,7 @@ Explore model, usage, skill, and session details in an interactive terminal.
 The TUI is read-only and does not display prompt text, tool arguments, or skill bodies.
 
 Options:
-  --source SOURCE   codex, ctx, opencode, or copilot; repeatable or comma-separated (default: codex, opencode)
+  --source SOURCE   codex, copilot, opencode, or ctx; repeatable or comma-separated (default: detected agent histories; ctx is opt-in)
   --verbose         Show input/cache diagnostics and source-load timings
   --strict-input    Exit non-zero when input records are skipped
   --help            Show this help
@@ -593,7 +593,7 @@ func appendSourceSelection(selected *[]usage.SourceKind, value string) error {
 		part = strings.TrimSpace(part)
 		source := usage.SourceKind(strings.ToLower(part))
 		if !source.Valid() {
-			return fmt.Errorf("invalid --source %q (want codex, ctx, opencode, or copilot)", part)
+			return fmt.Errorf("invalid --source %q (want codex, copilot, opencode, or ctx)", part)
 		}
 		duplicate := false
 		for _, existing := range *selected {
@@ -720,6 +720,7 @@ type loadedHistory struct {
 type historyLoadOptions struct {
 	Source      usage.SourceKind
 	Sources     []usage.SourceKind
+	AutoDetect  bool
 	Days        int
 	DaysSet     bool
 	From        time.Time
@@ -805,18 +806,61 @@ func loadHistory(options historyLoadOptions) (loadedHistory, error) {
 	return result, nil
 }
 
-func selectedHistorySources(options historyLoadOptions) []usage.SourceKind {
+func detectDefaultSourceKinds() ([]usage.SourceKind, error) {
+	sources := make([]usage.SourceKind, 0)
+	for _, source := range usage.DefaultSourceKinds() {
+		var (
+			available bool
+			err       error
+		)
+		switch source {
+		case usage.SourceCodex:
+			var home string
+			home, err = codex.ResolveHome("")
+			if err == nil {
+				available, err = codex.HasHistory(home)
+			}
+		case usage.SourceOpenCode:
+			var root string
+			root, err = opencode.ResolveHome("")
+			if err == nil {
+				available, err = opencode.HasHistory(root)
+			}
+		case usage.SourceCopilot:
+			var root string
+			root, err = githubcopilot.ResolveHome("")
+			if err == nil {
+				available, err = githubcopilot.HasHistory(root)
+			}
+		}
+		if err != nil {
+			return nil, fmt.Errorf("detect %s history: %w", source, err)
+		}
+		if available {
+			sources = append(sources, source)
+		}
+	}
+	return sources, nil
+}
+
+func selectedHistorySources(options historyLoadOptions) ([]usage.SourceKind, error) {
 	if len(options.Sources) > 0 {
-		return orderedSourceKinds(options.Sources)
+		return orderedSourceKinds(options.Sources), nil
 	}
 	if options.Source.Valid() {
-		return []usage.SourceKind{options.Source}
+		return []usage.SourceKind{options.Source}, nil
 	}
-	return usage.DefaultSourceKinds()
+	if options.AutoDetect {
+		return detectDefaultSourceKinds()
+	}
+	return usage.DefaultSourceKinds(), nil
 }
 
 func loadSelectedHistory(options historyLoadOptions) (loadedHistory, error) {
-	sources := selectedHistorySources(options)
+	sources, err := selectedHistorySources(options)
+	if err != nil {
+		return loadedHistory{}, err
+	}
 	if len(sources) == 0 {
 		return loadedHistory{}, errors.New("no history source selected")
 	}
@@ -855,7 +899,10 @@ func loadAllHistoryWith(options historyLoadOptions, loadSource func(historyLoadO
 	if loadSource == nil {
 		loadSource = loadHistory
 	}
-	sources := selectedHistorySources(options)
+	sources, err := selectedHistorySources(options)
+	if err != nil {
+		return loadedHistory{}, err
+	}
 	started := time.Now()
 	if options.Verbose {
 		defer func() {
@@ -888,6 +935,9 @@ func loadAllHistoryWith(options historyLoadOptions, loadSource func(historyLoadO
 	for _, source := range sources {
 		result := bySource[source]
 		if result.err != nil {
+			if options.AutoDetect && errors.Is(result.err, os.ErrNotExist) {
+				continue
+			}
 			failures = append(failures, result)
 			if options.Verbose {
 				options.Diagnostics.write("debug", fmt.Sprintf("%s source unavailable after %s: %v", source, formatSpinnerElapsed(result.elapsed), result.err))
@@ -910,10 +960,12 @@ func loadAllHistoryWith(options historyLoadOptions, loadSource func(historyLoadO
 		return loadedHistory{}, fmt.Errorf("no history source could be loaded: %s", strings.Join(details, "; "))
 	}
 	result := mergeLoadedHistories(loaded...)
-	result.Sources = append([]usage.SourceKind(nil), sources...)
-	result.Source = ""
-	if len(result.Sources) == 1 {
-		result.Source = result.Sources[0]
+	if !options.AutoDetect {
+		result.Sources = append([]usage.SourceKind(nil), sources...)
+		result.Source = ""
+		if len(result.Sources) == 1 {
+			result.Source = result.Sources[0]
+		}
 	}
 	for _, failure := range failures {
 		result.Warnings = append(result.Warnings, usage.Warning{Reason: "source_unavailable", Type: string(failure.source), Count: 1})
@@ -1077,9 +1129,7 @@ func runWithCtxLoader(args []string, stdout, stderr io.Writer, loadCtx ctxHistor
 		}
 	}
 	selectedSources := orderedSourceKinds([]usage.SourceKind(sourceValues))
-	if len(selectedSources) == 0 {
-		selectedSources = usage.DefaultSourceKinds()
-	}
+	autoDetectSources := len(selectedSources) == 0
 	selectedSource := usage.SourceKind("")
 	if len(selectedSources) == 1 {
 		selectedSource = selectedSources[0]
@@ -1228,7 +1278,7 @@ func runWithCtxLoader(args []string, stdout, stderr io.Writer, loadCtx ctxHistor
 	label := sourceLoadLabel(selectedSources)
 	stopProgress = progress.Start(label)
 	loadOptions := historyLoadOptions{
-		Source: selectedSource, Sources: selectedSources,
+		Source: selectedSource, Sources: selectedSources, AutoDetect: autoDetectSources,
 		Days: *days, DaysSet: daysSet, From: fromDate, To: toDate, Now: now, CacheDir: cacheDir, Verbose: *verbose, Diagnostics: diagnostics, LoadCtx: loadCtx,
 	}
 	var loadErr error
@@ -1238,6 +1288,7 @@ func runWithCtxLoader(args []string, stdout, stderr io.Writer, loadCtx ctxHistor
 		diagnostics.errorf("%v", loadErr)
 		return 1
 	}
+	selectedSources = append([]usage.SourceKind(nil), history.Sources...)
 	if kind == usageExplorerKind {
 		stopProgress()
 		filter := query.Filter{From: fromDate, To: toDate, Sources: append([]usage.SourceKind(nil), selectedSources...)}

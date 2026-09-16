@@ -98,6 +98,18 @@ func Discover(home string) ([]string, error) {
 	return files, nil
 }
 
+// HasHistory reports whether home contains at least one Codex history file.
+func HasHistory(home string) (bool, error) {
+	files, err := Discover(home)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return len(files) > 0, nil
+}
+
 // Envelope is the tolerant, line-level representation of a Codex record.
 type Envelope struct {
 	Timestamp time.Time       `json:"timestamp"`

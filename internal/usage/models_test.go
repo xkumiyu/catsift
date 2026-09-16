@@ -92,10 +92,10 @@ func TestCopilotSourceIdentity(t *testing.T) {
 	if got := AgentDisplayName(string(SourceCopilot)); got != "GitHub Copilot" {
 		t.Fatalf("display name = %q", got)
 	}
-	if got := AllSourceKinds(); got[len(got)-1] != SourceCopilot {
+	if got := AllSourceKinds(); len(got) != 4 || got[0] != SourceCodex || got[1] != SourceCopilot || got[2] != SourceOpenCode || got[3] != SourceCtx {
 		t.Fatalf("source order = %#v", got)
 	}
-	if got := DefaultSourceKinds(); len(got) != 2 || got[0] != SourceCodex || got[1] != SourceOpenCode {
+	if got := DefaultSourceKinds(); len(got) != 3 || got[0] != SourceCodex || got[1] != SourceCopilot || got[2] != SourceOpenCode {
 		t.Fatalf("default sources changed = %#v", got)
 	}
 }

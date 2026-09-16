@@ -105,6 +105,19 @@ func TestValidateDataRootAcceptsExplicitCurrentDirectory(t *testing.T) {
 	}
 }
 
+func TestHasHistoryTreatsMissingAndEmptyRootsAsUnavailable(t *testing.T) {
+	available, err := HasHistory(filepath.Join(t.TempDir(), "missing"))
+	if err != nil || available {
+		t.Fatalf("missing root availability = %t, %v", available, err)
+	}
+
+	empty := t.TempDir()
+	available, err = HasHistory(empty)
+	if err != nil || available {
+		t.Fatalf("empty root availability = %t, %v", available, err)
+	}
+}
+
 func TestLoadFindsChannelDatabaseWhenDefaultDatabaseIsAbsent(t *testing.T) {
 	for _, name := range []string{"opencode-local.db", "opencode-beta.db"} {
 		t.Run(name, func(t *testing.T) {

@@ -139,6 +139,22 @@ func discoverDatabase(root string) (string, error) {
 	return filepath.Join(root, candidates[0]), nil
 }
 
+// HasHistory reports whether dataRoot contains an OpenCode database.
+func HasHistory(dataRoot string) (bool, error) {
+	root, err := validateDataRoot(dataRoot)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	database, err := discoverDatabase(root)
+	if err != nil {
+		return false, err
+	}
+	return database != "", nil
+}
+
 func diagnose(options IngestOptions, message string) {
 	if options.Diagnostic != nil {
 		options.Diagnostic(message)

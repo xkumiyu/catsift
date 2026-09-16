@@ -74,6 +74,32 @@ func TestDiscoverReturnsEmptyForDiagnosticOnlyRoot(t *testing.T) {
 	}
 }
 
+func TestHasHistoryReportsOnlyRootsWithSessionEvents(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "missing")
+	available, err := HasHistory(missing)
+	if err != nil || available {
+		t.Fatalf("missing root availability = %t, %v", available, err)
+	}
+
+	root := t.TempDir()
+	available, err = HasHistory(root)
+	if err != nil || available {
+		t.Fatalf("empty root availability = %t, %v", available, err)
+	}
+
+	path := filepath.Join(root, "session-state", "session-a", "events.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("{}\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	available, err = HasHistory(root)
+	if err != nil || !available {
+		t.Fatalf("history root availability = %t, %v", available, err)
+	}
+}
+
 func TestDiscoverRejectsMissingOrNonDirectoryRoot(t *testing.T) {
 	if _, err := Discover(filepath.Join(t.TempDir(), "missing")); err == nil {
 		t.Fatal("expected missing root error")

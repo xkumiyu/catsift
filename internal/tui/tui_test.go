@@ -498,10 +498,10 @@ func TestSourceFilterTogglesSourcesIndependently(t *testing.T) {
 	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
 	state.Update(tea.KeyMsg{Type: tea.KeyEnter})
 
-	if len(state.Filter.Sources) != 3 || state.Filter.Sources[0] != usage.SourceCtx || state.Filter.Sources[1] != usage.SourceOpenCode || state.Filter.Sources[2] != usage.SourceCopilot {
+	if len(state.Filter.Sources) != 3 || state.Filter.Sources[0] != usage.SourceCopilot || state.Filter.Sources[1] != usage.SourceOpenCode || state.Filter.Sources[2] != usage.SourceCtx {
 		t.Fatalf("source visibility = %#v", state.Filter.Sources)
 	}
-	if state.ReadModel.Overview.Turns != 1 || state.ReadModel.Overview.Sources[0] != usage.SourceCtx {
+	if state.ReadModel.Overview.Turns != 1 || state.ReadModel.Overview.Sources[0] != usage.SourceCopilot {
 		t.Fatalf("source-filtered overview = %#v", state.ReadModel.Overview)
 	}
 	if strings.Contains(state.View(), "Codex (~/.codex)") {

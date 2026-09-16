@@ -23,6 +23,7 @@ import (
 func testHome(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
+	t.Setenv("HOME", t.TempDir())
 	path := filepath.Join(home, "sessions", "2026", "one.jsonl")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
@@ -64,6 +65,7 @@ func writeTestSkill(t *testing.T, directory, frontmatterName string) {
 func usageHomeAt(t *testing.T, when time.Time) string {
 	t.Helper()
 	home := t.TempDir()
+	t.Setenv("HOME", t.TempDir())
 	path := filepath.Join(home, "sessions", when.UTC().Format("2006"), "one.jsonl")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
@@ -637,7 +639,7 @@ func TestParseSourceSelectionAcceptsMultipleSources(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []usage.SourceKind{usage.SourceCodex, usage.SourceCtx, usage.SourceOpenCode}
+	want := []usage.SourceKind{usage.SourceCodex, usage.SourceOpenCode, usage.SourceCtx}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("sources = %#v, want %#v", got, want)
 	}
@@ -876,6 +878,7 @@ func writeOpenCodeHome(t *testing.T) string {
 
 func TestRunDateRangeFiltersCodexHistory(t *testing.T) {
 	home := t.TempDir()
+	t.Setenv("HOME", t.TempDir())
 	t.Setenv("CODEX_HOME", home)
 	t.Setenv("OPENCODE_HOME", t.TempDir())
 	sessionsDir := filepath.Join(home, "sessions")
@@ -1192,7 +1195,7 @@ func TestRunHelpDocumentsHistorySourceOptions(t *testing.T) {
 	if code := run([]string{"stats", "--help"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("help exit=%d stderr=%s", code, stderr.String())
 	}
-	for _, want := range []string{"--source SOURCE", "codex, ctx, opencode, or copilot", "--days N", "--from DATE", "--to DATE", "input and cache diagnostic details"} {
+	for _, want := range []string{"--source SOURCE", "codex, copilot, opencode, or ctx", "--days N", "--from DATE", "--to DATE", "input and cache diagnostic details"} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Errorf("help missing %q: %s", want, stdout.String())
 		}
@@ -1251,6 +1254,44 @@ func TestRunLoadsGitHubCopilotFromDefaultHome(t *testing.T) {
 		if strings.Contains(stdout.String(), "synthetic prompt") || strings.Contains(stdout.String(), "tool payload") {
 			t.Fatalf("raw GitHub Copilot %s content leaked to stdout: %s", command, stdout.String())
 		}
+	}
+}
+
+func TestRunAutoDetectsGitHubCopilotHistory(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CODEX_HOME", t.TempDir())
+	t.Setenv("OPENCODE_HOME", t.TempDir())
+	path := filepath.Join(home, ".copilot", "session-state", "session-001", "events.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"id":"start","timestamp":"2026-01-02T00:00:00Z","type":"session.start","data":{"version":"1.0"}}`+"\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+
+	var stdout, stderr bytes.Buffer
+	ctxCalled := false
+	loadCtx := func(string, ctxsource.IngestOptions) (ctxsource.IngestResult, error) {
+		ctxCalled = true
+		return ctxsource.IngestResult{}, nil
+	}
+	if code := runWithCtxLoader([]string{"stats", "--json"}, &stdout, &stderr, loadCtx); code != 0 {
+		t.Fatalf("GitHub Copilot auto-detection exit=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if ctxCalled {
+		t.Fatal("ctx was loaded during automatic source detection")
+	}
+	var report struct {
+		Source   usage.SourceKind `json:"source"`
+		Sessions int              `json:"sessions"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatalf("invalid GitHub Copilot auto-detection JSON: %v; stdout=%s", err, stdout.String())
+	}
+	if report.Source != usage.SourceCopilot || report.Sessions != 1 {
+		t.Fatalf("GitHub Copilot auto-detection report = %#v", report)
 	}
 }
 
@@ -1438,7 +1479,7 @@ func TestRenderHelpAddsTerminalStyles(t *testing.T) {
 		helpMutedStyle.Render("SOURCE"),
 		helpMutedStyle.Render("[options]"),
 		helpMutedStyle.Render("<command>"),
-		helpMutedStyle.Render("(default: codex, opencode)"),
+		helpMutedStyle.Render("(default: detected agent histories; ctx is opt-in)"),
 	} {
 		if !strings.Contains(colored, want) {
 			t.Errorf("colored help missing styled text %q: %q", want, colored)
@@ -1483,6 +1524,7 @@ func helpContainsOption(text, option string) bool {
 
 func TestRunSkillsSupportsSessionGrouping(t *testing.T) {
 	home := t.TempDir()
+	t.Setenv("HOME", t.TempDir())
 	t.Setenv("CODEX_HOME", home)
 	t.Setenv("OPENCODE_HOME", t.TempDir())
 	writeSession := func(id string, turns int) {
@@ -1614,10 +1656,9 @@ func TestRunUnusedSkillsEndToEnd(t *testing.T) {
 }
 
 func TestRunUnusedSkillsUsesDefaultRoot(t *testing.T) {
-	userHome := t.TempDir()
-	t.Setenv("HOME", userHome)
-	writeTestSkill(t, filepath.Join(userHome, ".agents", "skills", "default-skill"), "default-skill")
 	testHome(t)
+	userHome := os.Getenv("HOME")
+	writeTestSkill(t, filepath.Join(userHome, ".agents", "skills", "default-skill"), "default-skill")
 
 	var stdout, stderr bytes.Buffer
 	if code := run([]string{"skills", "--unused", "--json"}, &stdout, &stderr); code != 0 {

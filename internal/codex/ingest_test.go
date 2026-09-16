@@ -53,6 +53,19 @@ func TestDiscoverSortsBothRootsAndIgnoresMissingRoot(t *testing.T) {
 	}
 }
 
+func TestHasHistoryTreatsMissingAndEmptyHomesAsUnavailable(t *testing.T) {
+	available, err := HasHistory(filepath.Join(t.TempDir(), "missing"))
+	if err != nil || available {
+		t.Fatalf("missing home availability = %t, %v", available, err)
+	}
+
+	empty := t.TempDir()
+	available, err = HasHistory(empty)
+	if err != nil || available {
+		t.Fatalf("empty home availability = %t, %v", available, err)
+	}
+}
+
 func TestDecodeFileContinuesAfterMalformedUnknownAndLargeLines(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "history.jsonl")
 	contents := "{\"timestamp\":\"2026-01-01T00:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"s\"}}\n" +

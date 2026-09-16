@@ -19,14 +19,20 @@ const (
 
 // AllSourceKinds returns sources in stable display order.
 func AllSourceKinds() []SourceKind {
-	return []SourceKind{SourceCodex, SourceCtx, SourceOpenCode, SourceCopilot}
+	return []SourceKind{SourceCodex, SourceCopilot, SourceOpenCode, SourceCtx}
 }
 
-// DefaultSourceKinds returns sources loaded when the user does not select a
-// source explicitly. ctx remains opt-in while its session metadata contract
-// is incomplete.
+// DefaultSourceKinds returns source kinds eligible for automatic discovery.
+// The caller omits sources that are unavailable or have no history. ctx is
+// intentionally excluded because it is a cross-agent event stream.
 func DefaultSourceKinds() []SourceKind {
-	return []SourceKind{SourceCodex, SourceOpenCode}
+	result := make([]SourceKind, 0, len(AllSourceKinds()))
+	for _, source := range AllSourceKinds() {
+		if source != SourceCtx {
+			result = append(result, source)
+		}
+	}
+	return result
 }
 
 func (s SourceKind) Valid() bool {
