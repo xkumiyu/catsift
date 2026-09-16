@@ -258,11 +258,11 @@ type WarningCollector struct {
 }
 
 func (c *WarningCollector) Add(reason, path string, line int) {
-	c.add(usage.Warning{Reason: reason, Path: path, Line: line, Count: 1})
+	c.add(usage.Warning{Reason: reason, Source: usage.SourceCodex, Path: path, Line: line, Count: 1})
 }
 
 func (c *WarningCollector) AddType(reason, typ, path string, line int) {
-	c.add(usage.Warning{Reason: reason, Type: strings.TrimSpace(typ), Path: path, Line: line, Count: 1})
+	c.add(usage.Warning{Reason: reason, Type: strings.TrimSpace(typ), Source: usage.SourceCodex, Path: path, Line: line, Count: 1})
 }
 
 func (c *WarningCollector) add(incoming usage.Warning) {
@@ -437,7 +437,7 @@ func loadCached(home string, opts IngestOptions) (IngestResult, error) {
 	for _, path := range files {
 		before, statErr := os.Stat(path)
 		if statErr != nil {
-			warnings = append(warnings, usage.Warning{Reason: "read_file", Path: path, Count: 1})
+			warnings = append(warnings, usage.Warning{Reason: "read_file", Source: usage.SourceCodex, Path: path, Count: 1})
 			continue
 		}
 		revision := fileRevision(before)
@@ -527,7 +527,7 @@ func enrichSessionTitles(home string, sessions []SessionMetadata) ([]SessionMeta
 		return sessions, nil
 	}
 	if err != nil {
-		return sessions, []usage.Warning{{Reason: "read_session_index", Path: path, Count: 1}}
+		return sessions, []usage.Warning{{Reason: "read_session_index", Source: usage.SourceCodex, Path: path, Count: 1}}
 	}
 	defer func() { _ = file.Close() }()
 
@@ -543,7 +543,7 @@ func enrichSessionTitles(home string, sessions []SessionMetadata) ([]SessionMeta
 		}
 		var record sessionIndexRecord
 		if err := json.Unmarshal(scanner.Bytes(), &record); err != nil {
-			warnings = append(warnings, usage.Warning{Reason: "malformed_session_index", Path: path, Line: lineNo, Count: 1})
+			warnings = append(warnings, usage.Warning{Reason: "malformed_session_index", Source: usage.SourceCodex, Path: path, Line: lineNo, Count: 1})
 			continue
 		}
 		id := strings.TrimSpace(record.ID)
@@ -554,7 +554,7 @@ func enrichSessionTitles(home string, sessions []SessionMetadata) ([]SessionMeta
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		warnings = append(warnings, usage.Warning{Reason: "read_session_index", Path: path, Line: lineNo, Count: 1})
+		warnings = append(warnings, usage.Warning{Reason: "read_session_index", Source: usage.SourceCodex, Path: path, Line: lineNo, Count: 1})
 	}
 	for i := range sessions {
 		if name := names[sessions[i].ID]; name != "" {
@@ -700,7 +700,7 @@ func parseFileSnapshot(path string, opts IngestOptions) (cache.Snapshot, IngestR
 }
 
 func resultFromSnapshot(snapshot cache.Snapshot, path string) IngestResult {
-	result := IngestResult{Warnings: cache.WarningsToUsage(snapshot.Warnings, path)}
+	result := IngestResult{Warnings: cache.WarningsToUsageForSource(snapshot.Warnings, usage.SourceCodex, path)}
 	for _, turn := range snapshot.Turns {
 		result.Turns = append(result.Turns, turn.Usage())
 	}

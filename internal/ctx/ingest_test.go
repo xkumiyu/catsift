@@ -278,6 +278,11 @@ func TestLoadRecoversUnknownAndMalformedEventsWithWarnings(t *testing.T) {
 	if len(result.Turns) != 1 || len(result.Warnings) != 2 {
 		t.Fatalf("turns/warnings = %#v / %#v", result.Turns, result.Warnings)
 	}
+	for _, warning := range result.Warnings {
+		if warning.Source != usage.SourceCtx {
+			t.Fatalf("warning source = %#v", result.Warnings)
+		}
+	}
 }
 
 func TestLoadIgnoresKnownSummaryEvents(t *testing.T) {

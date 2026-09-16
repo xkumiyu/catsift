@@ -18,9 +18,10 @@ type Snapshot struct {
 // Warning is the privacy-preserving cache representation of a source warning.
 // File paths and line numbers are intentionally not persisted.
 type Warning struct {
-	Reason string `json:"reason,omitempty"`
-	Type   string `json:"type,omitempty"`
-	Count  int    `json:"count,omitempty"`
+	Reason string           `json:"reason,omitempty"`
+	Type   string           `json:"type,omitempty"`
+	Source usage.SourceKind `json:"source,omitempty"`
+	Count  int              `json:"count,omitempty"`
 }
 
 // WarningsFromUsage converts source warnings to their cache representation.
@@ -28,7 +29,7 @@ type Warning struct {
 func WarningsFromUsage(values []usage.Warning) []Warning {
 	result := make([]Warning, 0, len(values))
 	for _, value := range values {
-		result = append(result, Warning{Reason: value.Reason, Type: value.Type, Count: value.Count})
+		result = append(result, Warning{Reason: value.Reason, Type: value.Type, Source: value.Source, Count: value.Count})
 	}
 	return result
 }
@@ -43,7 +44,19 @@ func WarningsToUsage(values []Warning, sourcePath ...string) []usage.Warning {
 	}
 	result := make([]usage.Warning, 0, len(values))
 	for _, value := range values {
-		result = append(result, usage.Warning{Reason: value.Reason, Type: value.Type, Path: path, Count: value.Count})
+		result = append(result, usage.Warning{Reason: value.Reason, Type: value.Type, Source: value.Source, Path: path, Count: value.Count})
+	}
+	return result
+}
+
+// WarningsToUsageForSource restores cached warning facts and fills the source
+// for snapshots written before warning source identity was persisted.
+func WarningsToUsageForSource(values []Warning, source usage.SourceKind, sourcePath ...string) []usage.Warning {
+	result := WarningsToUsage(values, sourcePath...)
+	for i := range result {
+		if result[i].Source == "" {
+			result[i].Source = source
+		}
 	}
 	return result
 }

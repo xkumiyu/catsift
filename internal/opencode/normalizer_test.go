@@ -58,7 +58,7 @@ func TestLoadNormalizesSessionsTurnsToolsSkillsAndTokens(t *testing.T) {
 	if len(uses) != 1 || uses[0].SkillName != "review" || !uses[0].HasMode(usage.ModeExplicit) || !uses[0].HasMode(usage.ModeImplicit) {
 		t.Fatalf("skill uses = %#v", uses)
 	}
-	if len(result.Warnings) != 1 || result.Warnings[0].Reason != "opencode_malformed_part" {
+	if len(result.Warnings) != 1 || result.Warnings[0].Reason != "opencode_malformed_part" || result.Warnings[0].Source != usage.SourceOpenCode {
 		t.Fatalf("warnings = %#v", result.Warnings)
 	}
 }

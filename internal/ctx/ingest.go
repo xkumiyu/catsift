@@ -321,7 +321,7 @@ func staleCacheResult(entry cache.Entry, cacheHit bool, options IngestOptions, n
 		options.diagnostic(fmt.Sprintf("ctx cache: stale candidate invalid: %v", err))
 		return IngestResult{}, age, false
 	}
-	result.Warnings = append(result.Warnings, usage.Warning{Reason: staleCacheWarning, Type: "ctx", Count: 1})
+	result.Warnings = append(result.Warnings, usage.Warning{Reason: staleCacheWarning, Type: "ctx", Source: usage.SourceCtx, Count: 1})
 	return result, age, true
 }
 
@@ -364,7 +364,7 @@ func snapshotFromResult(result IngestResult) cache.Snapshot {
 func resultFromSnapshot(snapshot cache.Snapshot) IngestResult {
 	result := IngestResult{
 		Agents:   append([]string(nil), snapshot.Agents...),
-		Warnings: cache.WarningsToUsage(snapshot.Warnings, "ctx"),
+		Warnings: cache.WarningsToUsageForSource(snapshot.Warnings, usage.SourceCtx, "ctx"),
 	}
 	for _, turn := range snapshot.Turns {
 		result.Turns = append(result.Turns, turn.Usage())
@@ -750,7 +750,7 @@ func accept(timestamp, cutoff, until time.Time) bool {
 }
 
 func warning(reason, typ string, line int) usage.Warning {
-	return usage.Warning{Reason: reason, Type: strings.TrimSpace(typ), Path: "ctx", Line: line, Count: 1}
+	return usage.Warning{Reason: reason, Type: strings.TrimSpace(typ), Source: usage.SourceCtx, Path: "ctx", Line: line, Count: 1}
 }
 
 type assembler struct {

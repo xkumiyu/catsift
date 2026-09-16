@@ -130,7 +130,7 @@ func snapshotFromResult(result IngestResult) cache.Snapshot {
 }
 
 func resultFromSnapshot(snapshot cache.Snapshot) IngestResult {
-	result := IngestResult{Agents: append([]string(nil), snapshot.Agents...), Warnings: cache.WarningsToUsage(snapshot.Warnings)}
+	result := IngestResult{Agents: append([]string(nil), snapshot.Agents...), Warnings: cache.WarningsToUsageForSource(snapshot.Warnings, usage.SourceCopilot)}
 	if len(result.Agents) == 0 {
 		result.Agents = []string{"copilot"}
 	}

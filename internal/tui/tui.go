@@ -1319,6 +1319,17 @@ func wrapNoticeWords(value string, firstWidth, nextWidth int) []string {
 	return append(lines, line)
 }
 
+func wrapWarningSummary(value string, width int) []string {
+	const indent = "  "
+	available := maxInt(1, width-lipgloss.Width(indent))
+	wrapped := wrapNoticeWords(value, available, available)
+	lines := make([]string, 0, len(wrapped))
+	for _, line := range wrapped {
+		lines = append(lines, indent+line)
+	}
+	return lines
+}
+
 func (state *State) tabsLine() string {
 	width := state.renderWidth()
 	routes := []struct {
@@ -1556,7 +1567,7 @@ func (state *State) overviewLines() []string {
 		style lipgloss.Style
 	}{
 		{level: "warning", label: "Warnings", style: warningStyle},
-		{level: "info", label: "Input notes", style: infoStyle},
+		{level: "info", label: "Notes", style: infoStyle},
 	} {
 		summaries := warningSummaries(state.ReadModel.Warnings, group.level)
 		if len(summaries) == 0 && (group.level != "info" || len(periodInfo) == 0) {
@@ -1564,7 +1575,9 @@ func (state *State) overviewLines() []string {
 		}
 		lines = append(lines, "", group.style.Render(group.label))
 		for _, summary := range summaries {
-			lines = append(lines, group.style.Render(truncate("  "+warningSummaryText(summary), width)))
+			for _, line := range wrapWarningSummary(warningSummaryText(summary), width) {
+				lines = append(lines, group.style.Render(line))
+			}
 		}
 		if group.level == "info" {
 			for _, info := range periodInfo {
@@ -1576,6 +1589,8 @@ func (state *State) overviewLines() []string {
 }
 
 type warningSummary struct {
+	source usage.SourceKind
+	typ    string
 	reason string
 	count  int
 }
@@ -1591,12 +1606,14 @@ func warningSummaries(warnings []usage.Warning, level string) []warningSummary {
 		if reason == "" {
 			reason = "unknown"
 		}
-		if index, ok := indexes[reason]; ok {
+		typ := strings.TrimSpace(warning.Type)
+		key := string(warning.Source) + "\x00" + reason + "\x00" + typ
+		if index, ok := indexes[key]; ok {
 			result[index].count += normalizedCount(warning.Count)
 			continue
 		}
-		indexes[reason] = len(result)
-		result = append(result, warningSummary{reason: reason, count: normalizedCount(warning.Count)})
+		indexes[key] = len(result)
+		result = append(result, warningSummary{source: warning.Source, typ: typ, reason: reason, count: normalizedCount(warning.Count)})
 	}
 	return result
 }
@@ -1604,6 +1621,7 @@ func warningSummaries(warnings []usage.Warning, level string) []warningSummary {
 func warningSummaryText(summary warningSummary) string {
 	count := summary.count
 	singular, plural := "input issue", "input issues"
+	text := ""
 	switch summary.reason {
 	case "large_line":
 		singular, plural = "oversized history record skipped", "oversized history records skipped"
@@ -1643,13 +1661,26 @@ func warningSummaryText(summary warningSummary) string {
 		singular, plural = "skill inventory path could not be read", "skill inventory paths could not be read"
 	default:
 		if description := usage.WarningDescription(summary.reason); description != "" {
-			return fmt.Sprintf("%d %s", count, description)
+			text = fmt.Sprintf("%d %s", count, description)
 		}
 	}
-	if count == 1 {
-		return fmt.Sprintf("1 %s", singular)
+	if text == "" {
+		if count == 1 {
+			text = fmt.Sprintf("1 %s", singular)
+		} else {
+			text = fmt.Sprintf("%d %s", count, plural)
+		}
 	}
-	return fmt.Sprintf("%d %s", count, plural)
+	if summary.typ != "" {
+		text += " (type=" + safeDisplay(summary.typ) + ")"
+	}
+	if advice := usage.WarningAdvice(summary.reason); advice != "" {
+		text += "; " + advice
+	}
+	if summary.source.Valid() {
+		text = "[" + usage.AgentDisplayName(string(summary.source)) + "] " + text
+	}
+	return text
 }
 
 func overviewActivityLines(view query.OverviewView, width int) []string {

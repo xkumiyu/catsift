@@ -1967,6 +1967,34 @@ func TestWriteWarningsVerboseIncludesDetails(t *testing.T) {
 	}
 }
 
+func TestWriteWarningsVerboseIncludesSourceAndAction(t *testing.T) {
+	warnings := []usage.Warning{{Reason: "unknown_type", Type: "system.message", Source: usage.SourceCodex, Count: 4}}
+	var output bytes.Buffer
+	writeWarnings(&output, warnings, true)
+	got := output.String()
+	for _, want := range []string{
+		"warning: [Codex] skipped unknown record type type=system.message (4)",
+		"statistics may be incomplete",
+		"update catsift or report this record type",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("verbose warning missing %q: %q", want, got)
+		}
+	}
+}
+
+func TestWriteWarningSummaryIncludesSourceAndAction(t *testing.T) {
+	warnings := []usage.Warning{{Reason: "unknown_type", Type: "system.message", Source: usage.SourceCodex, Path: "/one.jsonl", Count: 4}}
+	var output bytes.Buffer
+	writeWarnings(&output, warnings, false)
+	got := output.String()
+	for _, want := range []string{"from Codex", "statistics may be incomplete", "update catsift or report this record type"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("warning summary missing %q: %q", want, got)
+		}
+	}
+}
+
 func TestWriteWarningsTreatsOversizedRecordsAsInformational(t *testing.T) {
 	warnings := []usage.Warning{{Reason: "large_line", Path: "/one.jsonl", Line: 220, Count: 1}}
 	var output bytes.Buffer
@@ -1986,6 +2014,11 @@ func TestWriteWarningsTreatsOversizedRecordsAsInformational(t *testing.T) {
 	got = output.String()
 	if !strings.Contains(got, "info: skipped oversized history record at /one.jsonl:220 (1)") {
 		t.Fatalf("informational detail missing: %q", got)
+	}
+	for _, want := range []string{"statistics may be incomplete", "inspect the source history"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("oversized record advice missing %q: %q", want, got)
+		}
 	}
 	if strings.Contains(got, "warning:") || strings.Contains(got, "large_line") {
 		t.Fatalf("oversized record was rendered as a warning: %q", got)

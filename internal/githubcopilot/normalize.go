@@ -11,7 +11,7 @@ import (
 	"github.com/xkumiyu/catsift/internal/usage"
 )
 
-const ParserVersion = "copilot-normalizer-v4"
+const ParserVersion = "copilot-normalizer-v5"
 
 type IngestResult struct {
 	Turns    []usage.Turn

@@ -89,6 +89,21 @@ func TestDecodeFileContinuesAfterMalformedUnknownAndLargeLines(t *testing.T) {
 	}
 }
 
+func TestDecodeFileWarningsIdentifyCodexSource(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "history.jsonl")
+	if err := os.WriteFile(path, []byte(`{"type":"system.message"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	warnings := &WarningCollector{}
+	if err := DecodeFile(path, DecodeOptions{Warnings: warnings}, func(Envelope) {}); err != nil {
+		t.Fatal(err)
+	}
+	got := warnings.Warnings()
+	if len(got) != 1 || got[0].Source != usage.SourceCodex {
+		t.Fatalf("warnings = %#v", got)
+	}
+}
+
 func TestDecodeFileSkipsKnownMetadataWithoutWarning(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "history.jsonl")
 	contents := strings.Join([]string{

@@ -537,11 +537,43 @@ type SkillUse struct {
 
 // Warning records a recoverable input problem.
 type Warning struct {
-	Reason string `json:"reason"`
-	Type   string `json:"type,omitempty"`
-	Path   string `json:"path,omitempty"`
-	Line   int    `json:"line,omitempty"`
-	Count  int    `json:"count"`
+	Reason string     `json:"reason"`
+	Type   string     `json:"type,omitempty"`
+	Source SourceKind `json:"source,omitempty"`
+	Path   string     `json:"path,omitempty"`
+	Line   int        `json:"line,omitempty"`
+	Count  int        `json:"count"`
+}
+
+// WarningAdvice returns concise user-facing guidance for a recoverable input
+// problem. An empty result means the caller should use generic guidance.
+func WarningAdvice(reason string) string {
+	switch strings.TrimSpace(reason) {
+	case "unknown_type", "ctx_unknown_record", "ctx_unknown_event":
+		return "statistics may be incomplete; update catsift or report this record type"
+	case "opencode_unknown_part":
+		return "some message details may be missing; update catsift or report this part type"
+	case "large_line", "ctx_large_line":
+		return "statistics may be incomplete; inspect the source history or report the oversized record"
+	case "malformed_json", "ctx_malformed_json":
+		return "statistics may be incomplete; check or restore the source history"
+	case "invalid_timestamp", "missing_timestamp", "ctx_invalid_timestamp":
+		return "date-filtered statistics may be incomplete; update catsift if the source format changed"
+	case "read_file", "read_session_index":
+		return "check the source path and file permissions"
+	case "read_workspace":
+		return "check the Copilot metadata path and file permissions"
+	case "source_unavailable":
+		return "check that the source is installed and readable"
+	case "stale_cache":
+		return "rerun when the source is available to refresh the result"
+	case "empty_line":
+		return "empty lines are ignored; no action is usually needed"
+	case "cannot read skill inventory path":
+		return "check the skill inventory path and file permissions"
+	default:
+		return ""
+	}
 }
 
 // WarningDiagnosticLevel returns the human-facing diagnostic level for a

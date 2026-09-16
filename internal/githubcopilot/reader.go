@@ -180,7 +180,7 @@ func knownEventType(eventType string) bool {
 	switch strings.ToLower(strings.TrimSpace(eventType)) {
 	case "session.start", "session.shutdown", "session.error", "session.info", "session.model_change",
 		"session.context_changed",
-		"user.message", "assistant.message", "assistant.usage", "assistant.turn_start", "assistant.turn_end",
+		"system.message", "user.message", "assistant.message", "assistant.usage", "assistant.turn_start", "assistant.turn_end",
 		"model.captured_assignment_context", "model.message", "model.messages_snapshot",
 		"model.model_call_started", "model.model_call_success", "model.response", "model.turn_started", "model.turn_ended",
 		"tool.execution_start", "tool.execution_complete", "permission.requested", "permission.completed", "skill.invoked":
@@ -195,11 +195,11 @@ type WarningCollector struct {
 }
 
 func (c *WarningCollector) Add(reason, path string, line int) {
-	c.add(usage.Warning{Reason: reason, Path: path, Line: line, Count: 1})
+	c.add(usage.Warning{Reason: reason, Source: usage.SourceCopilot, Path: path, Line: line, Count: 1})
 }
 
 func (c *WarningCollector) AddType(reason, eventType, path string, line int) {
-	c.add(usage.Warning{Reason: reason, Type: strings.TrimSpace(eventType), Path: path, Line: line, Count: 1})
+	c.add(usage.Warning{Reason: reason, Type: strings.TrimSpace(eventType), Source: usage.SourceCopilot, Path: path, Line: line, Count: 1})
 }
 
 func (c *WarningCollector) AddFile(reason, path string) {

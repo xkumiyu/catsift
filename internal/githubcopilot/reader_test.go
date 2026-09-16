@@ -49,6 +49,11 @@ func TestDecodeFileKeepsMetadataAndContinuesAfterRecoverableLines(t *testing.T) 
 	if len(got) != 3 || got[0].Reason != "malformed_json" || got[1].Reason != "missing_timestamp" || got[2].Reason != "unknown_type" {
 		t.Fatalf("warnings = %#v", got)
 	}
+	for _, warning := range got {
+		if warning.Source != usage.SourceCopilot {
+			t.Fatalf("warning source = %#v", got)
+		}
+	}
 }
 
 func TestDecodeFileSkipsOversizedLineAndReadsNextEvent(t *testing.T) {
@@ -70,6 +75,26 @@ func TestDecodeFileSkipsOversizedLineAndReadsNextEvent(t *testing.T) {
 	}
 	if got := warnings.Warnings(); len(got) != 1 || got[0].Reason != "large_line" || got[0].Line != 1 {
 		t.Fatalf("oversized warning = %#v", got)
+	}
+}
+
+func TestDecodeFileAcceptsSystemMessageEvent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session-state", "session-001", "events.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := `{"id":"event-001","timestamp":"2026-01-02T03:04:05Z","type":"system.message","data":{"role":"system","content":"synthetic system message"}}` + "\n"
+	if err := os.WriteFile(path, []byte(content), 0o640); err != nil {
+		t.Fatal(err)
+	}
+
+	var events []Envelope
+	warnings := &WarningCollector{}
+	if err := DecodeFile(path, DecodeOptions{Warnings: warnings}, func(event Envelope) { events = append(events, event) }); err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].Type != "system.message" || len(warnings.Warnings()) != 0 {
+		t.Fatalf("system message event = %#v warnings = %#v", events, warnings.Warnings())
 	}
 }
 

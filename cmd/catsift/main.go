@@ -968,7 +968,7 @@ func loadAllHistoryWith(options historyLoadOptions, loadSource func(historyLoadO
 		}
 	}
 	for _, failure := range failures {
-		result.Warnings = append(result.Warnings, usage.Warning{Reason: "source_unavailable", Type: string(failure.source), Count: 1})
+		result.Warnings = append(result.Warnings, usage.Warning{Reason: "source_unavailable", Type: string(failure.source), Source: failure.source, Count: 1})
 	}
 	return result, nil
 }
@@ -1567,11 +1567,21 @@ func writeWarnings(w io.Writer, warnings []usage.Warning, verbose bool, capabili
 		}
 		level := warningDiagnosticLevel(warning)
 		description := warningDescription(warning.Reason)
+		message := ""
 		if location == "" {
-			diagnostics.write(level, fmt.Sprintf("%s%s (%s)", description, typeSuffix, formatWarningCount(count)))
+			message = fmt.Sprintf("%s%s (%s)", description, typeSuffix, formatWarningCount(count))
 		} else {
-			diagnostics.write(level, fmt.Sprintf("%s%s at %s (%s)", description, typeSuffix, location, formatWarningCount(count)))
+			message = fmt.Sprintf("%s%s at %s (%s)", description, typeSuffix, location, formatWarningCount(count))
 		}
+		if source := warningSourceLabel(warning.Source); source != "" {
+			message = source + " " + message
+		}
+		if advice := usage.WarningAdvice(warning.Reason); advice != "" {
+			message += "; " + advice
+		} else {
+			message += "; check the affected source or report this warning"
+		}
+		diagnostics.write(level, message)
 	}
 }
 
@@ -1579,6 +1589,7 @@ type warningSummary struct {
 	records   int
 	readFiles int
 	files     map[string]struct{}
+	sources   map[usage.SourceKind]struct{}
 }
 
 func writeWarningSummary(diagnostics diagnosticWriter, warnings []usage.Warning) {
@@ -1605,11 +1616,17 @@ func writeWarningSummaryForLevel(diagnostics diagnosticWriter, warnings []usage.
 	default:
 		message = fmt.Sprintf("skipped %s %s across %s %s", formatWarningCount(summary.records), warningRecordLabel(summary.records), formatWarningCount(fileCount), fileLabel)
 	}
+	if sources := warningSourceNames(summary.sources); sources != "" {
+		message += " from " + sources
+	}
+	if advice := warningSummaryAdvice(warnings); advice != "" {
+		message += "; " + advice
+	}
 	diagnostics.write(level, message+"; use --verbose to show details")
 }
 
 func summarizeWarnings(warnings []usage.Warning) warningSummary {
-	summary := warningSummary{files: make(map[string]struct{})}
+	summary := warningSummary{files: make(map[string]struct{}), sources: make(map[usage.SourceKind]struct{})}
 	for _, warning := range warnings {
 		count := warning.Count
 		if count <= 0 {
@@ -1623,8 +1640,49 @@ func summarizeWarnings(warnings []usage.Warning) warningSummary {
 		if warning.Path != "" {
 			summary.files[warning.Path] = struct{}{}
 		}
+		if warning.Source.Valid() {
+			summary.sources[warning.Source] = struct{}{}
+		}
 	}
 	return summary
+}
+
+func warningSourceLabel(source usage.SourceKind) string {
+	if !source.Valid() {
+		return ""
+	}
+	return "[" + usage.AgentDisplayName(string(source)) + "]"
+}
+
+func warningSourceNames(sources map[usage.SourceKind]struct{}) string {
+	if len(sources) == 0 {
+		return ""
+	}
+	result := make([]string, 0, len(sources))
+	for _, source := range usage.AllSourceKinds() {
+		if _, ok := sources[source]; ok {
+			result = append(result, usage.AgentDisplayName(string(source)))
+		}
+	}
+	return strings.Join(result, ", ")
+}
+
+func warningSummaryAdvice(warnings []usage.Warning) string {
+	advice := make(map[string]struct{})
+	for _, warning := range warnings {
+		if value := usage.WarningAdvice(warning.Reason); value != "" {
+			advice[value] = struct{}{}
+		}
+	}
+	if len(advice) == 1 {
+		for value := range advice {
+			return value
+		}
+	}
+	if len(advice) > 1 {
+		return "some statistics may be incomplete; review the affected source records"
+	}
+	return ""
 }
 
 func warningsForDiagnosticLevel(warnings []usage.Warning, level string) []usage.Warning {

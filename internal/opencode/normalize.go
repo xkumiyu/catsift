@@ -716,11 +716,11 @@ type warningCollector struct {
 }
 
 func (c *warningCollector) add(reason, path, typ string) {
-	c.addValue(usage.Warning{Reason: reason, Path: path, Type: typ, Count: 1})
+	c.addValue(usage.Warning{Reason: reason, Path: path, Type: typ, Source: usage.SourceOpenCode, Count: 1})
 }
 
 func (c *warningCollector) addType(reason, typ, path, location string) {
-	c.addValue(usage.Warning{Reason: reason, Type: typ, Path: path, Count: 1})
+	c.addValue(usage.Warning{Reason: reason, Type: typ, Source: usage.SourceOpenCode, Path: path, Count: 1})
 }
 
 func (c *warningCollector) addValue(value usage.Warning) {

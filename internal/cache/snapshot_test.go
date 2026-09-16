@@ -178,3 +178,14 @@ func TestWarningsFromUsageOmitsRawSourcePosition(t *testing.T) {
 		t.Fatalf("warning facts changed: %#v", warnings)
 	}
 }
+
+func TestWarningsPreserveSourceAndRestoreLegacySource(t *testing.T) {
+	warnings := WarningsFromUsage([]usage.Warning{{Reason: "unknown_type", Type: "system.message", Source: usage.SourceCodex, Count: 1}})
+	if len(warnings) != 1 || warnings[0].Source != usage.SourceCodex {
+		t.Fatalf("cached warning source = %#v", warnings)
+	}
+	restored := WarningsToUsageForSource([]Warning{{Reason: "unknown_type", Type: "system.message", Count: 1}}, usage.SourceCodex)
+	if len(restored) != 1 || restored[0].Source != usage.SourceCodex {
+		t.Fatalf("legacy warning source = %#v", restored)
+	}
+}

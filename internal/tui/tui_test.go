@@ -391,16 +391,20 @@ func TestOverviewRendersHumanReadableWarningSummary(t *testing.T) {
 		{Reason: "large_line", Path: "/two.jsonl", Count: 1},
 		{Reason: "empty_line", Count: 2},
 		{Reason: "malformed_json", Count: 2},
+		{Reason: "unknown_type", Type: "system.message", Source: usage.SourceCopilot, Count: 1},
 	}
 
 	state := NewState(input, query.Filter{}, nil)
 	view := strings.Join(state.overviewLines(), "\n")
 	for _, want := range []string{
-		"Input notes",
+		"Notes",
 		"2 oversized history records skipped",
 		"2 empty history lines skipped",
 		"Warnings",
 		"2 malformed JSON records skipped",
+		"[GitHub Copilot]",
+		"type=system.message",
+		"statistics may be incomplete",
 	} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("overview missing %q: %s", want, view)
@@ -414,6 +418,29 @@ func TestOverviewRendersHumanReadableWarningSummary(t *testing.T) {
 	header := strings.Join(state.headerLines(), "\n")
 	if strings.Contains(header, "warning") || strings.Contains(header, "info") {
 		t.Fatalf("header should not contain warning or info counts: %s", header)
+	}
+}
+
+func TestOverviewWrapsWarningDetailsWithoutTruncating(t *testing.T) {
+	input := explorerInput()
+	input.Warnings = []usage.Warning{{Reason: "unknown_type", Type: "system.message", Source: usage.SourceCopilot, Count: 4}}
+	state := NewState(input, query.Filter{}, nil)
+	state.Width = 60
+
+	lines := state.overviewLines()
+	view := strings.Join(lines, "\n")
+	for _, want := range []string{"statistics may be incomplete", "update catsift or report this record type"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("wrapped warning missing %q: %s", want, view)
+		}
+	}
+	for _, line := range lines {
+		plain := ansi.Strip(line)
+		if strings.Contains(plain, "GitHub Copilot") || strings.Contains(plain, "statistics may be incomplete") || strings.Contains(plain, "update catsift") {
+			if lipgloss.Width(line) > state.Width || strings.Contains(plain, "…") {
+				t.Fatalf("warning line was truncated or exceeded width: %q", plain)
+			}
+		}
 	}
 }
 
@@ -975,7 +1002,7 @@ func TestPeriodKeyAppliesAndClearsFilter(t *testing.T) {
 		t.Fatalf("period filter = editing:%v filter:%#v", state.periodEditing, state.Filter)
 	}
 	overview := strings.Join(state.overviewLines(), "\n")
-	if state.ReadModel.Overview.Turns != 0 || strings.Contains(state.View(), "Filters:") || !strings.Contains(overview, "Input notes") || !strings.Contains(overview, "No usage found for the selected period.") {
+	if state.ReadModel.Overview.Turns != 0 || strings.Contains(state.View(), "Filters:") || !strings.Contains(overview, "Notes") || !strings.Contains(overview, "No usage found for the selected period.") {
 		t.Fatalf("period filter was not applied: overview=%#v view=%s", state.ReadModel.Overview, state.View())
 	}
 
@@ -999,7 +1026,7 @@ func TestPeriodInfoReportsRequestedAndActualBoundaries(t *testing.T) {
 		t.Fatalf("period info should not be in header: %s", header)
 	}
 	for _, want := range []string{
-		"Input notes",
+		"Notes",
 		"2026-01-02 to 2026-01-02",
 		"selected period starts before the first usage record (2026-01-02)",
 		"selected period ends after the last usage record (2026-01-02)",

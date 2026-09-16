@@ -178,7 +178,7 @@ func snapshotFromResult(result IngestResult) cache.Snapshot {
 func resultFromSnapshot(snapshot cache.Snapshot, database string) IngestResult {
 	result := IngestResult{
 		Agents:   append([]string(nil), snapshot.Agents...),
-		Warnings: cache.WarningsToUsage(snapshot.Warnings, database),
+		Warnings: cache.WarningsToUsageForSource(snapshot.Warnings, usage.SourceOpenCode, database),
 	}
 	if len(result.Agents) == 0 {
 		result.Agents = []string{"opencode"}
