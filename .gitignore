@@ -5,6 +5,7 @@
 
 # APM dependencies
 /apm_modules/
+/.agents/skills/
 
 # Local build output
 /catsift

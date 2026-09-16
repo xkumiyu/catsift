@@ -38,6 +38,12 @@ npm install --global catsift
 go install github.com/xkumiyu/catsift/cmd/catsift@latest
 ```
 
+AI AgentからCatSiftを使うためのSkillをインストールします。
+
+```sh
+npx skills add xkumiyu/catsift
+```
+
 ## Usage
 
 インタラクティブモードで起動します。

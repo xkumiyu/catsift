@@ -38,6 +38,12 @@ Or install from source:
 go install github.com/xkumiyu/catsift/cmd/catsift@latest
 ```
 
+To install the CatSift skill for AI agents:
+
+```sh
+npx skills add xkumiyu/catsift
+```
+
 ## Usage
 
 Launch interactive mode:
