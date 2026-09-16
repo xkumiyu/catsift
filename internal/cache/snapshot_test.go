@@ -124,6 +124,7 @@ func TestSnapshotRoundTripPreservesModelsAndSessionMetadataWithoutRawSource(t *t
 	}}
 	session := usage.NewSession("session", source)
 	session.Title = "Implement usage explorer"
+	session.ProjectName = "owner/project"
 	session.ProjectPath = "/workspace/project"
 	session.CreatedAt = when
 	session.UpdatedAt = when.Add(time.Minute)
@@ -155,7 +156,7 @@ func TestSnapshotRoundTripPreservesModelsAndSessionMetadataWithoutRawSource(t *t
 		t.Fatalf("token model was not restored: %#v", restored.TokenUsageEvents)
 	}
 	restoredSession := decoded.Sessions[0].Usage()
-	if restoredSession.QualifiedKey() != session.QualifiedKey() || restoredSession.Title != session.Title || !restoredSession.CreatedAt.Equal(session.CreatedAt) || restoredSession.ProjectPath != session.ProjectPath {
+	if restoredSession.QualifiedKey() != session.QualifiedKey() || restoredSession.Title != session.Title || !restoredSession.CreatedAt.Equal(session.CreatedAt) || restoredSession.ProjectName != session.ProjectName || restoredSession.ProjectPath != session.ProjectPath {
 		t.Fatalf("session metadata changed: %#v", restoredSession)
 	}
 	if restored.ModelObservations[0].Source.Path != "" || restored.ModelObservations[0].Source.Line != 0 {

@@ -392,6 +392,7 @@ func TestSessionDetailContainsOnlyBoundedTurnFacts(t *testing.T) {
 	turn.RuntimeTools = []usage.ToolObservation{{RawName: "exec", CanonicalName: "shell", Arguments: "secret", Timestamp: when, Layer: usage.LayerRuntime, Source: source}}
 	turn.SkillEvidence = []usage.SkillEvidence{{SkillName: "review", Mode: usage.ModeImplicit, Method: usage.MethodImplicitAccess, State: usage.StateInferred, Timestamp: when, Source: source}}
 	session := usage.NewSession("s", source)
+	session.ProjectName = "owner/project"
 	readModel := Build(Input{Turns: []usage.Turn{turn}, Sessions: []usage.Session{session}}, Filter{})
 	detail, ok := readModel.SessionDetail(session.QualifiedKey())
 	if !ok || len(detail.Turns) != 1 || len(detail.Turns[0].Models) != 1 || detail.Turns[0].Models[0].Name != "gpt-example" {
@@ -399,6 +400,9 @@ func TestSessionDetailContainsOnlyBoundedTurnFacts(t *testing.T) {
 	}
 	if len(detail.Turns[0].Tools) != 1 || detail.Turns[0].Tools[0] != "shell" || len(detail.Turns[0].Skills) != 1 || detail.Turns[0].Skills[0] != "review" {
 		t.Fatalf("turn detail = %#v", detail.Turns[0])
+	}
+	if detail.Summary.ProjectName != "owner/project" {
+		t.Fatalf("project name = %#v", detail.Summary)
 	}
 	data, err := json.Marshal(detail)
 	if err != nil {
@@ -426,6 +430,7 @@ func TestBuildAppliesSourceAgentProjectAndPeriodFilters(t *testing.T) {
 	second.UserPromptTimes = []time.Time{newer}
 	second.AddTokenUsageForModelAt(usage.NewModelRef("codex", "new-model"), newer, usage.TokenUsage{TotalTokens: 5})
 	session := usage.NewSession("s", source)
+	session.ProjectName = "owner/project"
 	session.ProjectPath = "/workspace/project"
 
 	readModel := Build(Input{Turns: []usage.Turn{first, second}, Sessions: []usage.Session{session}}, Filter{
@@ -521,7 +526,7 @@ func TestBuildUsesSourceVisibilityAndPrefersDirectHistoryOverCtxDuplicate(t *tes
 	if all.Overview.Turns != 2 || all.Overview.Sessions != 2 || all.Overview.TokenUsage.TotalTokens != 3 {
 		t.Fatalf("all-source read model = %#v", all.Overview)
 	}
-	if all.Overview.Source != "" || len(all.Overview.Sources) != 3 {
+	if all.Overview.Source != "" || len(all.Overview.Sources) != 4 {
 		t.Fatalf("all-source visibility = %#v", all.Overview.Sources)
 	}
 

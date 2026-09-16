@@ -1965,13 +1965,13 @@ func (state *State) viewSessionDetail(height int) []string {
 		}
 		metadata = append(metadata,
 			metadataLine("  ", metadataField{label: "Created", value: formatTime(row.CreatedAt)}, metadataField{label: "Updated", value: formatTime(row.UpdatedAt)}),
-			metadataLine("  ", metadataField{label: "Project", value: emptyDash(row.ProjectPath)}),
+			metadataLine("  ", metadataField{label: "Project", value: emptyDash(sessionProject(row))}),
 		)
 		lines = append(lines, metadata...)
 	} else {
 		lines = append(lines,
 			metadataLine("  ", metadataField{label: "Provider", value: emptyDash(row.Provider)}),
-			metadataLine("  ", metadataField{label: "Project", value: emptyDash(row.ProjectPath)}),
+			metadataLine("  ", metadataField{label: "Project", value: emptyDash(sessionProject(row))}),
 			metadataLine("  ", metadataField{label: "Period", value: formatTime(row.StartedAt) + " to " + formatTime(row.EndedAt)}),
 		)
 	}
@@ -2382,13 +2382,20 @@ func sessionCells(width int, row *query.SessionSummary) []tableCell {
 		if row == nil {
 			return []tableCell{{value: "SESSION", width: nameWidth}, {value: "PROJECT", width: projectWidth}, {value: "LAST USED", width: relativeTimeColumnWidth, right: true}}
 		}
-		return []tableCell{sessionDisplayCell(row.Title, row.ID, nameWidth), {value: emptyDash(row.ProjectPath), width: projectWidth}, {value: formatRelativeTime(row.EndedAt), width: relativeTimeColumnWidth, right: true}}
+		return []tableCell{sessionDisplayCell(row.Title, row.ID, nameWidth), {value: emptyDash(sessionProject(*row)), width: projectWidth}, {value: formatRelativeTime(row.EndedAt), width: relativeTimeColumnWidth, right: true}}
 	}
 	nameWidth := maxInt(8, width-6-relativeTimeColumnWidth)
 	if row == nil {
 		return []tableCell{{value: "SESSION", width: nameWidth}, {value: "LAST USED", width: relativeTimeColumnWidth, right: true}}
 	}
 	return []tableCell{sessionDisplayCell(row.Title, row.ID, nameWidth), {value: formatRelativeTime(row.EndedAt), width: relativeTimeColumnWidth, right: true}}
+}
+
+func sessionProject(row query.SessionSummary) string {
+	if strings.TrimSpace(row.ProjectName) != "" {
+		return row.ProjectName
+	}
+	return row.ProjectPath
 }
 
 func sessionCellsForRow(width int, row query.SessionSummary) []tableCell {

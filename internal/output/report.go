@@ -162,6 +162,8 @@ func formatSourceContext(source usage.SourceKind, sourcePath string) string {
 		label = "Codex"
 	case usage.SourceOpenCode:
 		label = "OpenCode"
+	case usage.SourceCopilot:
+		label = "GitHub Copilot"
 	}
 	path := strings.TrimSpace(sourcePath)
 	if path == "" && source == usage.SourceCodex {

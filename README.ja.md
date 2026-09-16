@@ -10,6 +10,7 @@ source、Model、Skill、Sessionごとの利用状況を表示するツールで
 > - Codexのローカル履歴
 > - OpenCodeのローカル履歴
 > - [ctx](https://github.com/ctxrs/ctx)のevent stream (experimental)
+> - GitHub Copilot CLIのローカルsession event
 
 ## Quick start
 
@@ -61,7 +62,8 @@ catsift
 
 これらのoptionは、[interactive mode](#usage)と[CLI mode](#cli-usage)の両方で利用できます。
 
-- `--source`で履歴source（`codex`、`opencode`、`ctx`）を1つ以上選択します。カンマ区切りまたはoptionの複数指定に対応します。デフォルトは`codex`と`opencode`です。
+- `--source`で履歴source（`codex`、`ctx`、`opencode`、`copilot`）を1つ以上選択します。カンマ区切りまたはoptionの複数指定に対応します。デフォルトは`codex`と`opencode`で、GitHub Copilotは明示選択時だけ読み取ります。
+- GitHub Copilotの履歴は`~/.copilot`から読み取ります。
 - `--strict-input`で入力recordがskipされた場合にnon-zeroで終了します。
 
 ## Skill usage fields
@@ -102,6 +104,12 @@ activation modeとevidence stateは独立した軸です。1つの利用に複�
 
 ```sh
 catsift stats
+```
+
+GitHub Copilot CLIの履歴を明示的に読み取る場合は、次のように実行します。
+
+```sh
+catsift stats --source copilot
 ```
 
 ```text
@@ -197,8 +205,9 @@ inventoryのidentityはcanonical skill nameと絶対physical pathの組み合わ
 
 ## Data handling
 
-CatSiftは選択したCodexの履歴、ctxの公開されたevent stream、またはOpenCodeのlocal databaseを
-読み取ります。選択した履歴dataを変更せず、履歴を外部へ送信しません。
-`skills --unused`では、インストール済みSkill inventoryも読み取ります。
+CatSiftは選択したCodexの履歴、ctxの公開されたevent stream、OpenCodeのlocal database、または
+GitHub Copilot CLIの`session-state/*/events.jsonl`を読み取ります。GitHub Copilotのdiagnostic log、
+`session-store.db`、その他の管理fileは利用履歴として解釈しません。sourceはread-onlyかつlocal-onlyで、
+履歴を外部へ送信しません。`skills --unused`では、インストール済みSkill inventoryも読み取ります。
 TUIとreportには、prompt本文、command本文、Tool arguments、Skill bodies、
 provider payload、その他のraw event detailsを表示・含めません。

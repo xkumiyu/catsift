@@ -10,6 +10,7 @@ model, skill, and session.
 > - Codex local history
 > - OpenCode local history
 > - [ctx](https://github.com/ctxrs/ctx) event stream (experimental)
+> - GitHub Copilot CLI local session events
 
 ## Quick start
 
@@ -61,9 +62,10 @@ Filter usage by period or keywords and sort lists. Press `?` inside the TUI for 
 
 These options apply to both [interactive mode](#usage) and [CLI mode](#cli-usage):
 
-- `--source` selects one or more history sources: `codex`, `ctx`, or `opencode`.
-  Separate sources with commas or repeat the option. The default is `codex` and
-  `opencode`.
+- `--source` selects one or more history sources: `codex`, `ctx`, `opencode`, or
+  `copilot`. Separate sources with commas or repeat the option. The
+  default is `codex` and `opencode`; GitHub Copilot is opt-in.
+- GitHub Copilot history is read from `~/.copilot`.
 - `--strict-input` exits non-zero when input records are skipped.
 
 ## Skill usage fields
@@ -106,6 +108,12 @@ See each command's `--help` output for details.
 
 ```sh
 catsift stats
+```
+
+To read GitHub Copilot CLI history explicitly:
+
+```sh
+catsift stats --source copilot
 ```
 
 ```text
@@ -204,8 +212,10 @@ subsequent runs.
 
 ## Data handling
 
-CatSift reads the selected Codex history, ctx's public event stream, or
-OpenCode's local database. It does not modify the selected history data or
-send history externally. The `skills --unused` command also reads the
-installed skill inventory.
+CatSift reads the selected Codex history, ctx's public event stream, OpenCode's
+local database, or GitHub Copilot CLI's `session-state/*/events.jsonl` files.
+For GitHub Copilot, diagnostic logs, `session-store.db`, and other management
+files are not interpreted as usage history. The source is read-only and local-only;
+CatSift does not send history externally. The `skills --unused` command also
+reads the installed skill inventory.
 The TUI and reports do not display or include prompt text, command text, Tool arguments, Skill bodies, provider payloads, or other raw event details.

@@ -52,6 +52,7 @@ type Session struct {
 	ID                string    `json:"id"`
 	Title             string    `json:"title,omitempty"`
 	Key               string    `json:"key,omitempty"`
+	ProjectName       string    `json:"project_name,omitempty"`
 	ProjectPath       string    `json:"project_path,omitempty"`
 	CLIVersion        string    `json:"cli_version,omitempty"`
 	Agent             string    `json:"agent,omitempty"`
@@ -116,6 +117,7 @@ func SessionFromUsage(value usage.Session) Session {
 		ID:                value.ID,
 		Title:             value.Title,
 		Key:               value.QualifiedKey(),
+		ProjectName:       value.ProjectName,
 		ProjectPath:       value.ProjectPath,
 		CLIVersion:        value.CLIVersion,
 		Agent:             value.Agent,
@@ -133,6 +135,7 @@ func (value Session) Usage() usage.Session {
 		ID:                value.ID,
 		Title:             value.Title,
 		Key:               value.Key,
+		ProjectName:       value.ProjectName,
 		ProjectPath:       value.ProjectPath,
 		CLIVersion:        value.CLIVersion,
 		Agent:             value.Agent,

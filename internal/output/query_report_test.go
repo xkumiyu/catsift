@@ -26,6 +26,7 @@ func queryReportFixture() query.ReadModel {
 	turn.SkillEvidence = []usage.SkillEvidence{usage.NewSkillEvidence("session-001", "turn-001", "review", usage.ModeExplicit, usage.MethodStructuredTool, usage.StateConfirmed, when, source)}
 	session := usage.NewSession("session-001", source)
 	session.Title = "A very long session title"
+	session.ProjectName = "owner/project"
 	session.ProjectPath = "/private/project"
 	return query.Build(query.SanitizeInput(query.Input{Turns: []usage.Turn{turn}, Sessions: []usage.Session{session}, Source: usage.SourceCodex, Agents: []string{"codex"}}), query.Filter{Source: usage.SourceCodex})
 }
@@ -84,7 +85,9 @@ func TestRenderQueryJSONUsesPublicSafeSchema(t *testing.T) {
 	}
 	var value struct {
 		Summary struct {
-			ID string `json:"id"`
+			ID          string `json:"id"`
+			ProjectName string `json:"project_name"`
+			ProjectPath string `json:"project_path"`
 		} `json:"summary"`
 		Turns []struct {
 			Tools []string `json:"tools"`
@@ -93,7 +96,7 @@ func TestRenderQueryJSONUsesPublicSafeSchema(t *testing.T) {
 	if err := json.Unmarshal(data, &value); err != nil {
 		t.Fatal(err)
 	}
-	if value.Summary.ID != "session-001" || len(value.Turns) != 1 || value.Turns[0].Tools[0] != "shell" {
+	if value.Summary.ID != "session-001" || value.Summary.ProjectName != "owner/project" || value.Summary.ProjectPath != "/private/project" || len(value.Turns) != 1 || value.Turns[0].Tools[0] != "shell" {
 		t.Fatalf("public session JSON = %#v", value)
 	}
 	for _, forbidden := range []string{"private-command", "history.jsonl", "session\u0000"} {

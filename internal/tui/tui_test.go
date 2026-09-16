@@ -498,7 +498,7 @@ func TestSourceFilterTogglesSourcesIndependently(t *testing.T) {
 	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
 	state.Update(tea.KeyMsg{Type: tea.KeyEnter})
 
-	if len(state.Filter.Sources) != 2 || state.Filter.Sources[0] != usage.SourceCtx || state.Filter.Sources[1] != usage.SourceOpenCode {
+	if len(state.Filter.Sources) != 3 || state.Filter.Sources[0] != usage.SourceCtx || state.Filter.Sources[1] != usage.SourceOpenCode || state.Filter.Sources[2] != usage.SourceCopilot {
 		t.Fatalf("source visibility = %#v", state.Filter.Sources)
 	}
 	if state.ReadModel.Overview.Turns != 1 || state.ReadModel.Overview.Sources[0] != usage.SourceCtx {
@@ -578,6 +578,11 @@ func TestSessionTableGivesProjectMoreWidth(t *testing.T) {
 	line := renderTableRow(100, false, sessionCellsForRow(100, row))
 	if !strings.Contains(line, project) {
 		t.Fatalf("session table truncated PROJECT path: cells=%#v line=%q", sessionCellsForRow(100, row), line)
+	}
+	namedRow := query.SessionSummary{ProjectName: "owner/project", ProjectPath: project}
+	namedLine := renderTableRow(100, false, sessionCellsForRow(100, namedRow))
+	if !strings.Contains(namedLine, "owner/project") || strings.Contains(namedLine, project) {
+		t.Fatalf("session table should prefer PROJECT name: line=%q", namedLine)
 	}
 }
 

@@ -220,6 +220,13 @@ func TestRenderHumanDisplaysMultipleSources(t *testing.T) {
 	}
 }
 
+func TestRenderHumanDisplaysGitHubCopilotSource(t *testing.T) {
+	got := RenderHuman("stats", ReportContext{Source: usage.SourceCopilot, Agents: []string{"copilot"}, Period: "2026-01-02 to 2026-01-02"}, aggregate.Report{}, TerminalCapabilities{ColorMode: ColorNever, NoColor: true})
+	if !strings.Contains(got, "Source: GitHub Copilot") || !strings.Contains(got, "Agents: GitHub Copilot") {
+		t.Fatalf("GitHub Copilot source display = %s", got)
+	}
+}
+
 func TestRenderJSONIncludesMultipleSources(t *testing.T) {
 	ctx := ReportContext{Sources: []usage.SourceKind{usage.SourceCodex, usage.SourceOpenCode}, Agents: []string{"codex", "opencode"}, Period: "all time"}
 	data, err := RenderJSON("stats", ctx, aggregate.Report{})

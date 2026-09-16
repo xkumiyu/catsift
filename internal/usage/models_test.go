@@ -33,7 +33,7 @@ func TestEnumValues(t *testing.T) {
 			t.Fatal("empty tool status")
 		}
 	}
-	for _, value := range []SkillEvidenceMethod{MethodExplicitInjected, MethodSelectedSkillInstructions, MethodSkillInjection, MethodRuntimeSkillItem, MethodStructuredTool, MethodExplicitRequest, MethodImplicitAccess} {
+	for _, value := range []SkillEvidenceMethod{MethodExplicitInjected, MethodSelectedSkillInstructions, MethodSkillInjection, MethodRuntimeSkillItem, MethodStructuredTool, MethodSkillInvoked, MethodExplicitRequest, MethodImplicitAccess} {
 		if value == "" {
 			t.Fatal("empty skill method")
 		}
@@ -82,6 +82,21 @@ func TestOpenCodeSourceRefPreservesIdentity(t *testing.T) {
 	}
 	if source.Path != "/tmp/opencode/opencode.db" || source.CLIVersion != "1.18.27" {
 		t.Fatalf("OpenCode source metadata = %#v", source)
+	}
+}
+
+func TestCopilotSourceIdentity(t *testing.T) {
+	if !SourceCopilot.Valid() {
+		t.Fatal("GitHub Copilot source should be valid")
+	}
+	if got := AgentDisplayName(string(SourceCopilot)); got != "GitHub Copilot" {
+		t.Fatalf("display name = %q", got)
+	}
+	if got := AllSourceKinds(); got[len(got)-1] != SourceCopilot {
+		t.Fatalf("source order = %#v", got)
+	}
+	if got := DefaultSourceKinds(); len(got) != 2 || got[0] != SourceCodex || got[1] != SourceOpenCode {
+		t.Fatalf("default sources changed = %#v", got)
 	}
 }
 

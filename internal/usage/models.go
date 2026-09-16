@@ -14,11 +14,12 @@ const (
 	SourceCodex    SourceKind = "codex"
 	SourceCtx      SourceKind = "ctx"
 	SourceOpenCode SourceKind = "opencode"
+	SourceCopilot  SourceKind = "copilot"
 )
 
 // AllSourceKinds returns sources in stable display order.
 func AllSourceKinds() []SourceKind {
-	return []SourceKind{SourceCodex, SourceCtx, SourceOpenCode}
+	return []SourceKind{SourceCodex, SourceCtx, SourceOpenCode, SourceCopilot}
 }
 
 // DefaultSourceKinds returns sources loaded when the user does not select a
@@ -29,7 +30,7 @@ func DefaultSourceKinds() []SourceKind {
 }
 
 func (s SourceKind) Valid() bool {
-	return s == SourceCodex || s == SourceCtx || s == SourceOpenCode
+	return s == SourceCodex || s == SourceCtx || s == SourceOpenCode || s == SourceCopilot
 }
 
 // CanonicalAgentID returns the stable, lower-case identifier used for
@@ -70,7 +71,7 @@ func AgentDisplayName(value string) string {
 		return "OpenCode"
 	case "claude-code":
 		return "Claude Code"
-	case "github-copilot":
+	case "copilot":
 		return "GitHub Copilot"
 	case "unknown":
 		return "unknown"
@@ -242,6 +243,7 @@ type Session struct {
 	ID                string    `json:"id"`
 	Title             string    `json:"title,omitempty"`
 	Key               string    `json:"key,omitempty"`
+	ProjectName       string    `json:"project_name,omitempty"`
 	ProjectPath       string    `json:"project_path,omitempty"`
 	CLIVersion        string    `json:"cli_version,omitempty"`
 	Agent             string    `json:"agent,omitempty"`
@@ -481,6 +483,7 @@ const (
 	MethodSkillInjection            SkillEvidenceMethod = "skill-injected"
 	MethodRuntimeSkillItem          SkillEvidenceMethod = "runtime-skill-item"
 	MethodStructuredTool            SkillEvidenceMethod = "structured-tool"
+	MethodSkillInvoked              SkillEvidenceMethod = "skill-invoked"
 	MethodExplicitRequest           SkillEvidenceMethod = "explicit-request"
 	MethodImplicitAccess            SkillEvidenceMethod = "implicit-access"
 )
@@ -574,8 +577,12 @@ func WarningDescription(reason string) string {
 		return "skipped unknown record type"
 	case "invalid_timestamp":
 		return "record has an invalid timestamp"
+	case "missing_timestamp":
+		return "record has no timestamp"
 	case "read_file":
 		return "could not read file"
+	case "read_workspace":
+		return "could not read Copilot session metadata"
 	case "source_unavailable":
 		return "history source unavailable"
 	case "stale_cache":

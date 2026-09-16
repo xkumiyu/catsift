@@ -152,7 +152,7 @@ func renderSkillDetail(detail query.SkillDetail, ctx ReportContext, width int, s
 func renderSessionList(rows []query.SessionSummary, ctx ReportContext, width int, styled bool) []string {
 	values := make([][]string, 0, len(rows))
 	for _, row := range rows {
-		values = append(values, []string{sessionDisplay(row.Title, row.ID), row.ID, row.ProjectPath, formatLocalTime(row.EndedAt, ctx.Location)})
+		values = append(values, []string{sessionDisplay(row.Title, row.ID), row.ID, displayProject(row.ProjectName, row.ProjectPath), formatLocalTime(row.EndedAt, ctx.Location)})
 	}
 	return renderQueryTable([]string{"Session", "ID", "Project", "Last Used"}, values, []bool{false, false, false, false}, width, styled, "No sessions in this scope.")
 }
@@ -165,7 +165,7 @@ func renderSessionDetail(detail query.SessionDetail, ctx ReportContext, width in
 		{label: "Source", value: string(row.Source)},
 		{label: "Agent", value: row.Agent},
 		{label: "Provider", value: row.Provider},
-		{label: "Project", value: row.ProjectPath},
+		{label: "Project", value: displayProject(row.ProjectName, row.ProjectPath)},
 		{label: "Started", value: formatLocalTime(row.StartedAt, ctx.Location)},
 		{label: "Ended", value: formatLocalTime(row.EndedAt, ctx.Location)},
 		{label: "Prompts", value: formatCount(row.UserPrompts)},
@@ -424,6 +424,7 @@ type sessionSummaryJSON struct {
 	Provider            string           `json:"provider,omitempty"`
 	ProviderSessionID   string           `json:"provider_session_id,omitempty"`
 	CtxSessionID        string           `json:"ctx_session_id,omitempty"`
+	ProjectName         string           `json:"project_name,omitempty"`
 	ProjectPath         string           `json:"project_path,omitempty"`
 	CLIVersion          string           `json:"cli_version,omitempty"`
 	CreatedAt           string           `json:"created_at,omitempty"`
@@ -552,7 +553,14 @@ func mapSkillSessions(values []query.SkillSessionUsage) []skillSessionJSON {
 }
 
 func toSessionSummaryJSON(value query.SessionSummary) sessionSummaryJSON {
-	return sessionSummaryJSON{ID: value.ID, Title: value.Title, Source: value.Source, Agent: value.Agent, Provider: value.Provider, ProviderSessionID: value.ProviderSessionID, CtxSessionID: value.CtxSessionID, ProjectPath: value.ProjectPath, CLIVersion: value.CLIVersion, CreatedAt: formatMachineTime(value.CreatedAt), UpdatedAt: formatMachineTime(value.UpdatedAt), StartedAt: formatMachineTime(value.StartedAt), EndedAt: formatMachineTime(value.EndedAt), Models: value.Models, Turns: value.Turns, UserPrompts: value.UserPrompts, ToolCalls: value.ToolCalls, SkillUses: value.SkillUses, TokenUsage: value.TokenUsage, TokenUsageAvailable: value.TokenUsageAvailable, Aborted: value.Aborted}
+	return sessionSummaryJSON{ID: value.ID, Title: value.Title, Source: value.Source, Agent: value.Agent, Provider: value.Provider, ProviderSessionID: value.ProviderSessionID, CtxSessionID: value.CtxSessionID, ProjectName: value.ProjectName, ProjectPath: value.ProjectPath, CLIVersion: value.CLIVersion, CreatedAt: formatMachineTime(value.CreatedAt), UpdatedAt: formatMachineTime(value.UpdatedAt), StartedAt: formatMachineTime(value.StartedAt), EndedAt: formatMachineTime(value.EndedAt), Models: value.Models, Turns: value.Turns, UserPrompts: value.UserPrompts, ToolCalls: value.ToolCalls, SkillUses: value.SkillUses, TokenUsage: value.TokenUsage, TokenUsageAvailable: value.TokenUsageAvailable, Aborted: value.Aborted}
+}
+
+func displayProject(name, path string) string {
+	if strings.TrimSpace(name) != "" {
+		return name
+	}
+	return path
 }
 
 func mapTurnSummaries(values []query.TurnSummary) []turnSummaryJSON {

@@ -1192,15 +1192,70 @@ func TestRunHelpDocumentsHistorySourceOptions(t *testing.T) {
 	if code := run([]string{"stats", "--help"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("help exit=%d stderr=%s", code, stderr.String())
 	}
-	for _, want := range []string{"--source SOURCE", "codex, ctx, or opencode", "--days N", "--from DATE", "--to DATE", "input and cache diagnostic details"} {
+	for _, want := range []string{"--source SOURCE", "codex, ctx, opencode, or copilot", "--days N", "--from DATE", "--to DATE", "input and cache diagnostic details"} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Errorf("help missing %q: %s", want, stdout.String())
+		}
+	}
+	if strings.Contains(stdout.String(), "--github-copilot-home") {
+		t.Fatalf("help contains removed GitHub Copilot root option: %s", stdout.String())
+	}
+}
+
+func TestRunLoadsGitHubCopilotFromDefaultHome(t *testing.T) {
+	home := t.TempDir()
+	root := filepath.Join(home, ".copilot")
+	t.Setenv("HOME", home)
+	path := filepath.Join(root, "session-state", "session-001", "events.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	lines := []string{
+		`{"id":"start","timestamp":"2026-01-02T00:00:00Z","type":"session.start","data":{"version":"1.0"}}`,
+		`{"id":"turn","timestamp":"2026-01-02T00:00:01Z","type":"model.turn_started","data":{"turnId":"turn-001","model":"copilot-model"}}`,
+		`{"id":"prompt","timestamp":"2026-01-02T00:00:02Z","type":"user.message","data":{"role":"user","content":"synthetic prompt"}}`,
+		`{"id":"tool","timestamp":"2026-01-02T00:00:03Z","type":"tool.execution_complete","data":{"turnId":"turn-001","toolCallId":"tool-001","toolName":"shell","status":"success"}}`,
+		`{"id":"end","timestamp":"2026-01-02T00:00:04Z","type":"model.turn_ended","data":{"turnId":"turn-001"}}`,
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"stats", "--source", "copilot", "--json"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("GitHub Copilot stats exit=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	var report struct {
+		Source string   `json:"source"`
+		Agents []string `json:"agents"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatalf("invalid GitHub Copilot JSON: %v; stdout=%s", err, stdout.String())
+	}
+	if report.Source != "copilot" || !reflect.DeepEqual(report.Agents, []string{"copilot"}) {
+		t.Fatalf("GitHub Copilot report metadata = %#v", report)
+	}
+	if strings.Contains(stdout.String(), "synthetic prompt") || strings.Contains(stdout.String(), "tool payload") {
+		t.Fatalf("raw GitHub Copilot content leaked to stdout: %s", stdout.String())
+	}
+	for _, command := range []string{"activity", "models", "tools", "skills", "sessions"} {
+		stdout.Reset()
+		stderr.Reset()
+		if code := run([]string{command, "--source", "copilot", "--json"}, &stdout, &stderr); code != 0 {
+			t.Fatalf("GitHub Copilot %s exit=%d stdout=%s stderr=%s", command, code, stdout.String(), stderr.String())
+		}
+		var document any
+		if err := json.Unmarshal(stdout.Bytes(), &document); err != nil {
+			t.Fatalf("GitHub Copilot %s JSON: %v; stdout=%s", command, err, stdout.String())
+		}
+		if strings.Contains(stdout.String(), "synthetic prompt") || strings.Contains(stdout.String(), "tool payload") {
+			t.Fatalf("raw GitHub Copilot %s content leaked to stdout: %s", command, stdout.String())
 		}
 	}
 }
 
 func TestRunRejectsRemovedHistoryRootOptions(t *testing.T) {
-	for _, option := range []string{"--codex-home", "--ctx-data-root", "--opencode-home"} {
+	for _, option := range []string{"--codex-home", "--ctx-data-root", "--opencode-home", "--github-copilot-home"} {
 		t.Run(option, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
 			if code := run([]string{"stats", option, t.TempDir()}, &stdout, &stderr); code != 2 || !strings.Contains(stderr.String(), "flag provided but not defined") {

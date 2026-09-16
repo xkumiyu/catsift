@@ -166,6 +166,7 @@ type SessionSummary struct {
 	Provider            string           `json:"provider,omitempty"`
 	ProviderSessionID   string           `json:"provider_session_id,omitempty"`
 	CtxSessionID        string           `json:"ctx_session_id,omitempty"`
+	ProjectName         string           `json:"project_name,omitempty"`
 	ProjectPath         string           `json:"project_path,omitempty"`
 	CLIVersion          string           `json:"cli_version,omitempty"`
 	CreatedAt           time.Time        `json:"created_at,omitempty"`
@@ -521,6 +522,9 @@ func mergeSession(left, right usage.Session) usage.Session {
 	if result.Key == "" {
 		result.Key = right.Key
 	}
+	if result.ProjectName == "" {
+		result.ProjectName = right.ProjectName
+	}
 	if result.ProjectPath == "" {
 		result.ProjectPath = right.ProjectPath
 	}
@@ -549,6 +553,13 @@ func mergeSession(left, right usage.Session) usage.Session {
 		result.Source = right.Source
 	}
 	return result
+}
+
+func projectDisplay(session usage.Session) string {
+	if strings.TrimSpace(session.ProjectName) != "" {
+		return session.ProjectName
+	}
+	return session.ProjectPath
 }
 
 func turnLookupKey(turn usage.Turn) string {
@@ -738,7 +749,7 @@ func searchMatchesTurn(turn usage.Turn, session usage.Session, value string) boo
 	if want == "" {
 		return true
 	}
-	parts := []string{session.ID, session.Title, session.Key, session.ProjectPath, session.Agent, session.Provider, string(session.Source.Source), turn.SessionID, turn.ID}
+	parts := []string{session.ID, session.Title, session.Key, session.ProjectName, session.ProjectPath, session.Agent, session.Provider, string(session.Source.Source), turn.SessionID, turn.ID}
 	for _, model := range modelsForTurn(turn) {
 		parts = append(parts, model.Provider, model.Name)
 	}
@@ -1400,7 +1411,7 @@ func sessionRows(index *sessionIndex, keys map[string]struct{}, turns map[string
 	sort.Strings(ordered)
 	for _, key := range ordered {
 		meta := index.sessions[key]
-		value := SessionSummary{Key: key, ID: meta.ID, Title: meta.Title, Source: meta.Source.Source, Agent: usage.CanonicalAgentID(meta.Agent), Provider: meta.Provider, ProviderSessionID: meta.ProviderSessionID, CtxSessionID: meta.CtxSessionID, ProjectPath: meta.ProjectPath, CLIVersion: meta.CLIVersion, CreatedAt: meta.CreatedAt, UpdatedAt: meta.UpdatedAt, SkillUses: skillCounts[key]}
+		value := SessionSummary{Key: key, ID: meta.ID, Title: meta.Title, Source: meta.Source.Source, Agent: usage.CanonicalAgentID(meta.Agent), Provider: meta.Provider, ProviderSessionID: meta.ProviderSessionID, CtxSessionID: meta.CtxSessionID, ProjectName: meta.ProjectName, ProjectPath: meta.ProjectPath, CLIVersion: meta.CLIVersion, CreatedAt: meta.CreatedAt, UpdatedAt: meta.UpdatedAt, SkillUses: skillCounts[key]}
 		if value.ID == "" {
 			value.ID = key
 		}
@@ -1468,7 +1479,7 @@ func (model *ReadModel) buildDetails(index *sessionIndex, sessionKeys map[string
 		sort.Strings(keys)
 		for _, sessionKey := range keys {
 			meta := index.sessions[sessionKey]
-			row := ModelSessionUsage{Key: sessionKey, ID: meta.ID, Title: meta.Title, Source: meta.Source.Source, Agent: usage.CanonicalAgentID(meta.Agent), Project: meta.ProjectPath}
+			row := ModelSessionUsage{Key: sessionKey, ID: meta.ID, Title: meta.Title, Source: meta.Source.Source, Agent: usage.CanonicalAgentID(meta.Agent), Project: projectDisplay(meta)}
 			for _, turn := range turns[sessionKey] {
 				if !turnIncludesModel(turn, value.model) {
 					continue
@@ -1537,7 +1548,7 @@ func (model *ReadModel) buildDetails(index *sessionIndex, sessionKeys map[string
 					Title:        meta.Title,
 					Source:       source,
 					Agent:        usage.CanonicalAgentID(agent),
-					Project:      meta.ProjectPath,
+					Project:      projectDisplay(meta),
 					ModeCounts:   make(map[usage.SkillMode]int),
 					StateCounts:  make(map[usage.SkillState]int),
 					MethodCounts: make(map[usage.SkillEvidenceMethod]int),

@@ -17,6 +17,7 @@ import (
 	"github.com/xkumiyu/catsift/internal/cache"
 	"github.com/xkumiyu/catsift/internal/codex"
 	ctxsource "github.com/xkumiyu/catsift/internal/ctx"
+	"github.com/xkumiyu/catsift/internal/githubcopilot"
 	"github.com/xkumiyu/catsift/internal/opencode"
 	"github.com/xkumiyu/catsift/internal/output"
 	"github.com/xkumiyu/catsift/internal/query"
@@ -41,7 +42,7 @@ Commands:
   sessions  Show session usage and details
 
 Options:
-  --source SOURCE   codex, ctx, or opencode; repeatable or comma-separated (default: codex, opencode)
+  --source SOURCE   codex, ctx, opencode, or copilot; repeatable or comma-separated (default: codex, opencode)
   --verbose         Show input/cache diagnostics and TUI source-load timings
   --strict-input    Exit non-zero when input records are skipped
   --help            Show this help
@@ -55,7 +56,7 @@ const statsUsageText = `Usage: catsift stats [options]
 Show an overview of agent usage.
 
 Options:
-  --source SOURCE   codex, ctx, or opencode; repeatable or comma-separated (default: codex, opencode)
+  --source SOURCE   codex, ctx, opencode, or copilot; repeatable or comma-separated (default: codex, opencode)
   --days N          Include the last N days (N >= 1; default: all time)
   --from DATE       Include records on or after DATE (YYYY-MM-DD)
   --to DATE         Include records before the day after DATE (YYYY-MM-DD)
@@ -71,7 +72,7 @@ const activityUsageText = `Usage: catsift activity [options]
 Show daily activity for agent usage.
 
 Options:
-  --source SOURCE   codex, ctx, or opencode; repeatable or comma-separated (default: codex, opencode)
+  --source SOURCE   codex, ctx, opencode, or copilot; repeatable or comma-separated (default: codex, opencode)
   --days N          Include the last N days (N >= 1; default: all time)
   --from DATE       Include records on or after DATE (YYYY-MM-DD)
   --to DATE         Include records before the day after DATE (YYYY-MM-DD)
@@ -87,7 +88,7 @@ const toolsUsageText = `Usage: catsift tools [options]
 Show tool usage by canonical name.
 
 Options:
-  --source SOURCE   codex, ctx, or opencode; repeatable or comma-separated (default: codex, opencode)
+  --source SOURCE   codex, ctx, opencode, or copilot; repeatable or comma-separated (default: codex, opencode)
   --days N          Include the last N days (N >= 1; default: all time)
   --from DATE       Include records on or after DATE (YYYY-MM-DD)
   --to DATE         Include records before the day after DATE (YYYY-MM-DD)
@@ -104,7 +105,7 @@ const modelsUsageText = `Usage: catsift models [options]
 Show model usage by provider and model name.
 
 Options:
-  --source SOURCE   codex, ctx, or opencode; repeatable or comma-separated (default: codex, opencode)
+  --source SOURCE   codex, ctx, opencode, or copilot; repeatable or comma-separated (default: codex, opencode)
   --days N          Include the last N days (N >= 1; default: all time)
   --from DATE       Include records on or after DATE (YYYY-MM-DD)
   --to DATE         Include records before the day after DATE (YYYY-MM-DD)
@@ -123,7 +124,7 @@ const skillsUsageText = `Usage: catsift skills [options]
 Show skill usage and evidence state.
 
 Options:
-  --source SOURCE   codex, ctx, or opencode; repeatable or comma-separated (default: codex, opencode)
+  --source SOURCE   codex, ctx, opencode, or copilot; repeatable or comma-separated (default: codex, opencode)
   --days N          Include the last N days (N >= 1; default: all time)
   --from DATE       Include records on or after DATE (YYYY-MM-DD)
   --to DATE         Include records before the day after DATE (YYYY-MM-DD)
@@ -147,7 +148,7 @@ const sessionsUsageText = `Usage: catsift sessions [options]
 Show session usage and turn details.
 
 Options:
-  --source SOURCE   codex, ctx, or opencode; repeatable or comma-separated (default: codex, opencode)
+  --source SOURCE   codex, ctx, opencode, or copilot; repeatable or comma-separated (default: codex, opencode)
   --days N          Include the last N days (N >= 1; default: all time)
   --from DATE       Include records on or after DATE (YYYY-MM-DD)
   --to DATE         Include records before the day after DATE (YYYY-MM-DD)
@@ -161,7 +162,7 @@ Detail:
   catsift sessions detail ID [options]
 `
 
-const detailCommonOptionsText = `  --source SOURCE   codex, ctx, or opencode; repeatable or comma-separated (default: codex, opencode)
+const detailCommonOptionsText = `  --source SOURCE   codex, ctx, opencode, or copilot; repeatable or comma-separated (default: codex, opencode)
   --days N          Include the last N days (N >= 1; default: all time)
   --from DATE       Include records on or after DATE (YYYY-MM-DD)
   --to DATE         Include records before the day after DATE (YYYY-MM-DD)
@@ -178,7 +179,7 @@ Explore model, usage, skill, and session details in an interactive terminal.
 The TUI is read-only and does not display prompt text, tool arguments, or skill bodies.
 
 Options:
-  --source SOURCE   codex, ctx, or opencode; repeatable or comma-separated (default: codex, opencode)
+  --source SOURCE   codex, ctx, opencode, or copilot; repeatable or comma-separated (default: codex, opencode)
   --verbose         Show input/cache diagnostics and source-load timings
   --strict-input    Exit non-zero when input records are skipped
   --help            Show this help
@@ -592,7 +593,7 @@ func appendSourceSelection(selected *[]usage.SourceKind, value string) error {
 		part = strings.TrimSpace(part)
 		source := usage.SourceKind(strings.ToLower(part))
 		if !source.Valid() {
-			return fmt.Errorf("invalid --source %q (want codex, ctx, or opencode)", part)
+			return fmt.Errorf("invalid --source %q (want codex, ctx, opencode, or copilot)", part)
 		}
 		duplicate := false
 		for _, existing := range *selected {
@@ -778,6 +779,24 @@ func loadHistory(options historyLoadOptions) (loadedHistory, error) {
 			return loadedHistory{}, fmt.Errorf("read Codex history %q: %w", home, err)
 		}
 		result.Input = query.Input{Turns: input.Turns, Sessions: input.Sessions, Warnings: input.Warnings, Agents: []string{"codex"}, Source: options.Source, From: options.From, To: options.To}
+	case usage.SourceCopilot:
+		home, err := githubcopilot.ResolveHome("")
+		if err != nil {
+			return loadedHistory{}, fmt.Errorf("resolve GitHub Copilot data root: %w", err)
+		}
+		input, err := githubcopilot.Load(home, githubcopilot.IngestOptions{
+			Days: options.Days, DaysSet: options.DaysSet, From: options.From, To: options.To, Now: options.Now, CacheDir: options.CacheDir,
+			Diagnostic: func(message string) {
+				if options.Verbose {
+					options.Diagnostics.write("debug", message)
+				}
+			},
+		})
+		if err != nil {
+			return loadedHistory{}, fmt.Errorf("read GitHub Copilot history %q: %w", home, err)
+		}
+		result.SourcePath = home
+		result.Input = query.Input{Turns: input.Turns, Sessions: input.Sessions, Warnings: input.Warnings, Agents: input.Agents, Source: options.Source, From: options.From, To: options.To}
 	default:
 		return loadedHistory{}, fmt.Errorf("unsupported history source %q", options.Source)
 	}
@@ -818,6 +837,8 @@ func sourceLoadLabel(sources []usage.SourceKind) string {
 		return "Reading ctx history"
 	case usage.SourceOpenCode:
 		return "Reading OpenCode history"
+	case usage.SourceCopilot:
+		return "Reading GitHub Copilot history"
 	default:
 		return "Reading Codex history"
 	}
