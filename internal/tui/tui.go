@@ -1239,8 +1239,10 @@ func (state *State) headerLines() []string {
 	compactMetadata := metadataLine("", sourceField, agentsField, periodField)
 	if lipgloss.Width(compactMetadata) <= width {
 		lines = append(lines, compactMetadata)
-	} else {
+	} else if lipgloss.Width(scope) <= width {
 		lines = append(lines, scope, period)
+	} else {
+		lines = append(lines, metadataLine("", sourceField), metadataLine("", agentsField), period)
 	}
 	lines = append(lines, state.tabsLine())
 	if state.Loading {

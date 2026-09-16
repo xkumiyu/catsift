@@ -476,6 +476,38 @@ func TestHeaderKeepsMetadataRowsWhenTheyDoNotFit(t *testing.T) {
 	}
 }
 
+func TestHeaderSplitsLongSourceAndAgentsWithoutTruncation(t *testing.T) {
+	sources := []usage.SourceKind{usage.SourceCodex, usage.SourceCopilot, usage.SourceOpenCode}
+	input := explorerInput()
+	input.Source = ""
+	input.Sources = sources
+	input.Agents = []string{"codex", "copilot", "opencode"}
+	state := NewState(input, query.Filter{Sources: sources}, nil)
+	state.sourcePaths = map[usage.SourceKind]string{
+		usage.SourceCodex:    "~/.codex",
+		usage.SourceCopilot:  "~/.copilot",
+		usage.SourceOpenCode: "~/.local/share/opencode",
+	}
+	state.Width = 120
+
+	view := state.View()
+	var sourceLine, agentsLine string
+	for _, line := range strings.Split(view, "\n") {
+		switch {
+		case strings.Contains(line, "Source:"):
+			sourceLine = line
+		case strings.Contains(line, "Agents:"):
+			agentsLine = line
+		}
+	}
+	if sourceLine == "" || agentsLine == "" || sourceLine == agentsLine {
+		t.Fatalf("header should separate long Source and Agents metadata: %s", view)
+	}
+	if !strings.Contains(ansi.Strip(agentsLine), "Agents: Codex, GitHub Copilot, OpenCode") {
+		t.Fatalf("header truncated agents: %s", view)
+	}
+}
+
 func TestSourceFilterTogglesSourcesIndependently(t *testing.T) {
 	input := explorerInput()
 	opencodeSource := usage.NewOpenCodeSourceRef("/private/opencode.db", "")
@@ -1687,7 +1719,7 @@ func TestSessionsSearchMatchesFullSessionID(t *testing.T) {
 
 func TestSessionsListFitsNarrowTerminal(t *testing.T) {
 	state := NewState(explorerInput(), query.Filter{}, nil)
-	state.Update(tea.WindowSizeMsg{Width: 32, Height: 10})
+	state.Update(tea.WindowSizeMsg{Width: 32, Height: 11})
 	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'5'}})
 	view := state.View()
 	if !strings.Contains(view, "SESSION") || !strings.Contains(view, "LAST USED") || strings.Contains(view, "SESSION NAME") {
