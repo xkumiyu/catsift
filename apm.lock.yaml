@@ -1,6 +1,6 @@
 lockfile_version: '1'
-generated_at: '2026-09-01T14:57:34.961748+00:00'
-apm_version: 0.28.0
+generated_at: '2026-09-17T12:05:01.865490+00:00'
+apm_version: 0.31.0
 dependencies:
 - repo_url: fission-ai/openspec
   materialization_repo_url: Fission-AI/OpenSpec
@@ -48,6 +48,7 @@ dependencies:
     .agents/skills/openspec-update-change/SKILL.md: sha256:f9e08302d75e873e9ca801211e6151e3f9b663ac6205903e7d79b6520cea30f5
     .agents/skills/openspec-verify-change/SKILL.md: sha256:02a810d3fb265df77ec22891cef25f0510fe0f07b608d837ba361debced81840
   content_hash: sha256:8947f8dcb57fb12919cd4bb36defa0341c386b53d7fe6484bd95f3bd2fb4f958
+  is_dev: true
 deployments:
 - kind: project-relative
   target: agent-skills

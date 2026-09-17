@@ -8,8 +8,9 @@ author: xkumiyu
 targets:
   - agent-skills
 dependencies:
+  mcp: []
+devDependencies:
   apm:
     - Fission-AI/OpenSpec
-  mcp: []
 includes: auto
 scripts: {}
