@@ -81,21 +81,38 @@ Codexのsession・user prompt・Tool・Skill利用を、system logではなく�
 - **THEN** システムはその利用をTotalへ1回だけ加算する
 
 ### Requirement: 期間とhistory sourceを各統計commandで指定できる
-`stats`、`tools`、`skills`は共通して`--source codex|ctx|opencode`、`--days`、および`--color auto|always|never`を受け付けなければならない（SHALL）。`--source`の既定値は`codex`でなければならず（SHALL）。同一実行でCodex、ctx、およびOpenCodeを複数同時に入力へ含めてはならない（MUST NOT）。filterとsource解決はすべての出力形式で同じ結果集合へ適用しなければならない（SHALL）。
+
+`stats`、`tools`、`skills`は共通して`--source codex|ctx|opencode|copilot`、`--days`、および`--color auto|always|never`を受け付けなければならない（SHALL）。`--source`の既定値は`codex`でなければならず（SHALL）。同一実行でCodex、ctx、OpenCode、およびGitHub Copilotを複数同時に入力へ含めてはならない（MUST NOT）。filterとsource解決はすべての出力形式で同じ結果集合へ適用しなければならない（SHALL）。
 
 #### Scenario: source未指定時はCodexを使用する
 
 - **WHEN** userが `catsift stats` を実行する
 - **THEN** システムは既存のCodex home解決規則に従ってCodexだけを入力sourceにする
 
+#### Scenario: GitHub Copilot sourceを明示する
+
+- **WHEN** userが `catsift stats --source copilot`、`catsift tools --source copilot`、または`catsift skills --source copilot`を実行する
+- **THEN** システムはGitHub Copilot sourceだけを入力scopeとして使用し、他sourceの履歴を暗黙に合算しない
+
 #### Scenario: Codexとctxを同時に指定する
 
 - **WHEN** userが複数のhistory sourceを同時に指定しようとする
-- **THEN** システムはsource選択を拒否し、両sourceを合算したreportを生成しない
+- **THEN** システムはsource選択を拒否し、Codex、ctx、OpenCode、またはGitHub Copilotを合算したreportを生成しない
 
 #### Scenario: 30日分のSkill統計を取得する
-- **WHEN** userが `catsift skills --days 30` を実行する
-- **THEN** システムはcutoff以後の観測だけからSkill統計を生成する
+
+- **WHEN** userが任意のsourceで `catsift skills --days 30` を実行する
+- **THEN** システムは選択されたsourceのcutoff以後の観測だけからSkill統計を生成する
+
+#### Scenario: GitHub Copilotと別sourceを同時に指定する
+
+- **WHEN** userがGitHub CopilotとCodex、ctx、またはOpenCodeを同時に入力へ指定しようとする
+- **THEN** システムはsource選択を拒否し、異なるsourceを合算したreportを生成しない
+
+#### Scenario: 30日分のGitHub Copilot Skill統計を取得する
+
+- **WHEN** userが `catsift skills --source copilot --days 30` を実行する
+- **THEN** システムはGitHub Copilot eventのcutoff以後の観測だけからSkill統計を生成する
 
 ### Requirement: human-readable report・JSONを提供する
 各統計commandは既定で、report内容を示すheading、入力source、対象Agent一覧、適用中のfilterをlabel付きcontext行、明確なsectionまたはcolumn heading、整列した値、および必要なfooterを持つhuman-readable static reportを出力しなければならない（SHALL）。human-readable reportの`Source`はsourceのdisplay nameと、取得できる場合は有効なsource pathを括弧内へ表示しなければならない（SHALL）。source pathを表示する場合は`Source`行へ含め、別の`History`または`Data root` context行を追加してはならない（MUST NOT）。複数Agentの表示はcanonical IDの決定的な順序に対応するdisplay nameをcomma区切りで示し、context行を中点で連結してはならない（MUST NOT）。countは桁区切りして右揃えにし、tableのLast Usedはtimezoneを含む簡潔なlocal日時で表示しなければならない（SHALL）。`--json`でmachine-readable出力へ切り替えられなければならず（SHALL）、JSONはhuman-readable reportと同じfilter・集計結果を表し、`source`とcanonical Agent IDの`agents` arrayを含まなければならない（SHALL）。既存の`agent` string fieldは後方互換のため保持し、単一Agentでは従来の値、複数Agentではcanonical IDを決定的順序でcomma区切りした値を格納しなければならない（SHALL）。JSONのfield順、timestamp形式、およびwarningをstdoutへ混入させない規則を維持しなければならない（SHALL）。
@@ -317,3 +334,122 @@ Usage Explorerはinteractive terminal向けの出力だけを提供し、`--json
 
 - **WHEN** 選択したsourceのdata rootが存在しない、または読み込み不能である
 - **THEN** システムはTUIを起動せず、errorをstderrへ出力して非0で終了する
+
+### Requirement: GitHub Copilot sourceをreportとJSONへ反映する
+
+GitHub Copilot sourceを選択した各統計reportは、source display name、canonical Agent ID `copilot`、適用中のperiod、および取得できた集計値を既存のhuman-readable・JSON出力規則で表示しなければならない（SHALL）。履歴が空の場合も、既存のempty-stateと終了codeの規則を維持しなければならない（SHALL）。
+
+#### Scenario: GitHub Copilotのhuman-readable reportを表示する
+
+- **WHEN** userが `catsift stats --source copilot` を実行し、有効なCopilot eventが存在する
+- **THEN** システムはGitHub Copilotのsource表示、`copilot`に対応するAgent表示、Period、およびSessions・Turns・User Prompts・Tool Callsなどの集計を出力する
+
+#### Scenario: GitHub CopilotのJSONを表示する
+
+- **WHEN** userが `catsift tools --source copilot --json` または別の統計commandへ`--json`を指定する
+- **THEN** stdoutは単独の有効なJSON documentとなり、`source`、`agents`、既存の集計fieldを含み、prompt本文・tool argument・warningを含まない
+
+#### Scenario: GitHub Copilotのtoken usageをJSONへ表示する
+
+- **WHEN** Copilotのpersisted usageにcache read、cache write、またはreasoning tokenが存在し、userがtoken統計を含むreportをJSONで出力する
+- **THEN** JSONは既存のtoken usage fieldへ正規化された値を含み、raw provider payloadを含まない
+
+#### Scenario: GitHub Copilotのproject nameを表示する
+
+- **WHEN** userがproject metadataを含むCopilot sessionで`catsift sessions --source copilot`またはSession detailを実行する
+- **THEN** human-readable reportはproject nameを表示し、JSONは`project_name`と取得可能な`project_path`をsanitized metadataとして含む
+
+#### Scenario: GitHub Copilotの履歴が空である
+
+- **WHEN** userが `catsift stats --source copilot` を実行し、有効な利用eventが存在しない
+- **THEN** システムはsource、Agent、Period、および0件のsummaryとempty-state messageを出力して0で終了する
+
+### Requirement: activityでOverviewのdaily activityを取得できる
+
+`catsift activity`は、TUI Overviewの対象scopeと同じnormalized historyからdaily activityを生成し、日付、Sessions、およびTurnsだけをhuman-readable reportへ表示しなければならない（SHALL）。`--json`を併用した場合は、同じscopeと集計結果を`rows` arrayとして出力しなければならない（SHALL）。既存の`catsift stats`はsummaryのみを表示し、出力を変更してはならない（MUST NOT）。
+
+#### Scenario: daily activityを表示する
+
+- **WHEN** userが `catsift activity --days 30` を実行する
+- **THEN** システムは選択された30日間の実際の対象範囲について、日付ごとのSessionsとTurnsをdaily activityとして表示する
+
+#### Scenario: daily activityをJSONで取得する
+
+- **WHEN** userが `catsift activity --json` を実行する
+- **THEN** stdoutのJSONはstats overviewを含めず、human-readable reportと同じ日付・Sessions・Turnsを持つ`rows` arrayを含む
+
+### Requirement: CLIでModel一覧とModel detailを取得できる
+
+`catsift models`は、TUI Models viewと同じscopeからprovider/nameごとのModel summaryを表示しなければならない（SHALL）。summaryは少なくともSessions、Turns、Token usage、およびLast Usedを含まなければならない（SHALL）。`catsift models detail provider/name`を指定した場合は、対象ModelのTurns、Prompts、Tools、Skills、Token usage、First Used、Last Used、および関連Sessionごとのsummaryを表示しなければならない（SHALL）。
+
+#### Scenario: Model一覧を表示する
+
+- **WHEN** userが `catsift models --source codex` を実行する
+- **THEN** システムはCodex scopeのModelを決定的な順序で一覧表示し、各Modelの利用状況を表示する
+
+#### Scenario: Model detailを表示する
+
+- **WHEN** userが `catsift models detail openai/gpt-example --json` を実行する
+- **THEN** システムは指定Modelのsummaryと、そのModelが観測されたSessionごとのTurns、Token usage、Project、および利用時刻をJSONで返す
+
+#### Scenario: 存在しないModelを指定する
+
+- **WHEN** userが現在のscopeに存在しないModelを `models detail`で指定する
+- **THEN** システムはdetailを生成せず、対象Modelが存在しないことをstderrへ出力して非0で終了する
+
+### Requirement: CLIでSkill detailを取得できる
+
+既存の`catsift skills`は`skills detail NAME`を受け付け、TUI Skill detailと同じnormalized Skill evidenceから、Skill全体のUses、Sessions、Turns、usage mode、evidence state、検出method、および利用Sessionごとのsummaryを表示しなければならない（SHALL）。`skills detail`のhuman-readable reportとJSONは同じdetail情報を表さなければならない（SHALL）。detail subcommandはlist/unused専用optionと併用してはならない（MUST NOT）。
+
+#### Scenario: Skill detailを表示する
+
+- **WHEN** userが `catsift skills detail review --json` を実行する
+- **THEN** システムは`review`のdeduplicated usage、distinct Turns、mode・state・methodの内訳、および利用SessionごとのUses、Turns、時刻をJSONで返す
+
+#### Scenario: Skill detailの人間向け表示を行う
+
+- **WHEN** userが `catsift skills detail review` を実行する
+- **THEN** システムはSkill名、summary、evidenceの内訳、および関連Session一覧をstatic reportとして表示する
+
+#### Scenario: unused viewとdetailを併用する
+
+- **WHEN** userが `catsift skills detail review --unused` を実行する
+- **THEN** システムはoption errorをstderrへ出力し、unused reportもSkill detailも生成しない
+
+### Requirement: CLIでSession一覧とSession detailを取得できる
+
+`catsift sessions`は、TUI Sessions viewと同じscopeからSession name、Session ID、Project、およびLast Usedを一覧表示しなければならない（SHALL）。`catsift sessions detail ID`を指定した場合は、scope内で一致するSessionのmetadata、集計値、および時系列のTurn summaryを表示しなければならない（SHALL）。Turn summaryはModel、Token usage、Tools、Skills、Status、Started、およびEndedを含まなければならない（SHALL）。Session IDがscope内で複数のSessionに一致する場合は曖昧な指定として扱い、候補をstderrへ示して非0で終了しなければならない（SHALL）。
+
+#### Scenario: Session一覧を表示する
+
+- **WHEN** userが `catsift sessions --source opencode` を実行する
+- **THEN** システムはOpenCode scopeのSession name、Session ID、Project、およびLast Usedを決定的な順序で一覧表示する
+
+#### Scenario: Session detailをJSONで表示する
+
+- **WHEN** userが `catsift sessions detail session-001 --json` を実行する
+- **THEN** システムは対象Sessionのsafe metadata、Prompts・Tools・Skills・Tokensの集計、および古いTurnから新しいTurnへ並んだTurn summaryをJSONで返す
+
+#### Scenario: 存在しないSessionを指定する
+
+- **WHEN** userが現在のscopeに存在しないSession IDを `sessions detail`で指定する
+- **THEN** システムはdetailを生成せず、対象Sessionが存在しないことをstderrへ出力して非0で終了する
+
+### Requirement: CLI detail reportはTUIと同じscopeとprivacy境界を使用する
+
+追加するCLI commandとdetail subcommandは、既存のsource選択、期間、warning、終了code、および`--json`のstdout/stderr分離規則を継承しなければならない（SHALL）。同じsource、期間、および基準時刻を指定した場合、CLIのsummary/detailはTUIのQuery / Read Modelと同じ集計意味論、deduplication、決定的なsortを使用しなければならない（SHALL）。human-readable reportとJSONは同じ論理的な情報を表さなければならない（SHALL）。prompt本文、command本文、Tool arguments、Skill本文、およびprovider payloadを出力してはならない（MUST NOT）。
+
+#### Scenario: CLIとTUIで同じscopeを表示する
+
+- **WHEN** userが同じsourceと期間でTUIを起動し、CLIで `models`、`skills detail`、または `sessions detail` を実行する
+- **THEN** システムは共通のnormalized dataから同じsummary、detail、warning、およびrowの包含規則を使用する
+
+#### Scenario: warningをJSONから分離する
+
+- **WHEN** detail reportの入力中にrecoverableなrecord skipが発生する
+- **THEN** stdoutは単独の有効なJSON documentのままで、warning summaryはstderrだけに出力される
+
+#### Scenario: sensitive contentを含む履歴をdetail表示する
+
+- **WHEN** SessionまたはSkillのdetail対象にprompt本文、Tool arguments、Skill本文、またはprovider payloadが存在する
+- **THEN** CLIはそれらを出力せず、boundedなmetadata、集計値、canonical name、識別子、時刻、および状態だけを表示する
