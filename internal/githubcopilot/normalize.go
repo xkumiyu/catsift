@@ -11,7 +11,7 @@ import (
 	"github.com/xkumiyu/catsift/internal/usage"
 )
 
-const ParserVersion = "copilot-normalizer-v5"
+const ParserVersion = "copilot-normalizer-v6"
 
 type IngestResult struct {
 	Turns    []usage.Turn
@@ -83,6 +83,11 @@ func (n *normalizer) consume(event Envelope) {
 		}
 	case "session.model_change":
 		n.observeSessionModel(session, event)
+	case "session.auto_mode_resolved":
+		n.observeSessionModel(session, event)
+		if session.current != nil {
+			n.observeModel(session.current, event)
+		}
 	case "assistant.turn_start", "model.turn_started":
 		if session.current != nil && turnID(data) != "" && session.current.turn.ID != turnID(data) {
 			n.finishCurrent(session)
@@ -112,7 +117,7 @@ func (n *normalizer) consume(event Envelope) {
 		turn := n.ensureTurn(session, event, turnID(data))
 		n.touchTurn(turn, event.Timestamp, false)
 		n.observeRuntimeTool(turn, event)
-	case "assistant.message", "assistant.usage", "model.message", "model.model_call_started", "model.model_call_success", "model.response":
+	case "assistant.message", "assistant.usage", "model.message", "model.model_call_started", "model.model_call_success", "model.response", "session.compaction_complete":
 		if !n.eventHasObservation(event) {
 			return
 		}
@@ -503,7 +508,7 @@ func modelFromData(data map[string]any) (usage.ModelRef, bool) {
 	if model, ok := usage.ModelFromMap(data, "copilot"); ok {
 		return model, true
 	}
-	for _, key := range []string{"model", "modelName", "model_name", "modelId", "model_id"} {
+	for _, key := range []string{"model", "modelName", "model_name", "modelId", "model_id", "chosenModel", "chosen_model"} {
 		if nested, ok := data[key].(string); ok && strings.TrimSpace(nested) != "" {
 			return usage.NewModelRef("copilot", nested), true
 		}
@@ -629,7 +634,7 @@ func normalizedCopilotSkillName(value string) string {
 }
 
 func tokenUsageFromData(data map[string]any) (usage.TokenUsage, bool) {
-	for _, key := range []string{"usage", "tokenUsage", "token_usage", "usageMetadata", "responseUsage", "response_usage", "copilotUsage", "copilot_usage"} {
+	for _, key := range []string{"usage", "tokenUsage", "token_usage", "usageMetadata", "responseUsage", "response_usage", "copilotUsage", "copilot_usage", "compactionTokensUsed", "compaction_tokens_used"} {
 		if usageMap, ok := data[key].(map[string]any); ok {
 			value := tokenUsageFromMap(usageMap)
 			if value != (usage.TokenUsage{}) {

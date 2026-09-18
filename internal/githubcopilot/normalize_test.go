@@ -181,6 +181,39 @@ func TestNormalizeReadsCopilotShutdownTokenMetrics(t *testing.T) {
 	}
 }
 
+func TestNormalizeUsesAutoModeResolvedModel(t *testing.T) {
+	result := Normalize([]Envelope{
+		testEvent("session-a", "auto-mode", "session.auto_mode_resolved", time.Unix(1, 0), map[string]any{"chosenModel": "model-a"}),
+		testEvent("session-a", "prompt", "user.message", time.Unix(2, 0), map[string]any{"role": "user", "content": "synthetic prompt"}),
+	})
+
+	if len(result.Turns) != 1 || len(result.Turns[0].ModelObservations) != 1 || result.Turns[0].ModelObservations[0].Model.Name != "model-a" {
+		t.Fatalf("auto mode model = %#v", result.Turns)
+	}
+}
+
+func TestNormalizeReadsCompactionTokenUsage(t *testing.T) {
+	result := Normalize([]Envelope{
+		testEvent("session-a", "compaction", "session.compaction_complete", time.Unix(1, 0), map[string]any{
+			"compactionTokensUsed": map[string]any{
+				"model":            "model-a",
+				"inputTokens":      10,
+				"outputTokens":     4,
+				"cacheReadTokens":  2,
+				"cacheWriteTokens": 1,
+			},
+		}),
+	})
+
+	if len(result.Turns) != 1 || len(result.Turns[0].TokenUsageEvents) != 1 {
+		t.Fatalf("compaction token usage = %#v", result.Turns)
+	}
+	event := result.Turns[0].TokenUsageEvents[0]
+	if event.Model.Name != "model-a" || event.Usage.InputTokens != 10 || event.Usage.OutputTokens != 4 || event.Usage.TotalTokens != 14 || event.Usage.CachedInputTokens != 2 || event.Usage.CacheWriteInputTokens != 1 {
+		t.Fatalf("compaction token usage event = %#v", event)
+	}
+}
+
 func TestNormalizeReadsAssistantUsageAliases(t *testing.T) {
 	result := Normalize([]Envelope{
 		testEvent("session-a", "turn-start", "assistant.turn_start", time.Unix(1, 0), map[string]any{"turnId": "turn-1", "model": "model-a"}),

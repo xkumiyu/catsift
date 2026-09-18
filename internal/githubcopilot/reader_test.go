@@ -136,6 +136,41 @@ func TestDecodeFileAcceptsSessionContextChangedEvent(t *testing.T) {
 	}
 }
 
+func TestDecodeFileAcceptsCurrentCopilotMetadataEvents(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session-state", "session-001", "events.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := strings.Join([]string{
+		`{"id":"event-001","timestamp":"2026-01-02T03:04:05Z","type":"hook.start","data":{}}`,
+		`{"id":"event-002","timestamp":"2026-01-02T03:04:06Z","type":"hook.end","data":{}}`,
+		`{"id":"event-003","timestamp":"2026-01-02T03:04:07Z","type":"session.usage_checkpoint","data":{}}`,
+		`{"id":"event-004","timestamp":"2026-01-02T03:04:08Z","type":"session.compaction_start","data":{}}`,
+		`{"id":"event-005","timestamp":"2026-01-02T03:04:09Z","type":"session.compaction_complete","data":{}}`,
+		`{"id":"event-006","timestamp":"2026-01-02T03:04:10Z","type":"session.plan_changed","data":{}}`,
+		`{"id":"event-007","timestamp":"2026-01-02T03:04:11Z","type":"subagent.started","data":{}}`,
+		`{"id":"event-008","timestamp":"2026-01-02T03:04:12Z","type":"subagent.completed","data":{}}`,
+		`{"id":"event-009","timestamp":"2026-01-02T03:04:13Z","type":"system.notification","data":{}}`,
+		`{"id":"event-010","timestamp":"2026-01-02T03:04:14Z","type":"session.auto_mode_resolved","data":{}}`,
+		`{"id":"event-011","timestamp":"2026-01-02T03:04:15Z","type":"session.resume","data":{}}`,
+		`{"id":"event-012","timestamp":"2026-01-02T03:04:16Z","type":"skill.context_delivered_ref","data":{}}`,
+		`{"id":"event-013","timestamp":"2026-01-02T03:04:17Z","type":"session.workspace_file_changed","data":{}}`,
+		`{"id":"event-014","timestamp":"2026-01-02T03:04:18Z","type":"tool.user_requested","data":{}}`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(path, []byte(content), 0o640); err != nil {
+		t.Fatal(err)
+	}
+
+	var events []Envelope
+	warnings := &WarningCollector{}
+	if err := DecodeFile(path, DecodeOptions{Warnings: warnings}, func(event Envelope) { events = append(events, event) }); err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 14 || len(warnings.Warnings()) != 0 {
+		t.Fatalf("metadata events = %#v warnings = %#v", events, warnings.Warnings())
+	}
+}
+
 func TestDecodeFileAcceptsAssistantUsageEvent(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "session-state", "session-001", "events.jsonl")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
