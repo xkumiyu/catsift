@@ -177,13 +177,19 @@ func readLine(reader *bufio.Reader, max int) ([]byte, bool, error) {
 }
 
 func knownEventType(eventType string) bool {
+	// Copilot emits lifecycle and metadata records in the same stream. Accept
+	// them so non-usage records do not make otherwise complete statistics look
+	// incomplete; normalize.go intentionally ignores their non-usage payloads.
 	switch strings.ToLower(strings.TrimSpace(eventType)) {
 	case "session.start", "session.shutdown", "session.error", "session.info", "session.model_change",
-		"session.context_changed",
+		"session.context_changed", "session.usage_checkpoint", "session.compaction_start", "session.compaction_complete",
+		"session.plan_changed", "session.auto_mode_resolved", "session.resume", "session.workspace_file_changed",
 		"system.message", "user.message", "assistant.message", "assistant.usage", "assistant.turn_start", "assistant.turn_end",
+		"system.notification",
 		"model.captured_assignment_context", "model.message", "model.messages_snapshot",
 		"model.model_call_started", "model.model_call_success", "model.response", "model.turn_started", "model.turn_ended",
-		"tool.execution_start", "tool.execution_complete", "permission.requested", "permission.completed", "skill.invoked":
+		"tool.execution_start", "tool.execution_complete", "tool.user_requested", "permission.requested", "permission.completed", "skill.invoked",
+		"skill.context_delivered_ref", "subagent.started", "subagent.completed", "hook.start", "hook.end":
 		return true
 	default:
 		return false

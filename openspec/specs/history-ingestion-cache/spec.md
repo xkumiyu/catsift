@@ -7,11 +7,12 @@ Codexとctxの履歴を安全に再利用し、同じ入力に対する複数の
 ## Requirements
 
 ### Requirement: 正規化済み履歴を永続cacheへ保存して再利用する
-システムは、Codex、ctx、またはOpenCodeの入力を完全に読み込み、利用統計へ必要な正規化を完了した場合、report生成に必要な最小限の正規化済みデータをユーザーのcache directoryへ永続保存しなければならない（SHALL）。同じsource scopeと有効なcacheがある場合、システムはそのcacheを再利用し、freshな履歴読取と同じ結果を生成しなければならない（SHALL）。cacheは履歴source自体の一部として扱ってはならない（MUST NOT）。
+
+システムは、Codex、ctx、OpenCode、またはGitHub Copilotの入力を完全に読み込み、利用統計へ必要な正規化を完了した場合、report生成に必要な最小限の正規化済みデータをユーザーのcache directoryへ永続保存しなければならない（SHALL）。同じsource scopeと有効なcacheがある場合、システムはそのcacheを再利用し、freshな履歴読取と同じ結果を生成しなければならない（SHALL）。cacheは履歴source自体の一部として扱ってはならない（MUST NOT）。
 
 #### Scenario: 初回の履歴読取をcacheへ保存する
 
-- **WHEN** userがcacheのないCodex、ctx、またはOpenCode sourceで統計commandを実行し、履歴の読取と正規化が完全に成功する
+- **WHEN** userがcacheのないCodex、ctx、OpenCode、またはGitHub Copilot sourceで統計commandを実行し、履歴の読取と正規化が完全に成功する
 - **THEN** システムは不完全な入力をcacheへ保存せず、report生成に必要な正規化済みデータをcacheへ保存し、入力sourceと同じreportをstdoutへ出力する
 
 #### Scenario: 有効なcacheを再利用する
@@ -21,11 +22,12 @@ Codexとctxの履歴を安全に再利用し、同じ入力に対する複数の
 
 #### Scenario: cache済み履歴へ期間filterを適用する
 
-- **WHEN** userが有効な全期間cacheに対して`--days 1`または別の正の`--days N`を指定する
+- **WHEN** userが有効なCodex、ctx、OpenCode、またはGitHub Copilotの全期間cacheに対して`--days 1`または別の正の`--days N`を指定する
 - **THEN** システムはcache済み観測のtimestampへ既存の期間filterを適用し、履歴全体を再取得・再解析した場合と同じreportを生成する
 
 ### Requirement: source revisionとparser versionでcacheの有効性を判定する
-システムはcacheをsource type、source固有のscope、source revision、およびparser versionの組み合わせと関連付けなければならない（SHALL）。source revisionが一致しないcache、別source scopeのcache、または現在のparserで生成されていないcacheを現在の入力として使用してはならない（MUST NOT）。OpenCode sourceでは、選択されたdata rootとその永続履歴のrevisionをscopeおよびrevisionの判定へ含めなければならない（SHALL）。
+
+システムはcacheをsource type、source固有のscope、source revision、およびparser versionの組み合わせと関連付けなければならない（SHALL）。source revisionが一致しないcache、別source scopeのcache、または現在のparserで生成されていないcacheを現在の入力として使用してはならない（MUST NOT）。OpenCode sourceでは選択されたdata rootとその永続履歴のrevisionを、GitHub Copilot sourceでは選択されたdata rootとsession event file群のrevisionをscopeおよびrevisionの判定へ含めなければならない（SHALL）。
 
 #### Scenario: parser versionが変わる
 
@@ -34,13 +36,13 @@ Codexとctxの履歴を安全に再利用し、同じ入力に対する複数の
 
 #### Scenario: source revisionが変わる
 
-- **WHEN** cache作成後にCodex履歴file、ctx履歴generation、またはOpenCode永続履歴のsource revisionが変わる
-- **THEN** システムは変更前のcacheをそのまま現在の完全な履歴として扱わず、変更を反映したcacheを再構築する
+- **WHEN** cache作成後にCodex履歴file、ctx履歴generation、OpenCode永続履歴、Copilotのsession event file、またはsession metadata fileのsource revisionが変わる
+- **THEN** システムは変更前のcacheを完全な現在履歴として扱わず、変更を反映したcacheを再構築する
 
 #### Scenario: OpenCode data rootが変わる
 
-- **WHEN** userが別のOpenCode data rootを指定して統計commandを実行する
-- **THEN** システムは元のdata rootのcacheを使用せず、指定されたdata rootのrevisionに対応するcacheだけを使用する
+- **WHEN** sourceの解決されたdata rootまたはscopeが変わって統計commandを実行する
+- **THEN** システムは元のscopeのcacheを使用せず、現在のscopeとrevisionに対応するcacheだけを使用する
 
 ### Requirement: cacheの失敗を安全に扱う
 システムはcacheの欠落、破損、未完了、または書込中断によって統計生成を誤った成功結果にしてはならない（MUST NOT）。無効なcacheは無視してsourceから再構築できなければならず（SHALL）、cacheの診断やwarningはmachine-readableなstdoutへ混入させてはならない（MUST NOT）。cacheの更新は既存の有効なcacheを中途半端な内容で置換してはならない（MUST NOT）。
@@ -56,14 +58,25 @@ Codexとctxの履歴を安全に再利用し、同じ入力に対する複数の
 - **THEN** システムは未完了cacheを有効cacheとして公開せず、次回実行時に既存の有効cacheを使用するかsourceから再構築する
 
 ### Requirement: cacheへ保存する履歴内容を最小化する
-システムはreportの再生成に必要な正規化済みfieldだけをcacheへ保存し、raw prompt本文、tool引数、および不要なraw provider payloadを保存してはならない（MUST NOT）。cacheはユーザーのlocal machine内だけで扱い、履歴内容をnetworkへ送信してはならない（MUST NOT）。この規則はCodex、ctx、およびOpenCodeのcacheへ同じように適用しなければならない（SHALL）。
+
+システムはreportの再生成に必要な正規化済みfieldだけをcacheへ保存し、raw prompt本文、tool引数、および不要なraw provider payloadを保存してはならない（MUST NOT）。cacheはユーザーのlocal machine内だけで扱い、履歴内容をnetworkへ送信してはならない（MUST NOT）。この規則はCodex、ctx、OpenCode、およびGitHub Copilotのcacheへ同じように適用しなければならない（SHALL）。
 
 #### Scenario: cache内容を生成する
 
-- **WHEN** システムが履歴sourceからcacheを作成する
-- **THEN** cacheにはsession・turn・Tool・Skillの集計とfilterに必要な正規化済み情報だけが含まれ、raw prompt本文とtool引数は含まれない
+- **WHEN** システムがCodex、ctx、OpenCode、またはGitHub Copilot履歴sourceからcacheを作成する
+- **THEN** cacheにはsession・turn・Tool・Skill・Model・token usageとfilterに必要なsanitized情報だけが含まれ、raw prompt本文、tool引数、およびprovider payloadは含まれない
+
+#### Scenario: project metadataをcacheから復元する
+
+- **WHEN** Copilot sessionにproject nameとproject pathが存在し、cache hitでreportを生成する
+- **THEN** fresh readと同じproject nameとproject pathをSession detailおよびJSONへ復元する
+
+#### Scenario: Copilotのtoken usageをcacheから復元する
+
+- **WHEN** Copilot sessionのshutdown aggregateにcache read、cache write、またはreasoning tokenが存在し、cache hitでreportを生成する
+- **THEN** fresh readと同じtoken usageの値を復元し、raw `modelMetrics` payloadはcacheへ保存しない
 
 #### Scenario: cacheを利用してreportを生成する
 
-- **WHEN** userが有効なcacheを利用する統計commandを実行する
-- **THEN** システムはcacheまたは履歴内容を外部networkへ送信せず、Codex home、ctx data root、OpenCode data root、およびprovider-owned履歴を変更しない
+- **WHEN** userが有効なCodex、ctx、OpenCode、またはGitHub Copilot cacheを利用する統計commandを実行する
+- **THEN** システムはcacheまたは履歴内容を外部networkへ送信せず、各sourceのdata rootとprovider-owned履歴を変更しない
