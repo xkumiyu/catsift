@@ -171,6 +171,38 @@ func TestLoadSelectsNewestChannelDatabaseWhenMultipleExist(t *testing.T) {
 	}
 }
 
+func TestLoadIgnoresMissingChannelDatabaseWithSidecar(t *testing.T) {
+	root := t.TempDir()
+	valid := filepath.Join(root, "opencode-a.db")
+	writeMinimalOpenCodeDatabase(t, valid, "s-valid")
+	old := time.Unix(1_700_000_000, 0).UTC()
+	if err := os.Chtimes(valid, old, old); err != nil {
+		t.Fatal(err)
+	}
+	missing := filepath.Join(root, "opencode-z.db")
+	if err := os.Symlink(filepath.Join(root, "missing.db"), missing); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(missing+"-wal", []byte("orphan"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	newer := old.Add(time.Hour)
+	if err := os.Chtimes(missing+"-wal", newer, newer); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := Load(root, IngestOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Sessions) != 1 || result.Sessions[0].ID != "s-valid" {
+		t.Fatalf("sessions = %#v, want s-valid", result.Sessions)
+	}
+	if warning := findWarning(result.Warnings, MultipleDatabasesWarningReason); warning != nil {
+		t.Fatalf("missing database counted as a candidate: %#v", warning)
+	}
+}
+
 func TestNewestChannelDatabaseUsesWALModificationTime(t *testing.T) {
 	root := t.TempDir()
 	olderMain := filepath.Join(root, "opencode-a-main.db")

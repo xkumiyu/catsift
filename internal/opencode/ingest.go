@@ -233,7 +233,7 @@ func databaseModTime(database string) (time.Time, error) {
 	for _, suffix := range []string{"", "-wal", "-shm"} {
 		path := database + suffix
 		info, err := os.Stat(path)
-		if errors.Is(err, os.ErrNotExist) {
+		if suffix != "" && errors.Is(err, os.ErrNotExist) {
 			continue
 		}
 		if err != nil {
