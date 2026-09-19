@@ -142,8 +142,8 @@ func TestLoadFindsChannelDatabaseWhenDefaultDatabaseIsAbsent(t *testing.T) {
 
 func TestLoadSelectsNewestChannelDatabaseWhenMultipleExist(t *testing.T) {
 	root := t.TempDir()
-	oldPath := filepath.Join(root, "opencode-old.db")
-	newPath := filepath.Join(root, "opencode-new.db")
+	oldPath := filepath.Join(root, "opencode-a-old.db")
+	newPath := filepath.Join(root, "opencode-z-new.db")
 	writeMinimalOpenCodeDatabase(t, oldPath, "s-old")
 	writeMinimalOpenCodeDatabase(t, newPath, "s-new")
 	base := time.Unix(1_700_000_000, 0).UTC()
@@ -168,6 +168,40 @@ func TestLoadSelectsNewestChannelDatabaseWhenMultipleExist(t *testing.T) {
 	}
 	if warning.Source != usage.SourceOpenCode || warning.Count != 1 {
 		t.Fatalf("multiple databases warning = %#v, want source=opencode count=1", warning)
+	}
+}
+
+func TestNewestChannelDatabaseUsesWALModificationTime(t *testing.T) {
+	root := t.TempDir()
+	olderMain := filepath.Join(root, "opencode-a-main.db")
+	newerWAL := filepath.Join(root, "opencode-z-wal.db")
+	if err := os.WriteFile(olderMain, []byte("main"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(newerWAL, []byte("main"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	base := time.Unix(1_700_000_000, 0).UTC()
+	if err := os.Chtimes(olderMain, base.Add(2*time.Hour), base.Add(2*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(newerWAL, base, base); err != nil {
+		t.Fatal(err)
+	}
+	walTime := base.Add(3 * time.Hour)
+	if err := os.WriteFile(newerWAL+"-wal", []byte("wal"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(newerWAL+"-wal", walTime, walTime); err != nil {
+		t.Fatal(err)
+	}
+
+	selected, candidates, err := newestChannelDatabase(root, []string{filepath.Base(olderMain), filepath.Base(newerWAL)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selected != newerWAL {
+		t.Fatalf("selected database = %q, want %q (candidates=%#v)", selected, newerWAL, candidates)
 	}
 }
 

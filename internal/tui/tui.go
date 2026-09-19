@@ -1655,6 +1655,8 @@ func warningSummaryText(summary warningSummary) string {
 		singular, plural = "orphan OpenCode part skipped", "orphan OpenCode parts skipped"
 	case "opencode_malformed_part":
 		singular, plural = "malformed OpenCode part skipped", "malformed OpenCode parts skipped"
+	case "opencode_multiple_databases":
+		singular, plural = "additional OpenCode database ignored", "additional OpenCode databases ignored"
 	case "opencode_unknown_part":
 		singular, plural = "unknown OpenCode part skipped", "unknown OpenCode parts skipped"
 	case "cannot read skill inventory path":

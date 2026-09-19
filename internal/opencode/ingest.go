@@ -117,11 +117,11 @@ func Load(dataRoot string, options IngestOptions) (IngestResult, error) {
 			}
 		}
 	}
-	if hasDiscoveryWarning {
-		result.Warnings = append(result.Warnings, discoveryWarning)
-	}
 	if filter.active() {
 		result = filterResult(result, filter)
+	}
+	if hasDiscoveryWarning {
+		result.Warnings = append(result.Warnings, discoveryWarning)
 	}
 	return result, nil
 }

@@ -1,0 +1,3 @@
+schema: spec-driven
+created: 2026-09-19
+goal: 複数のOpenCode channel databaseが残る環境で最新databaseを決定的に選択し、未選択databaseをwarningとして通知する

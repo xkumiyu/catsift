@@ -1995,6 +1995,31 @@ func TestWriteWarningSummaryIncludesSourceAndAction(t *testing.T) {
 	}
 }
 
+func TestWriteWarningSummaryDoesNotTreatIgnoredDatabasesAsRecords(t *testing.T) {
+	warnings := []usage.Warning{{
+		Reason: "opencode_multiple_databases",
+		Type:   "database",
+		Source: usage.SourceOpenCode,
+		Path:   "/opencode",
+		Count:  2,
+	}}
+	var output bytes.Buffer
+	writeWarnings(&output, warnings, false)
+	got := output.String()
+	for _, want := range []string{
+		"ignored 2 OpenCode databases",
+		"from OpenCode",
+		"only the selected database was read",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("database warning summary missing %q: %q", want, got)
+		}
+	}
+	if strings.Contains(got, "skipped 2 records") {
+		t.Fatalf("database warning was rendered as skipped records: %q", got)
+	}
+}
+
 func TestWriteWarningsTreatsOversizedRecordsAsInformational(t *testing.T) {
 	warnings := []usage.Warning{{Reason: "large_line", Path: "/one.jsonl", Line: 220, Count: 1}}
 	var output bytes.Buffer

@@ -133,8 +133,8 @@ func TestLoadCachesOpenCodeSnapshotAndFiltersCachedObservations(t *testing.T) {
 
 func TestLoadPreservesMultipleDatabaseWarningOnCacheHit(t *testing.T) {
 	root := t.TempDir()
-	oldPath := filepath.Join(root, "opencode-old.db")
-	newPath := filepath.Join(root, "opencode-new.db")
+	oldPath := filepath.Join(root, "opencode-a-old.db")
+	newPath := filepath.Join(root, "opencode-z-new.db")
 	writeMinimalOpenCodeDatabase(t, oldPath, "s-old")
 	writeMinimalOpenCodeDatabase(t, newPath, "s-new")
 	base := time.Unix(1_700_000_000, 0).UTC()
@@ -150,7 +150,11 @@ func TestLoadPreservesMultipleDatabaseWarningOnCacheHit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	warm, err := Load(root, IngestOptions{CacheDir: cacheDir})
+	var diagnostics []string
+	warm, err := Load(root, IngestOptions{
+		CacheDir:   cacheDir,
+		Diagnostic: func(message string) { diagnostics = append(diagnostics, message) },
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,6 +169,12 @@ func TestLoadPreservesMultipleDatabaseWarningOnCacheHit(t *testing.T) {
 	}
 	if got := countWarnings(warm.Warnings, MultipleDatabasesWarningReason); got != 1 {
 		t.Fatalf("warm multiple databases warnings = %d, want 1 (%#v)", got, warm.Warnings)
+	}
+	if !containsDiagnostic(diagnostics, "opencode cache: hit path=") {
+		t.Fatalf("warm load did not use the cache: %v", diagnostics)
+	}
+	if containsDiagnostic(diagnostics, "opencode source: reading database ") {
+		t.Fatalf("warm load reread the source: %v", diagnostics)
 	}
 }
 

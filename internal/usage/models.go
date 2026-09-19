@@ -636,7 +636,7 @@ func WarningDescription(reason string) string {
 	case "opencode_malformed_part":
 		return "skipped malformed OpenCode part"
 	case "opencode_multiple_databases":
-		return "found multiple OpenCode databases"
+		return "ignored additional OpenCode database"
 	case "opencode_unknown_part":
 		return "skipped unknown OpenCode part"
 	case "cannot read skill inventory path":

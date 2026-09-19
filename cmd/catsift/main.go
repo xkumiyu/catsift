@@ -1588,6 +1588,7 @@ func writeWarnings(w io.Writer, warnings []usage.Warning, verbose bool, capabili
 type warningSummary struct {
 	records   int
 	readFiles int
+	databases int
 	files     map[string]struct{}
 	sources   map[usage.SourceKind]struct{}
 }
@@ -1607,15 +1608,19 @@ func writeWarningSummaryForLevel(diagnostics diagnosticWriter, warnings []usage.
 
 	fileCount := len(summary.files)
 	fileLabel := warningFileLabel(fileCount)
-	message := ""
+	parts := make([]string, 0, 2)
 	switch {
 	case summary.records > 0 && summary.readFiles > 0:
-		message = fmt.Sprintf("skipped %s %s across %s %s; could not read %s %s", formatWarningCount(summary.records), warningRecordLabel(summary.records), formatWarningCount(fileCount), fileLabel, formatWarningCount(summary.readFiles), warningFileLabel(summary.readFiles))
+		parts = append(parts, fmt.Sprintf("skipped %s %s across %s %s; could not read %s %s", formatWarningCount(summary.records), warningRecordLabel(summary.records), formatWarningCount(fileCount), fileLabel, formatWarningCount(summary.readFiles), warningFileLabel(summary.readFiles)))
+	case summary.records > 0:
+		parts = append(parts, fmt.Sprintf("skipped %s %s across %s %s", formatWarningCount(summary.records), warningRecordLabel(summary.records), formatWarningCount(fileCount), fileLabel))
 	case summary.readFiles > 0:
-		message = fmt.Sprintf("could not read %s %s", formatWarningCount(summary.readFiles), warningFileLabel(summary.readFiles))
-	default:
-		message = fmt.Sprintf("skipped %s %s across %s %s", formatWarningCount(summary.records), warningRecordLabel(summary.records), formatWarningCount(fileCount), fileLabel)
+		parts = append(parts, fmt.Sprintf("could not read %s %s", formatWarningCount(summary.readFiles), warningFileLabel(summary.readFiles)))
 	}
+	if summary.databases > 0 {
+		parts = append(parts, fmt.Sprintf("ignored %s %s", formatWarningCount(summary.databases), warningDatabaseLabel(summary.databases)))
+	}
+	message := strings.Join(parts, "; ")
 	if sources := warningSourceNames(summary.sources); sources != "" {
 		message += " from " + sources
 	}
@@ -1632,9 +1637,12 @@ func summarizeWarnings(warnings []usage.Warning) warningSummary {
 		if count <= 0 {
 			count = 1
 		}
-		if warning.Reason == "read_file" {
+		switch warning.Reason {
+		case "read_file":
 			summary.readFiles += count
-		} else {
+		case opencode.MultipleDatabasesWarningReason:
+			summary.databases += count
+		default:
 			summary.records += count
 		}
 		if warning.Path != "" {
@@ -1718,6 +1726,13 @@ func warningFileLabel(count int) string {
 		return "file"
 	}
 	return "files"
+}
+
+func warningDatabaseLabel(count int) string {
+	if count == 1 {
+		return "OpenCode database"
+	}
+	return "OpenCode databases"
 }
 
 func formatWarningCount(value int) string {
