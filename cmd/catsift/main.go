@@ -1645,7 +1645,7 @@ func summarizeWarnings(warnings []usage.Warning) warningSummary {
 		default:
 			summary.records += count
 		}
-		if warning.Path != "" {
+		if warning.Path != "" && warning.Reason != opencode.MultipleDatabasesWarningReason {
 			summary.files[warning.Path] = struct{}{}
 		}
 		if warning.Source.Valid() {

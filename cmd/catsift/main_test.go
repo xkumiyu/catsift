@@ -2020,6 +2020,19 @@ func TestWriteWarningSummaryDoesNotTreatIgnoredDatabasesAsRecords(t *testing.T) 
 	}
 }
 
+func TestWriteWarningSummaryExcludesDatabaseRootFromFileCount(t *testing.T) {
+	warnings := []usage.Warning{
+		{Reason: "opencode_malformed_message", Source: usage.SourceOpenCode, Path: "/opencode/opencode-a.db", Count: 1},
+		{Reason: "opencode_multiple_databases", Source: usage.SourceOpenCode, Path: "/opencode", Count: 1},
+	}
+	var output bytes.Buffer
+	writeWarnings(&output, warnings, false)
+	want := "skipped 1 record across 1 file; ignored 1 OpenCode database from OpenCode"
+	if !strings.Contains(output.String(), want) {
+		t.Fatalf("warning summary = %q, want %q", output.String(), want)
+	}
+}
+
 func TestWriteWarningsTreatsOversizedRecordsAsInformational(t *testing.T) {
 	warnings := []usage.Warning{{Reason: "large_line", Path: "/one.jsonl", Line: 220, Count: 1}}
 	var output bytes.Buffer
