@@ -16,6 +16,10 @@ import (
 
 const ParserVersion = "opencode-normalizer-v3"
 
+// MultipleDatabasesWarningReason reports that a data root contained more
+// than one OpenCode database while only the selected one was read.
+const MultipleDatabasesWarningReason = "opencode_multiple_databases"
+
 type IngestOptions struct {
 	Days       int
 	DaysSet    bool
@@ -47,13 +51,17 @@ func Load(dataRoot string, options IngestOptions) (IngestResult, error) {
 		return IngestResult{}, err
 	}
 	result := IngestResult{Agents: []string{"opencode"}}
-	database, err := discoverDatabase(root)
+	database, candidates, err := discoverDatabase(root)
 	if err != nil {
 		return IngestResult{}, err
 	}
 	if database == "" {
 		diagnose(options, fmt.Sprintf("opencode source: root=%q database=none parser=%s", root, ParserVersion))
 		return result, nil
+	}
+	discoveryWarning, hasDiscoveryWarning := multipleDatabasesWarning(root, database, candidates)
+	if hasDiscoveryWarning {
+		diagnose(options, fmt.Sprintf("opencode source: multiple databases found count=%d selected=%q", len(candidates), database))
 	}
 	scope := root
 	revision, err := sourceRevision(database)
@@ -77,6 +85,9 @@ func Load(dataRoot string, options IngestOptions) (IngestResult, error) {
 				result := resultFromSnapshot(snapshot, database)
 				if filter.active() {
 					result = filterResult(result, filter)
+				}
+				if hasDiscoveryWarning {
+					result.Warnings = append(result.Warnings, discoveryWarning)
 				}
 				return result, nil
 			}
@@ -106,37 +117,137 @@ func Load(dataRoot string, options IngestOptions) (IngestResult, error) {
 			}
 		}
 	}
+	if hasDiscoveryWarning {
+		result.Warnings = append(result.Warnings, discoveryWarning)
+	}
 	if filter.active() {
 		result = filterResult(result, filter)
 	}
 	return result, nil
 }
 
-func discoverDatabase(root string) (string, error) {
+func multipleDatabasesWarning(root, selected string, candidates []string) (usage.Warning, bool) {
+	if selected == "" || len(candidates) <= 1 {
+		return usage.Warning{}, false
+	}
+	return usage.Warning{
+		Reason: MultipleDatabasesWarningReason,
+		Type:   "database",
+		Source: usage.SourceOpenCode,
+		Path:   root,
+		Count:  len(candidates) - 1,
+	}, true
+}
+
+func discoverDatabase(root string) (string, []string, error) {
 	primary := filepath.Join(root, "opencode.db")
+	primaryExists := false
 	if _, err := os.Stat(primary); err == nil {
-		return primary, nil
+		primaryExists = true
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return "", fmt.Errorf("OpenCode database %q: %w", primary, err)
+		return "", nil, fmt.Errorf("OpenCode database %q: %w", primary, err)
 	}
 
 	entries, err := os.ReadDir(root)
 	if err != nil {
-		return "", fmt.Errorf("read OpenCode data root %q: %w", root, err)
+		return "", nil, fmt.Errorf("read OpenCode data root %q: %w", root, err)
 	}
-	candidates := make([]string, 0)
+	channelNames := make([]string, 0)
 	for _, entry := range entries {
 		name := entry.Name()
 		if entry.IsDir() || !strings.HasPrefix(name, "opencode-") || !strings.HasSuffix(name, ".db") || name == "opencode-.db" {
 			continue
 		}
-		candidates = append(candidates, name)
+		channelNames = append(channelNames, name)
 	}
-	if len(candidates) == 0 {
-		return "", nil
+	// OpenCode uses opencode.db for its latest/beta/prod channels and
+	// opencode-<channel>.db otherwise, so channel switches can leave several
+	// databases behind. Keep the default database authoritative when it
+	// exists; otherwise read the most recently written channel database.
+	// Every ambiguous layout is reported with MultipleDatabasesWarningReason.
+	if primaryExists {
+		sort.Strings(channelNames)
+		candidates := make([]string, 0, len(channelNames)+1)
+		candidates = append(candidates, primary)
+		for _, name := range channelNames {
+			candidates = append(candidates, filepath.Join(root, name))
+		}
+		return primary, candidates, nil
 	}
-	sort.Strings(candidates)
-	return filepath.Join(root, candidates[0]), nil
+	if len(channelNames) == 0 {
+		return "", nil, nil
+	}
+	selected, candidates, err := newestChannelDatabase(root, channelNames)
+	if err != nil {
+		return "", nil, err
+	}
+	if selected == "" {
+		return "", nil, nil
+	}
+	return selected, candidates, nil
+}
+
+// newestChannelDatabase selects the most recently written channel database.
+// Ties fall back to lexicographic order so the same filesystem state always
+// yields the same database. WAL sidecars advance history without changing
+// the main file, so their modification times participate in the comparison.
+func newestChannelDatabase(root string, names []string) (string, []string, error) {
+	type candidate struct {
+		name    string
+		path    string
+		modTime time.Time
+	}
+	considered := make([]candidate, 0, len(names))
+	for _, name := range names {
+		path := filepath.Join(root, name)
+		modTime, err := databaseModTime(path)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return "", nil, err
+		}
+		considered = append(considered, candidate{name: name, path: path, modTime: modTime})
+	}
+	if len(considered) == 0 {
+		return "", nil, nil
+	}
+	sort.Slice(considered, func(i, j int) bool {
+		if !considered[i].modTime.Equal(considered[j].modTime) {
+			return considered[i].modTime.After(considered[j].modTime)
+		}
+		return considered[i].name < considered[j].name
+	})
+	candidates := make([]string, 0, len(considered))
+	for _, item := range considered {
+		candidates = append(candidates, item.path)
+	}
+	return considered[0].path, candidates, nil
+}
+
+// databaseModTime reports the latest modification time across a database and
+// its SQLite WAL sidecars. Missing sidecars are normal and ignored.
+func databaseModTime(database string) (time.Time, error) {
+	var latest time.Time
+	seen := false
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		path := database + suffix
+		info, err := os.Stat(path)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return time.Time{}, fmt.Errorf("stat OpenCode source file %q: %w", path, err)
+		}
+		if !seen || info.ModTime().After(latest) {
+			latest = info.ModTime()
+			seen = true
+		}
+	}
+	if !seen {
+		return time.Time{}, os.ErrNotExist
+	}
+	return latest, nil
 }
 
 // HasHistory reports whether dataRoot contains an OpenCode database.
@@ -148,7 +259,7 @@ func HasHistory(dataRoot string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	database, err := discoverDatabase(root)
+	database, _, err := discoverDatabase(root)
 	if err != nil {
 		return false, err
 	}

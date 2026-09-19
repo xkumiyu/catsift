@@ -563,6 +563,8 @@ func WarningAdvice(reason string) string {
 		return "check the source path and file permissions"
 	case "read_workspace":
 		return "check the Copilot metadata path and file permissions"
+	case "opencode_multiple_databases":
+		return "only the selected database was read; remove stale databases or consolidate history if statistics look incomplete"
 	case "source_unavailable":
 		return "check that the source is installed and readable"
 	case "stale_cache":
@@ -633,6 +635,8 @@ func WarningDescription(reason string) string {
 		return "skipped orphan OpenCode part"
 	case "opencode_malformed_part":
 		return "skipped malformed OpenCode part"
+	case "opencode_multiple_databases":
+		return "found multiple OpenCode databases"
 	case "opencode_unknown_part":
 		return "skipped unknown OpenCode part"
 	case "cannot read skill inventory path":
