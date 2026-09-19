@@ -133,7 +133,7 @@ Options:
   --strict          Count confirmed skill evidence only
   --view VIEW       auto, compact, mode, state, or all (default: auto; human report only)
   --unused          Show installed skills with no recorded usage
-  --root PATH       Scan a skill root (repeatable; only with --unused; default if omitted: ~/.agents/skills)
+  --root PATH       Scan a scope root for .agents/skills, .codex/skills, plugin cache layouts (repeatable; only with --unused; default if omitted: ~/.agents/skills)
   --verbose         Show input and cache diagnostic details
   --strict-input    Exit non-zero when input records are skipped
   --json            Emit JSON
@@ -1094,7 +1094,7 @@ func runWithCtxLoader(args []string, stdout, stderr io.Writer, loadCtx ctxHistor
 	view := flags.String("view", string(output.SkillUsageViewAuto), "skill report view")
 	unused := flags.Bool("unused", false, "show installed skills with no recorded usage")
 	var roots stringList
-	flags.Var(&roots, "root", "scan a skill root (repeatable; only with --unused)")
+	flags.Var(&roots, "root", "scan a scope root for supported skill layouts (repeatable; only with --unused)")
 	verbose := flags.Bool("verbose", false, "show input and cache diagnostic details")
 	strictInput := flags.Bool("strict-input", false, "exit non-zero when input records are skipped")
 	jsonOutput := flags.Bool("json", false, "emit JSON")
@@ -1217,7 +1217,7 @@ func runWithCtxLoader(args []string, stdout, stderr io.Writer, loadCtx ctxHistor
 		}
 	})
 	if kind == usageExplorerKind && (daysSet || fromSet || toSet) {
-		diagnostics.errorf("--days, --from, and --to are only valid for stats, tools, or skills; use d in the TUI")
+		diagnostics.errorf("--days, --from, and --to are not supported for the interactive view; use d in the TUI")
 		return 2
 	}
 	if daysSet && *days == 0 {

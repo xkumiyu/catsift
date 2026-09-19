@@ -143,5 +143,6 @@ jobs:
         env:
           RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
 
-      - name: Publish npm package
+      # Staged publish only: Trusted Publisher allows stage, not direct publish. Human approves later.
+      - name: Stage npm package for publishing
         run: npm stage publish ./npm

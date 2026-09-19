@@ -10,8 +10,7 @@
 ## Git and worktrees
 
 - `main` is the current default branch. Do not make tracked or commit-target changes directly on it.
-- Use at most one task worktree per agent session. If already in a suitable non-default task worktree, continue there; creating an additional worktree requires the user's explicit approval.
-- For isolation, prefer `wt switch --create <task-branch> --no-cd --format=json`; otherwise use `git worktree add`. Use the resulting absolute path and verify the worktree root and branch before editing.
+- Starting from `main`, one task worktree per session may be created without additional approval for tracked changes. If already in a suitable non-default task worktree, continue there. A second worktree needs explicit approval. Follow the `git-worktree-workflow` skill for procedure.
 - Preserve existing user changes; never stash, reset, overwrite, or clean them automatically.
 
 ## Development

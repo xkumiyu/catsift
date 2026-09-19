@@ -43,12 +43,16 @@ mise run check
 To run individual checks with mise:
 
 ```sh
-mise run fmt       # Format Go code
-mise run lint      # golangci-lint
-mise run vet       # go vet
-mise run test      # Race-enabled Go tests
-mise run npm-test  # npm wrapper tests
+mise run fmt-check      # Check Go formatting (run `mise run fmt` to format)
+mise run lint           # golangci-lint
+mise run vet            # go vet
+mise run test           # Race-enabled Go tests
+mise run npm-test       # npm wrapper tests
+mise run npm-pack-check # Validate npm package contents
+mise run build          # Build the CLI
 ```
+
+For `.goreleaser.yaml` changes, also run `mise run release-check`.
 
 If you do not use mise, run the commands listed in the [CI configuration](.github/workflows/ci.yml).
 
