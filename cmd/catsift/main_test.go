@@ -1312,10 +1312,12 @@ func TestRunInteractiveViewRejectsJSONAndNonInteractiveOutput(t *testing.T) {
 		t.Fatalf("interactive view json exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 
-	stdout.Reset()
-	stderr.Reset()
-	if code := run([]string{"--days", "1"}, &stdout, &stderr); code != 2 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "only valid for stats, tools, or skills") {
-		t.Fatalf("interactive view period option exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	for _, args := range [][]string{{"--days", "1"}, {"--from", "2026-01-01"}, {"--to", "2026-01-31"}} {
+		stdout.Reset()
+		stderr.Reset()
+		if code := run(args, &stdout, &stderr); code != 2 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "not supported for the interactive view") {
+			t.Fatalf("interactive view period option %v exit=%d stdout=%q stderr=%q", args, code, stdout.String(), stderr.String())
+		}
 	}
 }
 
@@ -1443,7 +1445,7 @@ func TestRunHelpDocumentsDefaults(t *testing.T) {
 				"--color MODE      auto, always, or never (default: auto; human report only)",
 				"--group-by UNIT   turn or session (default: turn; no effect on --unused)",
 				"--view VIEW       auto, compact, mode, state, or all (default: auto; human report only)",
-				"--root PATH       Scan a skill root (repeatable; only with --unused; default if omitted: ~/.agents/skills)",
+				"--root PATH       Scan a scope root for .agents/skills, .codex/skills, plugin cache layouts (repeatable; only with --unused; default if omitted: ~/.agents/skills)",
 			},
 		},
 	}

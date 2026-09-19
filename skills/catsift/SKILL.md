@@ -53,7 +53,8 @@ Use common options as needed:
   `skills --strict` counts confirmed skill evidence only.
 - `tools --layer effective|runtime|model` selects the tool attribution layer.
 - `skills --unused` scans the installed skill inventory. Add `--root PATH` to
-  scan an explicit skill root; use it only when the user asks about inventory.
+  scan an explicit scope root; only `.agents/skills/`, `.codex/skills/`, and
+  plugin cache layouts under the root are recognized. Use it only when the user asks about inventory.
 - Add `--strict-input` when skipped or malformed input would invalidate the
   conclusion. If it exits non-zero, report the input problem instead of
   presenting the result as complete.

@@ -200,10 +200,11 @@ installed skill inventory:
 catsift skills --unused
 ```
 
-Inventory identity is the canonical skill name plus its absolute physical path.
-Therefore, same-name skills at different paths are shown as separate rows when
-the name is unused.
-Usage matching remains canonical-name based: if any agent in the selected history sources used a name, all inventory rows with that name are considered used.
+Rows are identified by canonical skill name plus absolute path; same-name skills at different paths stay separate.
+A name is considered used if any agent in the selected history used it.
+
+`--root` is a scan scope: only `.agents/skills/`, `.codex/skills/`, and plugin cache layouts under it are recognized.
+Flat `SKILL.md` directories are ignored.
 
 ## Cache
 

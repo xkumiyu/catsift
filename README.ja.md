@@ -193,10 +193,11 @@ catsift skills detail review
 catsift skills --unused
 ```
 
-inventoryのidentityはcanonical skill nameと絶対physical pathの組み合わせです。
-そのため、異なるpathに同名Skillがある場合、その名前が未使用なら別々のrowとして表示されます。
-使用済み判定はcanonical name単位のままです。
-選択したhistory sourceのいずれかのAgentがその名前を使用していれば、その名前のinventory rowはすべて使用済みとみなします。
+rowはcanonical skill nameと絶対pathの組み合わせで識別し、同名でもpathが違えば別rowになります。
+選択した履歴sourceでいずれかのAgentが使用した名前は、使用済みとみなします。
+
+`--root`は走査起点で、配下の`.agents/skills/`、`.codex/skills/`、plugin cache配置のみ認識します。
+flatな`SKILL.md`配置は無視されます。
 
 ## Cache
 
