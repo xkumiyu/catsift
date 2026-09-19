@@ -131,6 +131,63 @@ func TestLoadCachesOpenCodeSnapshotAndFiltersCachedObservations(t *testing.T) {
 	}
 }
 
+func TestLoadPreservesMultipleDatabaseWarningOnCacheHit(t *testing.T) {
+	root := t.TempDir()
+	oldPath := filepath.Join(root, "opencode-a-old.db")
+	newPath := filepath.Join(root, "opencode-z-new.db")
+	writeMinimalOpenCodeDatabase(t, oldPath, "s-old")
+	writeMinimalOpenCodeDatabase(t, newPath, "s-new")
+	base := time.Unix(1_700_000_000, 0).UTC()
+	if err := os.Chtimes(oldPath, base, base); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(newPath, base.Add(time.Hour), base.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	cacheDir := t.TempDir()
+
+	cold, err := Load(root, IngestOptions{CacheDir: cacheDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var diagnostics []string
+	warm, err := Load(root, IngestOptions{
+		CacheDir:   cacheDir,
+		Diagnostic: func(message string) { diagnostics = append(diagnostics, message) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cold.Sessions) != 1 || cold.Sessions[0].ID != "s-new" {
+		t.Fatalf("cold sessions = %#v, want s-new", cold.Sessions)
+	}
+	if len(warm.Sessions) != 1 || warm.Sessions[0].ID != "s-new" {
+		t.Fatalf("warm sessions = %#v, want s-new", warm.Sessions)
+	}
+	if got := countWarnings(cold.Warnings, MultipleDatabasesWarningReason); got != 1 {
+		t.Fatalf("cold multiple databases warnings = %d, want 1 (%#v)", got, cold.Warnings)
+	}
+	if got := countWarnings(warm.Warnings, MultipleDatabasesWarningReason); got != 1 {
+		t.Fatalf("warm multiple databases warnings = %d, want 1 (%#v)", got, warm.Warnings)
+	}
+	if !containsDiagnostic(diagnostics, "opencode cache: hit path=") {
+		t.Fatalf("warm load did not use the cache: %v", diagnostics)
+	}
+	if containsDiagnostic(diagnostics, "opencode source: reading database ") {
+		t.Fatalf("warm load reread the source: %v", diagnostics)
+	}
+}
+
+func countWarnings(warnings []usage.Warning, reason string) int {
+	count := 0
+	for _, warning := range warnings {
+		if warning.Reason == reason {
+			count++
+		}
+	}
+	return count
+}
+
 func TestOpenCodeDiagnosticsIncludeSourceAndCacheMetadata(t *testing.T) {
 	root := t.TempDir()
 	writeNormalizerFixture(t, root)

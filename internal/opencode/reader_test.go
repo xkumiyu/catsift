@@ -7,7 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/xkumiyu/catsift/internal/usage"
 	_ "modernc.org/sqlite"
 )
 
@@ -136,6 +138,215 @@ func TestLoadFindsChannelDatabaseWhenDefaultDatabaseIsAbsent(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestLoadSelectsNewestChannelDatabaseWhenMultipleExist(t *testing.T) {
+	root := t.TempDir()
+	oldPath := filepath.Join(root, "opencode-a-old.db")
+	newPath := filepath.Join(root, "opencode-z-new.db")
+	writeMinimalOpenCodeDatabase(t, oldPath, "s-old")
+	writeMinimalOpenCodeDatabase(t, newPath, "s-new")
+	base := time.Unix(1_700_000_000, 0).UTC()
+	if err := os.Chtimes(oldPath, base, base); err != nil {
+		t.Fatal(err)
+	}
+	newTime := base.Add(time.Hour)
+	if err := os.Chtimes(newPath, newTime, newTime); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := Load(root, IngestOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Sessions) != 1 || result.Sessions[0].ID != "s-new" {
+		t.Fatalf("selected sessions = %#v, want s-new", result.Sessions)
+	}
+	warning := findWarning(result.Warnings, MultipleDatabasesWarningReason)
+	if warning == nil {
+		t.Fatalf("multiple databases warning missing: %#v", result.Warnings)
+	}
+	if warning.Source != usage.SourceOpenCode || warning.Count != 1 {
+		t.Fatalf("multiple databases warning = %#v, want source=opencode count=1", warning)
+	}
+}
+
+func TestLoadIgnoresMissingChannelDatabaseWithSidecar(t *testing.T) {
+	root := t.TempDir()
+	valid := filepath.Join(root, "opencode-a.db")
+	writeMinimalOpenCodeDatabase(t, valid, "s-valid")
+	old := time.Unix(1_700_000_000, 0).UTC()
+	if err := os.Chtimes(valid, old, old); err != nil {
+		t.Fatal(err)
+	}
+	missing := filepath.Join(root, "opencode-z.db")
+	if err := os.Symlink(filepath.Join(root, "missing.db"), missing); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(missing+"-wal", []byte("orphan"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	newer := old.Add(time.Hour)
+	if err := os.Chtimes(missing+"-wal", newer, newer); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := Load(root, IngestOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Sessions) != 1 || result.Sessions[0].ID != "s-valid" {
+		t.Fatalf("sessions = %#v, want s-valid", result.Sessions)
+	}
+	if warning := findWarning(result.Warnings, MultipleDatabasesWarningReason); warning != nil {
+		t.Fatalf("missing database counted as a candidate: %#v", warning)
+	}
+}
+
+func TestNewestChannelDatabaseUsesWALModificationTime(t *testing.T) {
+	root := t.TempDir()
+	olderMain := filepath.Join(root, "opencode-a-main.db")
+	newerWAL := filepath.Join(root, "opencode-z-wal.db")
+	if err := os.WriteFile(olderMain, []byte("main"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(newerWAL, []byte("main"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	base := time.Unix(1_700_000_000, 0).UTC()
+	if err := os.Chtimes(olderMain, base.Add(2*time.Hour), base.Add(2*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(newerWAL, base, base); err != nil {
+		t.Fatal(err)
+	}
+	walTime := base.Add(3 * time.Hour)
+	if err := os.WriteFile(newerWAL+"-wal", []byte("wal"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(newerWAL+"-wal", walTime, walTime); err != nil {
+		t.Fatal(err)
+	}
+
+	selected, candidates, err := newestChannelDatabase(root, []string{filepath.Base(olderMain), filepath.Base(newerWAL)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selected != newerWAL {
+		t.Fatalf("selected database = %q, want %q (candidates=%#v)", selected, newerWAL, candidates)
+	}
+}
+
+func TestLoadFallsBackToLexicographicOrderOnModTimeTie(t *testing.T) {
+	root := t.TempDir()
+	firstPath := filepath.Join(root, "opencode-a.db")
+	secondPath := filepath.Join(root, "opencode-b.db")
+	writeMinimalOpenCodeDatabase(t, firstPath, "s-a")
+	writeMinimalOpenCodeDatabase(t, secondPath, "s-b")
+	stamp := time.Unix(1_700_000_000, 0).UTC()
+	for _, path := range []string{firstPath, secondPath} {
+		if err := os.Chtimes(path, stamp, stamp); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	result, err := Load(root, IngestOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Sessions) != 1 || result.Sessions[0].ID != "s-a" {
+		t.Fatalf("tie-break sessions = %#v, want s-a", result.Sessions)
+	}
+	if findWarning(result.Warnings, MultipleDatabasesWarningReason) == nil {
+		t.Fatalf("multiple databases warning missing: %#v", result.Warnings)
+	}
+}
+
+func TestLoadPrefersPrimaryDatabaseButWarnsOnChannelDatabases(t *testing.T) {
+	root := t.TempDir()
+	primaryPath := filepath.Join(root, "opencode.db")
+	channelPath := filepath.Join(root, "opencode-extra.db")
+	writeMinimalOpenCodeDatabase(t, primaryPath, "s-primary")
+	writeMinimalOpenCodeDatabase(t, channelPath, "s-extra")
+	base := time.Unix(1_700_000_000, 0).UTC()
+	if err := os.Chtimes(primaryPath, base, base); err != nil {
+		t.Fatal(err)
+	}
+	newer := base.Add(2 * time.Hour)
+	if err := os.Chtimes(channelPath, newer, newer); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := Load(root, IngestOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Sessions) != 1 || result.Sessions[0].ID != "s-primary" {
+		t.Fatalf("primary sessions = %#v, want s-primary", result.Sessions)
+	}
+	warning := findWarning(result.Warnings, MultipleDatabasesWarningReason)
+	if warning == nil {
+		t.Fatalf("multiple databases warning missing: %#v", result.Warnings)
+	}
+	if warning.Count != 1 {
+		t.Fatalf("multiple databases warning count = %d, want 1", warning.Count)
+	}
+}
+
+func TestLoadSingleChannelDatabaseHasNoMultipleDatabaseWarning(t *testing.T) {
+	root := t.TempDir()
+	writeMinimalOpenCodeDatabase(t, filepath.Join(root, "opencode-beta.db"), "s-only")
+
+	result, err := Load(root, IngestOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Sessions) != 1 || result.Sessions[0].ID != "s-only" {
+		t.Fatalf("sessions = %#v, want s-only", result.Sessions)
+	}
+	if warning := findWarning(result.Warnings, MultipleDatabasesWarningReason); warning != nil {
+		t.Fatalf("unexpected multiple databases warning: %#v", warning)
+	}
+}
+
+func writeMinimalOpenCodeDatabase(t *testing.T, dbPath, sessionID string) {
+	t.Helper()
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	for _, statement := range []string{
+		`CREATE TABLE session (id TEXT PRIMARY KEY, directory TEXT, version TEXT, time_created INTEGER, time_updated INTEGER)`,
+		`CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT, time_created INTEGER, time_updated INTEGER, data TEXT)`,
+		`CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT, session_id TEXT, time_created INTEGER, time_updated INTEGER, data TEXT)`,
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.Exec(`INSERT INTO session VALUES (?, ?, ?, ?, ?)`, sessionID, "/workspace", "1.0", int64(1_700_000_000_000), int64(1_700_000_001_000)); err != nil {
+		t.Fatal(err)
+	}
+	messageID := "m-" + sessionID
+	if _, err := db.Exec(`INSERT INTO message VALUES (?, ?, ?, ?, ?)`, messageID, sessionID, int64(1_700_000_000_000), int64(1_700_000_000_000), `{"role":"user"}`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO part VALUES (?, ?, ?, ?, ?, ?)`, "p-"+sessionID, messageID, sessionID, int64(1_700_000_000_000), int64(1_700_000_000_000), `{"type":"text","text":"hello"}`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func findWarning(warnings []usage.Warning, reason string) *usage.Warning {
+	for i := range warnings {
+		if warnings[i].Reason == reason {
+			return &warnings[i]
+		}
+	}
+	return nil
 }
 
 func TestReaderReadsSyntheticHistoryReadOnlyAndInOrder(t *testing.T) {

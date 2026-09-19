@@ -444,6 +444,28 @@ func TestOverviewWrapsWarningDetailsWithoutTruncating(t *testing.T) {
 	}
 }
 
+func TestWarningSummaryTextDescribesMultipleOpenCodeDatabases(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		count int
+		want  string
+	}{
+		{name: "singular", count: 1, want: "1 additional OpenCode database ignored"},
+		{name: "plural", count: 2, want: "2 additional OpenCode databases ignored"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got := warningSummaryText(warningSummary{
+				source: usage.SourceOpenCode,
+				reason: "opencode_multiple_databases",
+				count:  tt.count,
+			})
+			if !strings.Contains(got, tt.want) {
+				t.Fatalf("warning summary = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestHeaderIncludesCodexSourceContext(t *testing.T) {
 	state := NewState(explorerInput(), query.Filter{}, nil)
 	state.Width = 120
