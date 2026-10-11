@@ -1,10 +1,12 @@
 [tools]
 go = "1.27"
-golangci-lint = "2.13.2"
+golangci-lint = "2.14.0"
 node = "24"
-npm = "11"
+npm = "11.19.1"
+goreleaser = "2.18.3"
 
 [env]
+GOTOOLCHAIN = "local"
 _.path = "{{config_root}}/bin"
 
 [tasks.build]
@@ -41,7 +43,6 @@ run = "npm pack ./npm --dry-run --ignore-scripts"
 
 [tasks.npm-stage-publish]
 description = "Build and stage the npm package for publishing"
-tools.goreleaser = "2"
 usage = '''
 arg "<version>" help="Release version to stage (for example, 0.3.0)"
 '''
@@ -72,7 +73,6 @@ npm stage publish ./npm
 
 [tasks.release-check]
 description = "Check GoReleaser configuration"
-tools.goreleaser = "2"
 run = "goreleaser check"
 
 [tasks.check]
@@ -85,4 +85,5 @@ depends = [
   "npm-test",
   "npm-pack-check",
   "build",
+  "release-check",
 ]
