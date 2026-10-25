@@ -14,12 +14,13 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 	"unicode/utf8"
 )
 
-const Version = "1"
+const Version = "2"
 const DefaultURL = "https://api.typesafe.ai/v1/systemone"
 const maxCodePoints = 8000
 
@@ -64,7 +65,61 @@ type store struct {
 
 var defaultHTTPClient = &http.Client{Timeout: 30 * time.Second}
 
+var contextTagRE = regexp.MustCompile(`(?is)<(/?)(skill|skill_content|environment_context|developer|system|developer_instructions|system_instructions|system-reminder|instructions)(?:\s[^>]*)?>`)
+
+// userAuthoredText removes known history wrappers before any text leaves the process.
+// ponytail: Unmarked injected prose requires provider provenance to distinguish it from user text.
+func userAuthoredText(text string) string {
+	if strings.HasPrefix(strings.TrimSpace(text), "# AGENTS.md instructions for ") {
+		start := strings.Index(strings.ToLower(text), "<instructions>")
+		if start < 0 {
+			return ""
+		}
+		text = text[start:]
+	}
+	var result strings.Builder
+	var tags []string
+	cursor := 0
+	for _, match := range contextTagRE.FindAllStringSubmatchIndex(text, -1) {
+		name := strings.ToLower(text[match[4]:match[5]])
+		if text[match[2]:match[3]] == "/" {
+			if len(tags) > 0 && tags[len(tags)-1] == name {
+				tags = tags[:len(tags)-1]
+				if len(tags) == 0 {
+					cursor = match[1]
+				}
+			}
+			continue
+		}
+		if len(tags) == 0 {
+			result.WriteString(text[cursor:match[0]])
+		}
+		tags = append(tags, name)
+	}
+	// An unclosed or mismatched wrapper makes the remaining text unsafe to send.
+	if len(tags) == 0 {
+		result.WriteString(text[cursor:])
+	}
+	return strings.TrimSpace(result.String())
+}
+
+func classificationInput(title string, messages []string) (string, []string) {
+	clean := make([]string, 0, len(messages))
+	for _, message := range messages {
+		if text := userAuthoredText(message); text != "" {
+			clean = append(clean, text)
+		}
+	}
+	return userAuthoredText(title), clean
+}
+
+func inputFingerprint(title string, messages []string) string {
+	title, messages = classificationInput(title, messages)
+	return Fingerprint(title + "\x00" + strings.Join(messages, "\x00"))
+}
+
 func Input(title string, messages []string) string {
+	title, messages = classificationInput(title, messages)
 	parts := make([]string, 0, len(messages)+1)
 	if title != "" {
 		parts = append(parts, "Title: "+title)
@@ -92,8 +147,7 @@ func Fingerprint(value string) string {
 
 func Current(result Result, title string, messages []string) bool {
 	taxonomy, _ := json.Marshal(defaultModes)
-	full := title + "\x00" + strings.Join(messages, "\x00")
-	return result.InputFingerprint == Fingerprint(full) && result.TaxonomyFingerprint == Fingerprint(string(taxonomy)) && result.Version == Version
+	return result.InputFingerprint == inputFingerprint(title, messages) && result.TaxonomyFingerprint == Fingerprint(string(taxonomy)) && result.Version == Version
 }
 
 func Classify(ctx context.Context, client *http.Client, apiURL, key, title string, messages []string) (Result, error) {
@@ -154,8 +208,7 @@ func Classify(ctx context.Context, client *http.Client, apiURL, key, title strin
 	if name == "" {
 		return Result{}, errors.New("purpose response contained unknown choice")
 	}
-	full := title + "\x00" + strings.Join(messages, "\x00")
-	return Result{InputFingerprint: Fingerprint(full), TaxonomyFingerprint: Fingerprint(string(taxonomy)), Version: Version, ModeID: choice, ModeName: name}, nil
+	return Result{InputFingerprint: inputFingerprint(title, messages), TaxonomyFingerprint: Fingerprint(string(taxonomy)), Version: Version, ModeID: choice, ModeName: name}, nil
 }
 
 func validateAPIURL(raw string) error {

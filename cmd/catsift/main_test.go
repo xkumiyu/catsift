@@ -2405,3 +2405,66 @@ func purposeClassificationInput(count int) query.Input {
 	}
 	return input
 }
+
+func TestPurposeClassificationRetainsResultsOnReload(t *testing.T) {
+	home := testHome(t)
+	options := historyLoadOptions{Source: usage.SourceCodex, CacheDir: t.TempDir()}
+	// A pre-existing usage cache must not hide the source's message bodies.
+	if _, err := loadSelectedHistory(options); err != nil {
+		t.Fatal(err)
+	}
+	options.RequireUserMessages = true
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		_, _ = w.Write([]byte(`{"answers":{"purpose":{"choice":"debug"}}}`))
+	}))
+	defer server.Close()
+	config := purpose.Config{SessionPurpose: purpose.SessionPurposeConfig{APIURL: server.URL}}
+	base := t.TempDir()
+	for load := range 4 {
+		if load == 2 {
+			path := filepath.Join(home, "sessions", "2026", "one.jsonl")
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			data = append(data, []byte(`{"timestamp":"2026-01-01T00:00:09Z","type":"user_message","payload":{"text":"a changed request"}}
+{"timestamp":"2026-01-01T00:00:10Z","type":"task_complete","payload":{}}
+`)...)
+			if err := os.WriteFile(path, data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		history, err := loadSelectedHistory(options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := applyPurposeClassification(&history.Input, config, base, "fake-key", nil); err != nil {
+			t.Fatal(err)
+		}
+		if len(history.Purposes) != 1 {
+			t.Errorf("load %d: purposes = %v, want one saved result", load, history.Purposes)
+		}
+		if got, want := requests.Load(), int32(1+load/2); got != want {
+			t.Fatalf("load %d: requests = %d, want %d (only new input requires a request)", load, got, want)
+		}
+	}
+}
+
+func TestPurposeClassificationSkipsInjectedOnlySessions(t *testing.T) {
+	input := purposeClassificationInput(1)
+	input.Turns[0].UserMessages = []string{"# AGENTS.md instructions for /synthetic\n<INSTRUCTIONS>private context</INSTRUCTIONS>"}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("session without user-authored messages was sent")
+		_, _ = w.Write([]byte(`{"answers":{"purpose":{"choice":"debug"}}}`))
+	}))
+	defer server.Close()
+	config := purpose.Config{SessionPurpose: purpose.SessionPurposeConfig{APIURL: server.URL}}
+	if err := applyPurposeClassification(&input, config, t.TempDir(), "fake-key", nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(input.Purposes) != 0 {
+		t.Fatal("injected-only session received a purpose")
+	}
+}

@@ -23,6 +23,31 @@ func TestInputBoundsPreservingEnds(t *testing.T) {
 	}
 }
 
+func TestInputExcludesInjectedContext(t *testing.T) {
+	for name, message := range map[string]string{
+		"agents":        "# AGENTS.md instructions for /synthetic\n<INSTRUCTIONS>private context</INSTRUCTIONS>",
+		"agents mixed":  "# AGENTS.md instructions for /synthetic\n<INSTRUCTIONS>private context</INSTRUCTIONS>\n<environment_context>private context</environment_context>\nplease review",
+		"skill":         "<skill name=\"report\">private context</skill>",
+		"skill content": "<skill_content name=\"report\">private context</skill_content>",
+		"environment":   "<environment_context>private context</environment_context>",
+		"developer":     "<developer>private context</developer>",
+		"system":        "<system>private context</system>",
+		"mixed":         "<skill name=\"report\">private context</skill>please review",
+		"unclosed":      "please review<environment_context>private context",
+		"nested":        "<skill name=\"report\"><skill>private context</skill>private context</skill>please review",
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := Input("title", []string{message, "actual request"})
+			if strings.Contains(got, "private context") || strings.Contains(got, "AGENTS.md instructions") {
+				t.Fatalf("injected context reached classifier input: %q", got)
+			}
+			if !strings.Contains(got, "actual request") || strings.Contains(message, "please review") && !strings.Contains(got, "please review") {
+				t.Fatalf("user-authored text was lost: %q", got)
+			}
+		})
+	}
+}
+
 func TestClassifyChoiceWithFakeServer(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer fake-key" {
@@ -39,7 +64,7 @@ func TestClassifyChoiceWithFakeServer(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Error(err)
 		}
-		if body.Model != "jev-latest" || body.Questions["purpose"].Type != "choice" || strings.Contains(body.State, "assistant secret") || !strings.Contains(body.State, "user text") {
+		if body.Model != "jev-latest" || body.Questions["purpose"].Type != "choice" || body.State != "Title: title\nUser: user text" {
 			t.Errorf("unexpected request: %+v", body)
 		}
 		criteria := body.Questions["purpose"].Criteria
@@ -55,12 +80,24 @@ func TestClassifyChoiceWithFakeServer(t *testing.T) {
 		_, _ = w.Write([]byte(`{"answers":{"purpose":{"type":"choice","choice":"debug"}}}`))
 	}))
 	defer server.Close()
-	result, err := Classify(context.Background(), server.Client(), server.URL, "fake-key", "title", []string{"user text"})
+	result, err := Classify(context.Background(), server.Client(), server.URL, "fake-key", "title", []string{
+		"# AGENTS.md instructions for /synthetic\n<INSTRUCTIONS>private context</INSTRUCTIONS>",
+		"<environment_context>private context</environment_context>",
+		"<skill name=\"report\">private context</skill>user text",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if result.ModeID != "debug" || result.ModeName != "Debug" {
 		t.Fatalf("unexpected result: %+v", result)
+	}
+	if !Current(result, "title", []string{"<skill name=\"report\">changed context</skill>user text"}) {
+		t.Fatal("fingerprint must use user-authored input, matching the request")
+	}
+	old := result
+	old.Version = "1"
+	if Current(old, "title", []string{"user text"}) {
+		t.Fatal("classification from before context filtering was reused")
 	}
 }
 

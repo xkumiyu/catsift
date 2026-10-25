@@ -728,21 +728,26 @@ type loadedHistory struct {
 }
 
 type historyLoadOptions struct {
-	Source      usage.SourceKind
-	Sources     []usage.SourceKind
-	AutoDetect  bool
-	Days        int
-	DaysSet     bool
-	From        time.Time
-	To          time.Time
-	Now         time.Time
-	CacheDir    string
-	Verbose     bool
-	Diagnostics diagnosticWriter
-	LoadCtx     ctxHistoryLoader
+	Source              usage.SourceKind
+	Sources             []usage.SourceKind
+	AutoDetect          bool
+	Days                int
+	DaysSet             bool
+	From                time.Time
+	To                  time.Time
+	Now                 time.Time
+	CacheDir            string
+	RequireUserMessages bool
+	Verbose             bool
+	Diagnostics         diagnosticWriter
+	LoadCtx             ctxHistoryLoader
 }
 
 func loadHistory(options historyLoadOptions) (loadedHistory, error) {
+	if options.RequireUserMessages {
+		// Usage caches omit message bodies, including on TUI reload.
+		options.CacheDir = ""
+	}
 	result := loadedHistory{Input: query.Input{Source: options.Source, From: options.From, To: options.To}}
 	switch options.Source {
 	case usage.SourceCtx:
@@ -874,16 +879,13 @@ func applyPurposeClassification(input *query.Input, config purpose.Config, base,
 	}
 	for _, session := range input.Sessions {
 		messages := messagesBySession[usage.NewSessionKey(session.Source, session.ID)]
-		if len(messages) < 1 && session.Title == "" {
+		if purpose.Input("", messages) == "" {
 			continue
 		}
 		resultKey := usage.NewSessionKey(session.Source, session.ID)
 		cached, exists := results[resultKey]
 		if exists && purpose.Current(cached, session.Title, messages) {
 			input.Purposes[usage.NewSessionKey(session.Source, session.ID)] = cached.ModeName
-			continue
-		}
-		if len(messages) == 0 {
 			continue
 		}
 		pending = append(pending, candidate{key: resultKey, title: session.Title, messages: messages})
@@ -1429,17 +1431,6 @@ func runWithCtxLoader(args []string, stdout, stderr io.Writer, loadCtx ctxHistor
 			}
 		}
 	}
-	if classifyPurposes {
-		// ponytail: Opted-in runs reread sources because the persistent cache deliberately
-		// omits user message bodies; fingerprint-only cache entries could avoid this cost later.
-		purposeCacheDir, err := os.MkdirTemp("", "catsift-purpose-cache-")
-		if err != nil {
-			diagnostics.errorf("create temporary cache for purpose classification: %v", err)
-			return 1
-		}
-		defer func() { _ = os.RemoveAll(purposeCacheDir) }()
-		cacheDir = purposeCacheDir
-	}
 	if *verbose {
 		diagnostics.write("debug", fmt.Sprintf("catsift version: %s", appversion.String()))
 		diagnostics.write("debug", fmt.Sprintf("cache version: %s schema=%d dir=%q", cache.Version, cache.SchemaVersion, cacheDir))
@@ -1458,7 +1449,8 @@ func runWithCtxLoader(args []string, stdout, stderr io.Writer, loadCtx ctxHistor
 	stopProgress = progress.Start(label)
 	loadOptions := historyLoadOptions{
 		Source: selectedSource, Sources: selectedSources, AutoDetect: autoDetectSources,
-		Days: *days, DaysSet: daysSet, From: fromDate, To: toDate, Now: now, CacheDir: cacheDir, Verbose: *verbose, Diagnostics: diagnostics, LoadCtx: loadCtx,
+		RequireUserMessages: classifyPurposes,
+		Days:                *days, DaysSet: daysSet, From: fromDate, To: toDate, Now: now, CacheDir: cacheDir, Verbose: *verbose, Diagnostics: diagnostics, LoadCtx: loadCtx,
 	}
 	var loadErr error
 	history, loadErr = loadSelectedHistory(loadOptions)
