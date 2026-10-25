@@ -119,12 +119,6 @@ Jevでセッションの用途を分類できます。
 
 1. `catsift config init`を実行して、設定ファイルを作成します。
 2. 設定ファイルを開き、`session_purpose.enabled`を`true`にします。
-
-   ```yaml
-   session_purpose:
-     enabled: true
-   ```
-
 3. 環境変数`TYPESAFE_API_KEY`を設定します。
 
 ### Usage overview

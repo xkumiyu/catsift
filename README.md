@@ -125,13 +125,7 @@ You can use Jev to classify session purposes.
 #### Configuration
 
 1. Run `catsift config init` to create the config file.
-2. Open the config file and set `session_purpose.enabled` to `true`:
-
-   ```yaml
-   session_purpose:
-     enabled: true
-   ```
-
+2. Open the config file and set `session_purpose.enabled` to `true`.
 3. Set the `TYPESAFE_API_KEY` environment variable.
 
 ### Usage overview

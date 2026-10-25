@@ -224,7 +224,7 @@ func TestInitializeConfigCreatesDisabledDefaultsWithoutOverwrite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config.SessionPurpose.Enabled {
+	if config.SessionPurpose.Enabled || config.SessionPurpose.APIURL != DefaultURL {
 		t.Fatalf("unexpected starter config: %+v", config)
 	}
 	data, err := os.ReadFile(path)

@@ -47,7 +47,7 @@ func InitializeConfig(path string) error {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	config := Config{SessionPurpose: SessionPurposeConfig{}}
+	config := Config{SessionPurpose: SessionPurposeConfig{APIURL: DefaultURL}}
 	data, err := yaml.Marshal(config)
 	if err != nil {
 		return err
