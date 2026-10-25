@@ -197,6 +197,14 @@ func TestConfigInitCreatesYAMLAndPreservesExistingFile(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", configHome)
 	path := filepath.Join(configHome, "catsift", "config.yaml")
 	var stdout, stderr bytes.Buffer
+	if code := run([]string{"config", "init", "--help"}, &stdout, &stderr); code != 0 || !strings.Contains(stdout.String(), "Usage: catsift config init") {
+		t.Fatalf("config init --help exit=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("config init --help created config: err=%v", err)
+	}
+	stdout.Reset()
+	stderr.Reset()
 	if code := run([]string{"config", "init"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("config init exit=%d stderr=%s", code, stderr.String())
 	}
@@ -2279,6 +2287,44 @@ func TestPurposeClassificationUsesBoundedConcurrency(t *testing.T) {
 	}
 	if len(input.Purposes) != len(input.Sessions) {
 		t.Fatalf("classified sessions = %d, want %d", len(input.Purposes), len(input.Sessions))
+	}
+}
+
+func TestPurposeClassificationCombinesAllTurnsForSession(t *testing.T) {
+	states := make(chan string, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			State string `json:"state"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		states <- request.State
+		_, _ = w.Write([]byte(`{"answers":{"purpose":{"type":"choice","choice":"debug"}}}`))
+	}))
+	defer server.Close()
+
+	source := usage.SourceRef{Source: usage.SourceCodex, Path: "synthetic"}
+	session := usage.NewSession("one-session", source)
+	session.Title = "Synthetic session"
+	input := query.Input{
+		Sessions: []usage.Session{session},
+		Turns: []usage.Turn{
+			{SessionID: session.ID, Source: source, UserMessages: []string{"first prompt"}},
+			{SessionID: session.ID, Source: source, UserMessages: []string{"second prompt"}},
+		},
+	}
+	config := purpose.Config{SessionPurpose: purpose.SessionPurposeConfig{APIURL: server.URL}}
+	if err := applyPurposeClassification(&input, config, t.TempDir(), "fake-key", nil); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case state := <-states:
+		if want := purpose.Input(session.Title, []string{"first prompt", "second prompt"}); state != want {
+			t.Fatalf("classified input = %q, want %q", state, want)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("classification request was not received")
 	}
 }
 

@@ -62,6 +62,8 @@ type store struct {
 	Results map[string]Result `json:"results"`
 }
 
+var defaultHTTPClient = &http.Client{Timeout: 30 * time.Second}
+
 func Input(title string, messages []string) string {
 	parts := make([]string, 0, len(messages)+1)
 	if title != "" {
@@ -105,7 +107,7 @@ func Classify(ctx context.Context, client *http.Client, apiURL, key, title strin
 		return Result{}, err
 	}
 	if client == nil {
-		client = &http.Client{Timeout: 30 * time.Second}
+		client = defaultHTTPClient
 	}
 	modes := defaultModes
 	input := Input(title, messages)
@@ -194,13 +196,40 @@ func SaveStore(path string, results map[string]Result) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(store{Results: results}, "", "  ")
+	unlock, err := lockStore(path)
 	if err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0600); err != nil {
+	defer unlock()
+
+	current, err := LoadStore(path)
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	for key, result := range results {
+		current[key] = result
+	}
+	// Preserve results saved by concurrent processes after our initial load.
+	data, err := json.MarshalIndent(store{Results: current}, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer func() { _ = os.Remove(tmpPath) }()
+	if err := tmp.Chmod(0600); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
 }

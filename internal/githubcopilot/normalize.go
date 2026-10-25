@@ -103,13 +103,14 @@ func (n *normalizer) consume(event Envelope) {
 		if role := strings.ToLower(firstString(data, "role", "author")); role != "" && role != "user" {
 			return
 		}
-		if valueText(firstValue(data, "content", "text", "message")) == "" {
+		text := valueText(firstValue(data, "content", "text", "message"))
+		if text == "" {
 			return
 		}
 		turn := n.ensureTurn(session, event, turnID(data))
 		n.touchTurn(turn, event.Timestamp, false)
 		turn.turn.UserPrompts++
-		turn.turn.UserMessages = append(turn.turn.UserMessages, valueText(firstValue(data, "content", "text", "message")))
+		turn.turn.UserMessages = append(turn.turn.UserMessages, text)
 		if !event.Timestamp.IsZero() {
 			turn.turn.UserPromptTimes = append(turn.turn.UserPromptTimes, event.Timestamp)
 		}

@@ -867,13 +867,13 @@ func applyPurposeClassification(input *query.Input, config purpose.Config, base,
 	changed := false
 	failed := 0
 	pending := make([]candidate, 0)
+	messagesBySession := make(map[string][]string)
+	for _, turn := range input.Turns {
+		key := usage.NewSessionKey(turn.Source, turn.SessionID)
+		messagesBySession[key] = append(messagesBySession[key], turn.UserMessages...)
+	}
 	for _, session := range input.Sessions {
-		var messages []string
-		for _, turn := range input.Turns {
-			if usage.NewSessionKey(turn.Source, turn.SessionID) == usage.NewSessionKey(session.Source, session.ID) {
-				messages = append(messages, turn.UserMessages...)
-			}
-		}
+		messages := messagesBySession[usage.NewSessionKey(session.Source, session.ID)]
 		if len(messages) < 1 && session.Title == "" {
 			continue
 		}
@@ -1158,7 +1158,8 @@ func runWithCtxLoader(args []string, stdout, stderr io.Writer, loadCtx ctxHistor
 			_, _ = fmt.Fprintf(stdout, "Created %s\nSet session_purpose.enabled: true to enable session purpose classification.\n", path)
 			return 0
 		}
-		if len(args) == 2 && (args[1] == "--help" || args[1] == "-h") {
+		if (len(args) == 2 && (args[1] == "--help" || args[1] == "-h")) ||
+			(len(args) == 3 && strings.EqualFold(args[1], "init") && (args[2] == "--help" || args[2] == "-h")) {
 			writeHelp(stdout, "Usage: catsift config init\n\nCreate a YAML configuration file without overwriting an existing one.\n")
 			return 0
 		}

@@ -5,11 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -138,6 +140,35 @@ func TestStoreContainsOnlyResults(t *testing.T) {
 	}
 	if loaded["s"].ModeID != "debug" {
 		t.Fatalf("bad roundtrip: %+v", loaded)
+	}
+}
+
+func TestSaveStorePreservesConcurrentResults(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "classification.json")
+	const writers = 12
+	var wg sync.WaitGroup
+	errs := make(chan error, writers)
+	for i := range writers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			err := SaveStore(path, map[string]Result{fmt.Sprint(i): {ModeID: "debug"}})
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	loaded, err := LoadStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != writers {
+		t.Fatalf("stored results = %d, want %d", len(loaded), writers)
 	}
 }
 
