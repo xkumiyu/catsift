@@ -864,7 +864,7 @@ type purposeClassificationOptions struct {
 	Base       string
 	APIKey     string
 	Confirm    func(int) bool
-	LoadBodies func([]usage.Session) (map[string][]string, error)
+	LoadBodies func([]usage.Session) (map[string][]string, []usage.Warning, error)
 	Now        time.Time
 }
 
@@ -959,7 +959,8 @@ func applyPurposeClassification(input *query.Input, options purposeClassificatio
 			}
 		}
 		if len(sessions) > 0 {
-			loaded, loadErr := options.LoadBodies(sessions)
+			loaded, warnings, loadErr := options.LoadBodies(sessions)
+			input.Warnings = append(input.Warnings, warnings...)
 			if loadErr != nil {
 				bodyLoadErr = fmt.Errorf("read session purpose input: %w", loadErr)
 			}
@@ -1063,7 +1064,7 @@ func sessionPurposeEvidence(session usage.Session, promptCount int, promptTimes 
 
 // loadPurposeMessages reads message bodies only for the sessions that need
 // verification. Codex limits the read to the matching history files.
-func loadPurposeMessages(options historyLoadOptions, sessions []usage.Session) (map[string][]string, error) {
+func loadPurposeMessages(options historyLoadOptions, sessions []usage.Session) (map[string][]string, []usage.Warning, error) {
 	bySource := make(map[usage.SourceKind][]usage.Session)
 	order := make([]usage.SourceKind, 0, 2)
 	for _, session := range sessions {
@@ -1077,6 +1078,7 @@ func loadPurposeMessages(options historyLoadOptions, sessions []usage.Session) (
 		bySource[source] = append(bySource[source], session)
 	}
 	messages := make(map[string][]string)
+	var warnings []usage.Warning
 	var loadErrors []error
 	for _, source := range order {
 		sourceOptions := options
@@ -1092,14 +1094,16 @@ func loadPurposeMessages(options historyLoadOptions, sessions []usage.Session) (
 		history, err := loadHistory(sourceOptions)
 		if err != nil {
 			loadErrors = append(loadErrors, fmt.Errorf("%s: %w", source, err))
+			warnings = append(warnings, usage.Warning{Reason: "source_unavailable", Type: string(source), Source: source, Count: 1})
 			continue
 		}
+		warnings = append(warnings, history.Warnings...)
 		for _, turn := range history.Turns {
 			key := usage.NewSessionKey(turn.Source, turn.SessionID)
 			messages[key] = append(messages[key], turn.UserMessages...)
 		}
 	}
-	return messages, errors.Join(loadErrors...)
+	return messages, warnings, errors.Join(loadErrors...)
 }
 
 func purposeCodexFiles(sessions []usage.Session) ([]string, bool) {
@@ -1661,7 +1665,7 @@ func runWithCtxLoader(args []string, stdout, stderr io.Writer, loadCtx ctxHistor
 			Base:    purposeBase,
 			APIKey:  purposeAPIKey,
 			Confirm: confirm,
-			LoadBodies: func(sessions []usage.Session) (map[string][]string, error) {
+			LoadBodies: func(sessions []usage.Session) (map[string][]string, []usage.Warning, error) {
 				return loadPurposeMessages(loadOptions, sessions)
 			},
 		}
@@ -1691,8 +1695,8 @@ func runWithCtxLoader(args []string, stdout, stderr io.Writer, loadCtx ctxHistor
 			return 1
 		}
 		history.SkillInventory = &inventory
-		var inventoryWarnings atomic.Bool
-		inventoryWarnings.Store(len(inventory.Warnings) > 0)
+		var inputWarnings atomic.Bool
+		inputWarnings.Store(len(inventory.Warnings) > 0)
 		filter := query.Filter{Strict: *strict, From: fromDate, To: toDate, Sources: append([]usage.SourceKind(nil), selectedSources...)}
 		if len(selectedSources) == 1 {
 			filter.Source = selectedSources[0]
@@ -1725,14 +1729,14 @@ func runWithCtxLoader(args []string, stdout, stderr io.Writer, loadCtx ctxHistor
 				return query.Input{}, fmt.Errorf("scan skill roots: %w", err)
 			}
 			refreshed.SkillInventory = &inventory
-			inventoryWarnings.Store(len(inventory.Warnings) > 0)
+			inputWarnings.Store(len(refreshed.Warnings) > 0 || len(inventory.Warnings) > 0)
 			return refreshed.Input, nil
 		}
 		if err := tui.Run(tui.RunOptions{Input: history.Input, Filter: filter, SourcePath: history.SourcePath, SourcePaths: history.SourcePaths, Reload: reload, Stdin: os.Stdin, Stdout: stdout}); err != nil {
 			diagnostics.errorf("run interactive view: %v", err)
 			return 1
 		}
-		if *strictInput && (len(history.Warnings) > 0 || inventoryWarnings.Load()) {
+		if *strictInput && (len(history.Warnings) > 0 || inputWarnings.Load()) {
 			diagnostics.errorf("input diagnostics encountered (--strict-input)")
 			return 1
 		}

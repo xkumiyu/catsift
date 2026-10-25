@@ -25,11 +25,11 @@ classifier versionはCLI release versionから独立し、通常のCLI修正で�
 
 ### Requirement: 新規sessionだけを既定で分類し既存sessionを証拠で再利用する
 
-分類が有効な実行は、新規sessionを分類しなければならない（SHALL）。保存済み結果を持つsessionは、classifier version、taxonomy fingerprint、またはrevision証拠が変化した場合だけ本文をparseして再検証しなければならない（SHALL）。revision証拠が一致するsessionでは本文を追加parseしてはならない（MUST NOT）。revision証拠はsession title、更新時刻、選択されたprompt数とprompt時刻列、およびCodexで取得可能な場合はsource file revisionから作らなければならない（SHALL）。OpenCode、GitHub Copilot、ctxではsource pathやfile revisionを証拠に含めてはならない（MUST NOT）。
+分類が有効な実行は、新規sessionを分類しなければならない（SHALL）。保存済み結果を持つsessionは、予算付き巡回検証の対象、またはclassifier version、taxonomy fingerprint、revision証拠のいずれかが変化した場合だけ本文をparseして再検証しなければならない（SHALL）。巡回検証の対象外でclassifier version、taxonomy fingerprint、revision証拠がすべて一致するsessionでは本文を追加parseしてはならない（MUST NOT）。revision証拠はsession title、更新時刻、選択されたprompt数とprompt時刻列、およびCodexで取得可能な場合はsource file revisionから作らなければならない（SHALL）。OpenCode、GitHub Copilot、ctxではsource pathやfile revisionを証拠に含めてはならない（MUST NOT）。
 
 #### Scenario: 既存sessionが変化していない
 
-- **WHEN** 保存済み結果を持ち、version、taxonomy、revision証拠がいずれも一致するsessionがある
+- **WHEN** 保存済み結果を持ち、version、taxonomy、revision証拠がいずれも一致し、巡回検証の対象外のsessionがある
 - **THEN** systemは本文をparseせず保存済み結果を再利用し、API requestを送らない
 
 #### Scenario: 新規sessionを分類する
@@ -82,7 +82,7 @@ systemは、revision証拠に依存する再利用の見逃しに備え、検証
 
 #### Scenario: 対象外sessionの本文を読まない
 
-- **WHEN** 証拠一致で再利用できるsessionだけがhistoryに含まれる
+- **WHEN** 巡回検証の対象がなく、証拠一致で再利用できるsessionだけがhistoryに含まれる
 - **THEN** systemはどのsourceからもmessage bodyをparseしない
 
 #### Scenario: Codexの対象fileだけを読む
@@ -114,3 +114,8 @@ systemは、revision証拠に依存する再利用の見逃しに備え、検証
 
 - **WHEN** 再検証対象のうち1つのsourceで本文parseに失敗する
 - **THEN** systemは他sourceの分類と結果保存を継続し、失敗をwarningとして通知する
+
+#### Scenario: 本文parseで回復可能なwarningが発生する
+
+- **WHEN** 再検証対象fileの読み込み失敗などがerrorではなくwarningとして返される
+- **THEN** systemはwarningを入力のWarningsへ引き継ぎ、reportではstderrへ、TUIではWarningsへ通知し、正常に取得できた本文の処理を継続する。--strict-input指定時はnon-zeroで終了する

@@ -1195,6 +1195,48 @@ func TestRunCtxStrictInputKeepsJSONAndReturnsNonZero(t *testing.T) {
 	}
 }
 
+func TestRunPurposeBodyWarningsRespectStrictInput(t *testing.T) {
+	for _, strict := range []bool{false, true} {
+		t.Run(strconv.FormatBool(strict), func(t *testing.T) {
+			configHome := t.TempDir()
+			t.Setenv("XDG_CONFIG_HOME", configHome)
+			t.Setenv("XDG_CACHE_HOME", t.TempDir())
+			t.Setenv("TYPESAFE_API_KEY", "fake-key")
+			base := filepath.Join(configHome, "catsift")
+			if err := os.MkdirAll(base, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(base, "config.yaml"), []byte("session_purpose:\n  enabled: true\n  api_url: http://127.0.0.1:1\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			source := usage.SourceRef{Source: usage.SourceCtx}
+			calls := 0
+			loader := func(string, ctxsource.IngestOptions) (ctxsource.IngestResult, error) {
+				calls++
+				if calls == 1 {
+					return ctxsource.IngestResult{
+						Sessions: []usage.Session{usage.NewSession("synthetic", source)},
+						Turns:    []usage.Turn{{SessionID: "synthetic", Source: source, UserPrompts: 1}},
+					}, nil
+				}
+				return ctxsource.IngestResult{Warnings: []usage.Warning{{Reason: "read_file", Source: source.Source, Count: 1}}}, nil
+			}
+			var stdout, stderr bytes.Buffer
+			code := runWithCtxLoader([]string{"sessions", "--source", "ctx", fmt.Sprintf("--strict-input=%t", strict)}, &stdout, &stderr, loader)
+			wantCode := 0
+			if strict {
+				wantCode = 1
+			}
+			if code != wantCode || calls != 2 || strings.Count(stderr.String(), "could not read") != 1 {
+				t.Fatalf("exit=%d calls=%d stdout=%q stderr=%q", code, calls, stdout.String(), stderr.String())
+			}
+			if !json.Valid(stdout.Bytes()) {
+				t.Fatalf("report is not valid JSON: %q", stdout.String())
+			}
+		})
+	}
+}
+
 func TestRunCtxUnusedSkillsKeepsPhysicalRowsAndUsesAgentUnion(t *testing.T) {
 	first := t.TempDir()
 	second := t.TempDir()
@@ -2431,7 +2473,7 @@ func TestPurposeClassificationRetainsResultsOnReload(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := applyPurposeClassification(&history.Input, purposeClassificationOptions{Config: config, Base: base, APIKey: "fake-key", LoadBodies: func(sessions []usage.Session) (map[string][]string, error) {
+		if err := applyPurposeClassification(&history.Input, purposeClassificationOptions{Config: config, Base: base, APIKey: "fake-key", LoadBodies: func(sessions []usage.Session) (map[string][]string, []usage.Warning, error) {
 			return loadPurposeMessages(options, sessions)
 		}}); err != nil {
 			t.Fatal(err)
@@ -2499,9 +2541,9 @@ func TestPurposeClassificationReusesEvidenceWithoutReadingBodies(t *testing.T) {
 		Base:   base,
 		APIKey: "fake-key",
 		Now:    time.Date(2026, 10, 26, 0, 30, 0, 0, time.UTC),
-		LoadBodies: func([]usage.Session) (map[string][]string, error) {
+		LoadBodies: func([]usage.Session) (map[string][]string, []usage.Warning, error) {
 			bodyLoads++
-			return map[string][]string{key: messages}, nil
+			return map[string][]string{key: messages}, nil, nil
 		},
 	})
 	if err != nil {
@@ -2554,9 +2596,9 @@ func TestPurposeClassificationVerifiesChangedEvidenceWithoutAPI(t *testing.T) {
 		Base:   base,
 		APIKey: "fake-key",
 		Now:    now,
-		LoadBodies: func(sessions []usage.Session) (map[string][]string, error) {
+		LoadBodies: func(sessions []usage.Session) (map[string][]string, []usage.Warning, error) {
 			loaded = sessions
-			return map[string][]string{key: messages}, nil
+			return map[string][]string{key: messages}, nil, nil
 		},
 	})
 	if err != nil {
@@ -2610,8 +2652,8 @@ func TestPurposeClassificationReclassifiesChangedFingerprint(t *testing.T) {
 		Config: purpose.Config{SessionPurpose: purpose.SessionPurposeConfig{APIURL: server.URL}},
 		Base:   base,
 		APIKey: "fake-key",
-		LoadBodies: func([]usage.Session) (map[string][]string, error) {
-			return map[string][]string{key: {"new message"}}, nil
+		LoadBodies: func([]usage.Session) (map[string][]string, []usage.Warning, error) {
+			return map[string][]string{key: {"new message"}}, nil, nil
 		},
 	})
 	if err != nil {
@@ -2665,14 +2707,14 @@ func TestPurposeClassificationSweepsOldestEntriesWithinBudget(t *testing.T) {
 		Base:   base,
 		APIKey: "fake-key",
 		Now:    now,
-		LoadBodies: func(sessions []usage.Session) (map[string][]string, error) {
+		LoadBodies: func(sessions []usage.Session) (map[string][]string, []usage.Warning, error) {
 			loadedMap := make(map[string][]string, len(sessions))
 			for _, session := range sessions {
 				key := usage.NewSessionKey(session.Source, session.ID)
 				loaded[key] = struct{}{}
 				loadedMap[key] = messages[key]
 			}
-			return loadedMap, nil
+			return loadedMap, nil, nil
 		},
 	})
 	if err != nil {
@@ -2701,48 +2743,60 @@ func TestPurposeClassificationSweepsOldestEntriesWithinBudget(t *testing.T) {
 	}
 }
 
-func TestPurposeClassificationVersionMismatchReclassifies(t *testing.T) {
-	var requests atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		requests.Add(1)
-		_, _ = w.Write([]byte(`{"answers":{"purpose":{"type":"choice","choice":"review"}}}`))
-	}))
-	defer server.Close()
+func TestPurposeClassificationIncompatibleMetadataReclassifies(t *testing.T) {
+	for _, tc := range []struct{ name, version, taxonomy string }{
+		{"version", "old", purpose.TaxonomyFingerprint()},
+		{"taxonomy", purpose.Version, "old"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var requests atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				requests.Add(1)
+				_, _ = w.Write([]byte(`{"answers":{"purpose":{"type":"choice","choice":"review"}}}`))
+			}))
+			defer server.Close()
 
-	session := usage.NewSession("one", usage.SourceRef{Source: usage.SourceCodex})
-	session.Title = "Synthetic session"
-	messages := []string{"synthetic user message"}
-	key := usage.NewSessionKey(session.Source, session.ID)
-	base := t.TempDir()
-	if err := purpose.SaveStore(filepath.Join(base, "purposes.json"), map[string]purpose.Result{
-		key: {
-			InputFingerprint:    purpose.InputFingerprint(session.Title, messages),
-			TaxonomyFingerprint: purpose.TaxonomyFingerprint(),
-			Version:             "old",
-			ModeID:              "debug",
-			ModeName:            "Debug",
-			Evidence:            sessionPurposeEvidence(session, 1, nil),
-		},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	input := query.Input{
-		Sessions: []usage.Session{session},
-		Turns:    []usage.Turn{{SessionID: session.ID, Source: session.Source, UserPrompts: 1}},
-	}
-	err := applyPurposeClassification(&input, purposeClassificationOptions{
-		Config: purpose.Config{SessionPurpose: purpose.SessionPurposeConfig{APIURL: server.URL}},
-		Base:   base,
-		APIKey: "fake-key",
-		LoadBodies: func([]usage.Session) (map[string][]string, error) {
-			return map[string][]string{key: messages}, nil
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if requests.Load() != 1 || input.Purposes[key] != "Review" {
-		t.Fatalf("requests = %d, purposes = %v, want reclassification", requests.Load(), input.Purposes)
+			session := usage.NewSession("one", usage.SourceRef{Source: usage.SourceCodex})
+			session.Title = "Synthetic session"
+			messages := []string{"synthetic user message"}
+			key := usage.NewSessionKey(session.Source, session.ID)
+			now := time.Date(2026, 10, 26, 1, 0, 0, 0, time.UTC)
+			bodyLoads := 0
+			base := t.TempDir()
+			if err := purpose.SaveStore(filepath.Join(base, "purposes.json"), map[string]purpose.Result{
+				key: {
+					InputFingerprint:    purpose.InputFingerprint(session.Title, messages),
+					TaxonomyFingerprint: tc.taxonomy,
+					Version:             tc.version,
+					VerifiedAt:          now,
+					ModeID:              "debug",
+					ModeName:            "Debug",
+					Evidence:            sessionPurposeEvidence(session, 1, nil),
+				},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			input := query.Input{
+				Sessions: []usage.Session{session},
+				Turns:    []usage.Turn{{SessionID: session.ID, Source: session.Source, UserPrompts: 1}},
+			}
+			err := applyPurposeClassification(&input, purposeClassificationOptions{
+				Config: purpose.Config{SessionPurpose: purpose.SessionPurposeConfig{APIURL: server.URL}},
+				Base:   base,
+				APIKey: "fake-key",
+				Now:    now,
+				LoadBodies: func([]usage.Session) (map[string][]string, []usage.Warning, error) {
+					bodyLoads++
+					return map[string][]string{key: messages}, nil, nil
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if bodyLoads != 1 || requests.Load() != 1 || input.Purposes[key] != "Review" {
+				t.Fatalf("requests = %d, purposes = %v, want reclassification", requests.Load(), input.Purposes)
+			}
+		})
 	}
 }
 
@@ -2773,7 +2827,7 @@ func TestPurposeClassificationVerifiesChangedWindow(t *testing.T) {
 				}
 				err = applyPurposeClassification(&history.Input, purposeClassificationOptions{
 					Config: purpose.Config{SessionPurpose: purpose.SessionPurposeConfig{APIURL: server.URL}}, Base: base, APIKey: "fake-key",
-					LoadBodies: func(sessions []usage.Session) (map[string][]string, error) {
+					LoadBodies: func(sessions []usage.Session) (map[string][]string, []usage.Warning, error) {
 						return loadPurposeMessages(opts, sessions)
 					},
 				})
@@ -2816,7 +2870,7 @@ func TestPurposeClassificationOpenCodeEvidenceSurvivesCache(t *testing.T) {
 		bodyLoads := 0
 		err = applyPurposeClassification(&history.Input, purposeClassificationOptions{
 			Config: purpose.Config{SessionPurpose: purpose.SessionPurposeConfig{APIURL: server.URL}}, Base: base, APIKey: "fake-key",
-			LoadBodies: func(sessions []usage.Session) (map[string][]string, error) {
+			LoadBodies: func(sessions []usage.Session) (map[string][]string, []usage.Warning, error) {
 				bodyLoads++
 				return loadPurposeMessages(opts, sessions)
 			},
@@ -2871,8 +2925,8 @@ func TestPurposeClassificationSweepVerification(t *testing.T) {
 			}
 			err := applyPurposeClassification(&input, purposeClassificationOptions{
 				Config: purpose.Config{SessionPurpose: purpose.SessionPurposeConfig{APIURL: server.URL}}, Base: base, APIKey: "fake-key", Now: now,
-				LoadBodies: func([]usage.Session) (map[string][]string, error) {
-					return map[string][]string{key: tc.messages}, tc.loadErr
+				LoadBodies: func([]usage.Session) (map[string][]string, []usage.Warning, error) {
+					return map[string][]string{key: tc.messages}, nil, tc.loadErr
 				},
 			})
 			if (err != nil) != (tc.loadErr != nil) {
@@ -2921,7 +2975,7 @@ func TestPurposeClassificationContinuesAfterSourceReadError(t *testing.T) {
 	defer server.Close()
 	err = applyPurposeClassification(&history.Input, purposeClassificationOptions{
 		Config: purpose.Config{SessionPurpose: purpose.SessionPurposeConfig{APIURL: server.URL}}, Base: t.TempDir(), APIKey: "fake-key",
-		LoadBodies: func(sessions []usage.Session) (map[string][]string, error) {
+		LoadBodies: func(sessions []usage.Session) (map[string][]string, []usage.Warning, error) {
 			return loadPurposeMessages(opts, sessions)
 		},
 	})
@@ -2930,6 +2984,68 @@ func TestPurposeClassificationContinuesAfterSourceReadError(t *testing.T) {
 	}
 	if requests.Load() != 1 || history.Purposes[key] != "Debug" || len(history.Purposes) != 1 {
 		t.Fatalf("requests = %d, purposes = %v, want surviving source classified", requests.Load(), history.Purposes)
+	}
+	if len(history.Warnings) != 1 || history.Warnings[0].Reason != "source_unavailable" || history.Warnings[0].Source != usage.SourceOpenCode {
+		t.Fatalf("source failure missing from input warnings: %+v", history.Warnings)
+	}
+}
+
+func TestLoadPurposeMessagesReportsWarnings(t *testing.T) {
+	for _, verbose := range []bool{false, true} {
+		t.Run(fmt.Sprintf("verbose=%t", verbose), func(t *testing.T) {
+			testHome(t)
+			var diagnostics bytes.Buffer
+			opts := historyLoadOptions{Source: usage.SourceCodex, CacheDir: t.TempDir(), Verbose: verbose, Diagnostics: newDiagnosticWriter(&diagnostics, output.ColorNever, true)}
+			if _, err := loadSelectedHistory(opts); err != nil {
+				t.Fatal(err)
+			}
+			history, err := loadSelectedHistory(opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			valid := history.Sessions[0]
+			missingPath := filepath.Join(t.TempDir(), "missing.jsonl")
+			missing := usage.NewSession("missing", usage.SourceRef{Source: usage.SourceCodex, Path: missingPath})
+			messages, warnings, err := loadPurposeMessages(opts, []usage.Session{missing, valid})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := messages[usage.NewSessionKey(valid.Source, valid.ID)]; !reflect.DeepEqual(got, []string{"hello", "$report"}) {
+				t.Fatalf("surviving messages = %#v", got)
+			}
+			if len(warnings) != 1 || warnings[0].Reason != "read_file" || warnings[0].Source != usage.SourceCodex || warnings[0].Path != missingPath {
+				t.Fatalf("body read warnings = %+v", warnings)
+			}
+			diagnostics.Reset()
+			writeWarnings(&diagnostics, warnings, verbose)
+			if !strings.Contains(diagnostics.String(), "warning") || !strings.Contains(diagnostics.String(), "could not read") {
+				t.Fatalf("body read warning missing: %q", diagnostics.String())
+			}
+			if strings.Contains(diagnostics.String(), missingPath) != verbose {
+				t.Fatalf("warning path should only appear with --verbose: %q", diagnostics.String())
+			}
+		})
+	}
+}
+
+func TestPurposeClassificationPreservesBodyWarnings(t *testing.T) {
+	input := purposeClassificationInput(1)
+	input.Turns[0].UserMessages = nil
+	existing := usage.Warning{Reason: "unknown_type", Count: 1}
+	bodyWarning := usage.Warning{Reason: "read_file", Source: usage.SourceCodex, Count: 1}
+	input.Warnings = []usage.Warning{existing}
+	err := applyPurposeClassification(&input, purposeClassificationOptions{
+		Config: purpose.Config{SessionPurpose: purpose.SessionPurposeConfig{APIURL: "http://127.0.0.1:1"}},
+		Base:   t.TempDir(), APIKey: "fake-key",
+		LoadBodies: func([]usage.Session) (map[string][]string, []usage.Warning, error) {
+			return nil, []usage.Warning{bodyWarning}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(input.Warnings, []usage.Warning{existing, bodyWarning}) {
+		t.Fatalf("TUI/report input lost warnings: %+v", input.Warnings)
 	}
 }
 
@@ -2949,13 +3065,13 @@ func TestPurposeClassificationLoadsOnlyMissingBodies(t *testing.T) {
 			loads := 0
 			err := applyPurposeClassification(&input, purposeClassificationOptions{
 				Config: purpose.Config{SessionPurpose: purpose.SessionPurposeConfig{APIURL: server.URL}}, Base: t.TempDir(), APIKey: "fake-key",
-				LoadBodies: func(sessions []usage.Session) (map[string][]string, error) {
+				LoadBodies: func(sessions []usage.Session) (map[string][]string, []usage.Warning, error) {
 					loads++
 					if !missing || len(sessions) != 1 || sessions[0].ID != input.Sessions[1].ID {
 						t.Errorf("unexpected body reads: %+v", sessions)
 					}
 					key := input.Sessions[1].QualifiedKey()
-					return map[string][]string{key: {"synthetic user message"}}, nil
+					return map[string][]string{key: {"synthetic user message"}}, nil, nil
 				},
 			})
 			if err != nil {
@@ -2986,9 +3102,9 @@ func TestPurposeClassificationReloadsPartiallyFilteredBodies(t *testing.T) {
 	err := applyPurposeClassification(&input, purposeClassificationOptions{
 		Config: purpose.Config{SessionPurpose: purpose.SessionPurposeConfig{APIURL: server.URL}},
 		Base:   base, APIKey: "fake-key",
-		LoadBodies: func([]usage.Session) (map[string][]string, error) {
+		LoadBodies: func([]usage.Session) (map[string][]string, []usage.Warning, error) {
 			loads++
-			return map[string][]string{key: {"selected message"}}, nil
+			return map[string][]string{key: {"selected message"}}, nil, nil
 		},
 	})
 	if err != nil {
