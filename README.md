@@ -110,24 +110,6 @@ Use `--json` to emit machine-readable output.
 
 See each command's `--help` output for details.
 
-### Optional: Session purpose classification
-
-You can use Jev to classify session purposes.
-
-- When configured, classification runs when you execute `catsift sessions` or
-  launch the TUI with `catsift`.
-- Session titles and user-authored messages are used for classification.
-- Classifying 100 sessions costs about $0.01. Actual cost varies with message
-  length.[^1]
-
-[^1]: Estimated at $0.042 per 1 million input tokens.
-
-#### Configuration
-
-1. Run `catsift config init` to create the config file.
-2. Open the config file and set `session_purpose.enabled` to `true`.
-3. Set the `TYPESAFE_API_KEY` environment variable.
-
 ### Usage overview
 
 ```sh
@@ -223,6 +205,27 @@ A name is considered used if any agent in the selected history used it.
 
 `--root` is a scan scope: only `.agents/skills/`, `.codex/skills/`, and plugin cache layouts under it are recognized.
 Flat `SKILL.md` directories are ignored.
+
+### Optional: Session purpose classification
+
+> [!NOTE]
+> This feature is experimental.
+
+You can use Jev to classify session purposes.
+
+- When configured, classification runs when you execute `catsift sessions` or
+  launch the TUI with `catsift`.
+- Session titles and user-authored messages are used for classification.
+- Classifying 100 sessions costs about $0.01. Actual cost varies with message
+  length.[^1]
+
+[^1]: Estimated at $0.042 per 1 million input tokens.
+
+#### Configuration
+
+1. Run `catsift config init` to create the config file.
+2. Open the config file and set `session_purpose.enabled` to `true`.
+3. Set the `TYPESAFE_API_KEY` environment variable.
 
 ## Cache
 

@@ -20,7 +20,8 @@ import (
 	"unicode/utf8"
 )
 
-const Version = "2"
+// Version tracks classification compatibility independently of CLI releases.
+const Version = "1"
 const DefaultURL = "https://api.typesafe.ai/v1/systemone"
 const maxCodePoints = 8000
 

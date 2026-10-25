@@ -65,6 +65,8 @@ requestはsession titleと実際のuser-authored messageを含め、injected sys
 
 classification結果はdisposable ingestion cacheとは別に保存し、cache eviction後も再利用しなければならない（SHALL）。storeにはraw promptを保存せず、input fingerprint、taxonomy fingerprint、classifier versionのいずれかが変化した場合は再分類しなければならない（SHALL）。API keyおよびraw promptをlogへ出力してはならない（MUST NOT）。
 
+classifier versionはCLI release versionから独立し、通常のCLI修正では更新しない。分類結果の互換性を失う入力生成・分類指示・taxonomy・model等の変更時にのみ更新の必要性を判断し、更新時は既存結果への影響と移行・再分類方針を検討する。
+
 #### Scenario: 同じ入力を再利用する
 
 - **WHEN** input、taxonomy、classifier versionが前回分類時と一致する
