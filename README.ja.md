@@ -103,22 +103,6 @@ activation modeとevidence stateは独立した軸です。1つの利用に複�
 
 詳細は各commandの`--help`を参照してください。
 
-### Optional: Session purpose classification
-
-Jevでセッションの用途を分類できます。
-
-- 分類は`catsift sessions`の実行時、またはTUIで`catsift`を起動したときに行います。
-- セッションタイトルとユーザーが入力したメッセージを利用します。
-- 新規に100セッションを分類した場合、費用はおよそ$0.01です。メッセージの分量により異なります。[^1]
-
-[^1]: $0.042 / 100万入力トークンで計算
-
-#### 設定方法
-
-1. `catsift config init`を実行して、設定ファイルを作成します。
-2. 設定ファイルを開き、`session_purpose.enabled`を`true`にします。
-3. 環境変数`TYPESAFE_API_KEY`を設定します。
-
 ### Skill usage
 
 `--group-by`でturn単位またはsession単位に集計し、`--strict`で`Confirmed`の利用だけを集計します。
@@ -141,6 +125,25 @@ rowはcanonical skill nameと絶対pathの組み合わせで識別し、同名�
 
 `--root`は走査起点で、配下の`.agents/skills/`、`.codex/skills/`、plugin cache配置のみ認識します。
 flatな`SKILL.md`配置は無視されます。
+
+### Optional: Session purpose classification
+
+> [!NOTE]
+> この機能は試験的です。
+
+Jevでセッションの用途を分類できます。
+
+- 分類は`catsift sessions`の実行時、またはTUIで`catsift`を起動したときに行います。
+- セッションタイトルとユーザーが入力したメッセージを利用します。
+- 新規に100セッションを分類した場合、費用はおよそ$0.01です。メッセージの分量により異なります。[^1]
+
+[^1]: $0.042 / 100万入力トークンで計算
+
+#### 設定方法
+
+1. `catsift config init`を実行して、設定ファイルを作成します。
+2. 設定ファイルを開き、`session_purpose.enabled`を`true`にします。
+3. 環境変数`TYPESAFE_API_KEY`を設定します。
 
 ## Cache
 
