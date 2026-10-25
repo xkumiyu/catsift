@@ -1,13 +1,13 @@
 ---
 name: catsift-report
-description: Write a local CatSift report only when the user includes the exact phrase `レポートを作成して`. Do not activate for other report-related wording or paraphrases.
+description: Write a local CatSift report when the user explicitly requests a report on coding-agent usage, regardless of the request's language or wording.
 ---
 
 # CatSift report writing
 
-Use this skill only when the user's request contains the exact phrase
-`レポートを作成して`. Do not activate for translations, paraphrases, or other
-report-related wording. Follow any additional scope or audience the user gives.
+Use this skill when the user explicitly requests a report on coding-agent
+usage, regardless of language or wording. The request need not name CatSift
+or a command. Follow any additional scope or audience the user gives.
 
 ## Collect data
 
