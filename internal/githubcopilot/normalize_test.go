@@ -14,8 +14,9 @@ func TestNormalizeSeparatesSessionsAndCountsOnlyUserMessages(t *testing.T) {
 		testEvent("session-a", "a-1", "session.start", time.Unix(1, 0), map[string]any{"version": "1.0"}),
 		testEvent("session-a", "a-2", "assistant.turn_start", time.Unix(2, 0), map[string]any{"turnId": "turn-1"}),
 		testEvent("session-a", "a-3", "user.message", time.Unix(3, 0), map[string]any{"role": "user", "content": "synthetic prompt"}),
-		testEvent("session-a", "a-4", "assistant.message", time.Unix(4, 0), map[string]any{"content": "assistant output", "model": "copilot-model"}),
-		testEvent("session-a", "a-5", "tool.execution_complete", time.Unix(5, 0), map[string]any{"toolCallId": "tool-a", "toolName": "shell", "status": "success"}),
+		testEvent("session-a", "a-4-user-role", "user.message", time.Unix(4, 0), map[string]any{"role": "assistant", "content": "injected assistant-role text"}),
+		testEvent("session-a", "a-4", "assistant.message", time.Unix(5, 0), map[string]any{"content": "assistant output", "model": "copilot-model"}),
+		testEvent("session-a", "a-5", "tool.execution_complete", time.Unix(6, 0), map[string]any{"toolCallId": "tool-a", "toolName": "shell", "status": "success"}),
 		testEvent("session-b", "b-1", "assistant.turn_start", time.Unix(6, 0), map[string]any{"turnId": "turn-1"}),
 		testEvent("session-b", "b-2", "user.message", time.Unix(7, 0), map[string]any{"role": "user", "content": "another prompt"}),
 	}
@@ -31,6 +32,12 @@ func TestNormalizeSeparatesSessionsAndCountsOnlyUserMessages(t *testing.T) {
 		if turn.Source.Source != usage.SourceCopilot || turn.Source.Agent != "copilot" || turn.UserPrompts != 1 {
 			t.Fatalf("normalized turn = %#v", turn)
 		}
+	}
+	if got := result.Turns[0].UserMessages; len(got) != 1 || got[0] != "synthetic prompt" {
+		t.Fatalf("first turn classification messages = %#v", got)
+	}
+	if got := result.Turns[1].UserMessages; len(got) != 1 || got[0] != "another prompt" {
+		t.Fatalf("second turn classification messages = %#v", got)
 	}
 	if result.Turns[0].ModelObservations[0].Model.Name != "copilot-model" {
 		t.Fatalf("model observations = %#v", result.Turns[0].ModelObservations)

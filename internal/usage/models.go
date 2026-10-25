@@ -427,6 +427,7 @@ type Turn struct {
 	Source            SourceRef          `json:"source"`
 	ModelObservations []ModelObservation `json:"model_observations,omitempty"`
 	UserPrompts       int                `json:"user_prompts,omitempty"`
+	UserMessages      []string           `json:"-"`
 	UserPromptTimes   []time.Time        `json:"-"`
 	ModelTools        []ToolObservation  `json:"model_tools,omitempty"`
 	RuntimeTools      []ToolObservation  `json:"runtime_tools,omitempty"`

@@ -820,6 +820,7 @@ func (a *assembler) consume(env Envelope) {
 		cur := a.ensure(sid, id, env)
 		if !injected {
 			cur.turn.UserPrompts++
+			cur.turn.UserMessages = append(cur.turn.UserMessages, text)
 			cur.turn.UserPromptTimes = append(cur.turn.UserPromptTimes, env.Timestamp)
 		}
 		cur.hasContent = true

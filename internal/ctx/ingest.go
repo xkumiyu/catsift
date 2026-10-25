@@ -1020,6 +1020,7 @@ func (a *assembler) observe(current *turnState, item event) {
 		injected := onlyInjectedSkill(text)
 		if !injected {
 			current.turn.UserPrompts++
+			current.turn.UserMessages = append(current.turn.UserMessages, text)
 			current.turn.UserPromptTimes = append(current.turn.UserPromptTimes, item.Timestamp)
 		}
 		current.turn.SkillEvidence = append(current.turn.SkillEvidence, usage.DetectExplicitRequest(text, current.turn.SessionID, current.turn.ID, item.Timestamp, item.source())...)

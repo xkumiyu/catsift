@@ -33,6 +33,12 @@ func TestLoadNormalizesSessionsTurnsToolsSkillsAndTokens(t *testing.T) {
 		t.Fatalf("turns = %#v", result.Turns)
 	}
 	first := result.Turns[0]
+	if !reflect.DeepEqual(first.UserMessages, []string{"$review inspect this"}) {
+		t.Fatalf("first turn classification messages = %#v", first.UserMessages)
+	}
+	if !reflect.DeepEqual(result.Turns[1].UserMessages, []string{"second prompt"}) {
+		t.Fatalf("second turn classification messages = %#v", result.Turns[1].UserMessages)
+	}
 	if first.Source.Source != usage.SourceOpenCode || first.Source.Agent != "opencode" || first.Source.ProviderSessionID != "s1" {
 		t.Fatalf("turn source = %#v", first.Source)
 	}
@@ -334,6 +340,9 @@ func TestLoadDoesNotCountSkillContentAsPrompt(t *testing.T) {
 	}
 	if len(result.Turns) != 1 || result.Turns[0].UserPrompts != 0 {
 		t.Fatalf("skill content prompt count = %#v", result.Turns)
+	}
+	if len(result.Turns[0].UserMessages) != 0 {
+		t.Fatalf("skill content classification messages = %#v", result.Turns[0].UserMessages)
 	}
 	if len(result.Turns[0].SkillEvidence) != 1 || result.Turns[0].SkillEvidence[0].SkillName != "review" {
 		t.Fatalf("skill content evidence = %#v", result.Turns[0].SkillEvidence)

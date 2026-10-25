@@ -2,18 +2,24 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	ctxsource "github.com/xkumiyu/catsift/internal/ctx"
 	"github.com/xkumiyu/catsift/internal/output"
+	"github.com/xkumiyu/catsift/internal/purpose"
 	"github.com/xkumiyu/catsift/internal/query"
 	"github.com/xkumiyu/catsift/internal/usage"
 	appversion "github.com/xkumiyu/catsift/internal/version"
@@ -183,6 +189,56 @@ func TestRunCommandsAndMachineOutput(t *testing.T) {
 	}
 	if statsSkills.Turns != 2 || skillTotal != statsSkills.SkillUsesTurn || statsSkills.SkillUsesSession > statsSkills.SkillUsesTurn {
 		t.Fatalf("overview/skills mismatch: turns=%d turn=%d session=%d skills=%d", statsSkills.Turns, statsSkills.SkillUsesTurn, statsSkills.SkillUsesSession, skillTotal)
+	}
+}
+
+func TestConfigInitCreatesYAMLAndPreservesExistingFile(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", configHome)
+	path := filepath.Join(configHome, "catsift", "config.yaml")
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"config", "init", "--help"}, &stdout, &stderr); code != 0 || !strings.Contains(stdout.String(), "Usage: catsift config init") {
+		t.Fatalf("config init --help exit=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("config init --help created config: err=%v", err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := run([]string{"config", "init"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("config init exit=%d stderr=%s", code, stderr.String())
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "session_purpose:") || !strings.Contains(string(data), "enabled: false") || strings.Contains(string(data), "modes:") || strings.Contains(string(data), "id:") || strings.Contains(string(data), "{") {
+		t.Fatalf("unexpected starter config: %s", data)
+	}
+	stdout.Reset()
+	if code := run([]string{"config", "init"}, &stdout, &stderr); code == 0 {
+		t.Fatal("second config init unexpectedly succeeded")
+	}
+	current, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(data, current) {
+		t.Fatal("config init overwrote existing file")
+	}
+}
+
+func TestLoadPurposeSettingsReturnsConfigErrors(t *testing.T) {
+	configDir := t.TempDir()
+	path := filepath.Join(configDir, "catsift", "config.yaml")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("session_purpose: [invalid\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadPurposeSettings(configDir); err == nil {
+		t.Fatal("invalid config was silently accepted")
 	}
 }
 
@@ -2172,5 +2228,243 @@ func TestRunKeepsDiagnosticsPlainForJSON(t *testing.T) {
 	}
 	if strings.Contains(stdout.String(), "\x1b[") || strings.Contains(stderr.String(), "\x1b[") {
 		t.Fatalf("JSON diagnostics contain ANSI: stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+}
+
+func TestPurposeClassificationUsesBoundedConcurrency(t *testing.T) {
+	var active, maxActive atomic.Int32
+	started := make(chan struct{}, 4)
+	release := make(chan struct{})
+	defer func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	}()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		current := active.Add(1)
+		for previous := maxActive.Load(); current > previous && !maxActive.CompareAndSwap(previous, current); previous = maxActive.Load() {
+		}
+		started <- struct{}{}
+		<-release
+		active.Add(-1)
+		_, _ = w.Write([]byte(`{"answers":{"purpose":{"type":"choice","choice":"debug"}}}`))
+	}))
+	defer server.Close()
+
+	input := query.Input{}
+	source := usage.SourceRef{Source: usage.SourceCodex, Path: "synthetic"}
+	for index := range 8 {
+		sessionID := fmt.Sprintf("session-%d", index)
+		session := usage.NewSession(sessionID, source)
+		session.Title = "Synthetic session"
+		input.Sessions = append(input.Sessions, session)
+		input.Turns = append(input.Turns, usage.Turn{
+			SessionID:    sessionID,
+			Source:       source,
+			UserMessages: []string{"synthetic user message"},
+		})
+	}
+	config := purpose.Config{SessionPurpose: purpose.SessionPurposeConfig{APIURL: server.URL}}
+	result := make(chan error, 1)
+	go func() {
+		result <- applyPurposeClassification(&input, config, t.TempDir(), "fake-key", nil)
+	}()
+	for range 4 {
+		select {
+		case <-started:
+		case <-time.After(5 * time.Second):
+			t.Fatal("four concurrent requests did not start")
+		}
+	}
+	close(release)
+	if err := <-result; err != nil {
+		t.Fatal(err)
+	}
+	if got := maxActive.Load(); got != 4 {
+		t.Fatalf("maximum concurrent requests = %d, want 4", got)
+	}
+	if len(input.Purposes) != len(input.Sessions) {
+		t.Fatalf("classified sessions = %d, want %d", len(input.Purposes), len(input.Sessions))
+	}
+}
+
+func TestPurposeClassificationCombinesAllTurnsForSession(t *testing.T) {
+	states := make(chan string, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			State string `json:"state"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		states <- request.State
+		_, _ = w.Write([]byte(`{"answers":{"purpose":{"type":"choice","choice":"debug"}}}`))
+	}))
+	defer server.Close()
+
+	source := usage.SourceRef{Source: usage.SourceCodex, Path: "synthetic"}
+	session := usage.NewSession("one-session", source)
+	session.Title = "Synthetic session"
+	input := query.Input{
+		Sessions: []usage.Session{session},
+		Turns: []usage.Turn{
+			{SessionID: session.ID, Source: source, UserMessages: []string{"first prompt"}},
+			{SessionID: session.ID, Source: source, UserMessages: []string{"second prompt"}},
+		},
+	}
+	config := purpose.Config{SessionPurpose: purpose.SessionPurposeConfig{APIURL: server.URL}}
+	if err := applyPurposeClassification(&input, config, t.TempDir(), "fake-key", nil); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case state := <-states:
+		if want := purpose.Input(session.Title, []string{"first prompt", "second prompt"}); state != want {
+			t.Fatalf("classified input = %q, want %q", state, want)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("classification request was not received")
+	}
+}
+
+func TestPurposeClassificationConfirmsTwentyNewRequests(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		_, _ = w.Write([]byte(`{"answers":{"purpose":{"type":"choice","choice":"debug"}}}`))
+	}))
+	defer server.Close()
+	config := purpose.Config{SessionPurpose: purpose.SessionPurposeConfig{APIURL: server.URL}}
+
+	input := purposeClassificationInput(20)
+	confirmations := 0
+	err := applyPurposeClassification(&input, config, t.TempDir(), "fake-key", func(count int) bool {
+		confirmations++
+		if count != 20 {
+			t.Fatalf("new request count = %d, want 20", count)
+		}
+		return false
+	})
+	if err == nil || confirmations != 1 || requests.Load() != 0 {
+		t.Fatalf("declined batch: err=%v confirmations=%d requests=%d", err, confirmations, requests.Load())
+	}
+
+	base := t.TempDir()
+	first := input.Sessions[0]
+	result, err := purpose.Classify(context.Background(), nil, server.URL, "fake-key", first.Title, input.Turns[0].UserMessages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := purpose.SaveStore(filepath.Join(base, "purposes.json"), map[string]purpose.Result{
+		usage.NewSessionKey(first.Source, first.ID): result,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	input = purposeClassificationInput(20)
+	err = applyPurposeClassification(&input, config, base, "fake-key", func(count int) bool {
+		t.Fatalf("cached result counted toward confirmation: new requests=%d", count)
+		return false
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := requests.Load(); got != 20 {
+		t.Fatalf("API requests = %d, want one seed request plus 19 new requests", got)
+	}
+}
+
+func TestConfirmPurposeClassificationRequiresInteractiveYes(t *testing.T) {
+	var stderr bytes.Buffer
+	if !confirmPurposeClassification(20, true, strings.NewReader("yes\n"), &stderr) {
+		t.Fatalf("explicit yes was not accepted: %q", stderr.String())
+	}
+	stderr.Reset()
+	if confirmPurposeClassification(20, true, strings.NewReader("\n"), &stderr) {
+		t.Fatalf("empty response should decline: %q", stderr.String())
+	}
+	stderr.Reset()
+	if confirmPurposeClassification(20, false, strings.NewReader("yes\n"), &stderr) {
+		t.Fatal("non-interactive execution should not accept stdin confirmation")
+	}
+}
+
+func purposeClassificationInput(count int) query.Input {
+	input := query.Input{}
+	source := usage.SourceRef{Source: usage.SourceCodex, Path: "synthetic"}
+	for index := range count {
+		sessionID := fmt.Sprintf("session-%d", index)
+		session := usage.NewSession(sessionID, source)
+		session.Title = "Synthetic session"
+		input.Sessions = append(input.Sessions, session)
+		input.Turns = append(input.Turns, usage.Turn{
+			SessionID:    sessionID,
+			Source:       source,
+			UserMessages: []string{"synthetic user message"},
+		})
+	}
+	return input
+}
+
+func TestPurposeClassificationRetainsResultsOnReload(t *testing.T) {
+	home := testHome(t)
+	options := historyLoadOptions{Source: usage.SourceCodex, CacheDir: t.TempDir()}
+	// A pre-existing usage cache must not hide the source's message bodies.
+	if _, err := loadSelectedHistory(options); err != nil {
+		t.Fatal(err)
+	}
+	options.RequireUserMessages = true
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		_, _ = w.Write([]byte(`{"answers":{"purpose":{"choice":"debug"}}}`))
+	}))
+	defer server.Close()
+	config := purpose.Config{SessionPurpose: purpose.SessionPurposeConfig{APIURL: server.URL}}
+	base := t.TempDir()
+	for load := range 4 {
+		if load == 2 {
+			path := filepath.Join(home, "sessions", "2026", "one.jsonl")
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			data = append(data, []byte(`{"timestamp":"2026-01-01T00:00:09Z","type":"user_message","payload":{"text":"a changed request"}}
+{"timestamp":"2026-01-01T00:00:10Z","type":"task_complete","payload":{}}
+`)...)
+			if err := os.WriteFile(path, data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		history, err := loadSelectedHistory(options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := applyPurposeClassification(&history.Input, config, base, "fake-key", nil); err != nil {
+			t.Fatal(err)
+		}
+		if len(history.Purposes) != 1 {
+			t.Errorf("load %d: purposes = %v, want one saved result", load, history.Purposes)
+		}
+		if got, want := requests.Load(), int32(1+load/2); got != want {
+			t.Fatalf("load %d: requests = %d, want %d (only new input requires a request)", load, got, want)
+		}
+	}
+}
+
+func TestPurposeClassificationSkipsInjectedOnlySessions(t *testing.T) {
+	input := purposeClassificationInput(1)
+	input.Turns[0].UserMessages = []string{"# AGENTS.md instructions for /synthetic\n<INSTRUCTIONS>private context</INSTRUCTIONS>"}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("session without user-authored messages was sent")
+		_, _ = w.Write([]byte(`{"answers":{"purpose":{"choice":"debug"}}}`))
+	}))
+	defer server.Close()
+	config := purpose.Config{SessionPurpose: purpose.SessionPurposeConfig{APIURL: server.URL}}
+	if err := applyPurposeClassification(&input, config, t.TempDir(), "fake-key", nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(input.Purposes) != 0 {
+		t.Fatal("injected-only session received a purpose")
 	}
 }

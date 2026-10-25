@@ -11,3 +11,9 @@
 /catsift
 /bin/
 /dist/
+
+# Local env files (direnv, dotenv, etc.)
+.envrc
+.env
+.env.*
+!.env.example
