@@ -104,3 +104,10 @@ scope and audience. Include selected sources and period, relevant warnings,
 evidence for insights, limits, and useful next questions. Keep detail
 proportional to the request and never include raw prompts, commands, tool
 arguments, or Skill bodies.
+
+Display large counts, including tokens, with base-1,000 suffixes (K, M, B, T,
+and higher as needed), at most one decimal place, and no trailing `.0`
+(e.g. `702,945,673` becomes `702.9M`). Keep counts below 1,000 as integers
+and state the unit convention. Keep exact values for calculations and make
+them available on request or through HTML tooltips; honor requests for exact
+figures in the report itself.
