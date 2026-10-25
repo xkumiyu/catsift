@@ -74,3 +74,9 @@ Use common options as needed:
   user's question; never reproduce raw history content.
 - Surface source-load warnings, missing sources, and mixed-source limitations
   alongside conclusions. Do not silently turn unavailable data into zeros.
+- Session purpose labels appear as the `purpose` field on session summaries and
+  details only when session purpose classification is opted in via
+  configuration. Classifying new sessions requires interactive confirmation, so
+  non-interactive CLI runs expose only labels already in the cache; treat
+  missing or partial labels as a limitation and never infer labels from raw
+  session content.
