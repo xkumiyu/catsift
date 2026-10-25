@@ -110,6 +110,30 @@ Use `--json` to emit machine-readable output.
 
 See each command's `--help` output for details.
 
+### Optional: Session purpose classification
+
+You can use Jev to classify session purposes.
+
+- When configured, classification runs when you execute `catsift sessions` or
+  launch the TUI with `catsift`.
+- Session titles and user-authored messages are used for classification.
+- Classifying 100 sessions costs about $0.01. Actual cost varies with message
+  length.[^1]
+
+[^1]: Estimated at $0.042 per 1 million input tokens.
+
+#### Configuration
+
+1. Run `catsift config init` to create the config file.
+2. Open the config file and set `session_purpose.enabled` to `true`:
+
+   ```yaml
+   session_purpose:
+     enabled: true
+   ```
+
+3. Set the `TYPESAFE_API_KEY` environment variable.
+
 ### Usage overview
 
 ```sh
@@ -214,7 +238,9 @@ subsequent runs.
 ## Data handling
 
 CatSift reads selected history from Codex, GitHub Copilot CLI, OpenCode, or ctx.
-All inputs are read-only and local-only; CatSift never sends them externally.
+All inputs are read-only. History remains local unless optional purpose
+classification is enabled, in which case session titles and user-authored
+messages are sent to TypeSafe System One.
 `skills --unused` also reads the installed skill inventory. The TUI and reports
 exclude prompt text, command text, Tool arguments, Skill bodies, provider
 payloads, and other raw event details.

@@ -111,6 +111,42 @@ func TestOverviewUsesNamedSummarySections(t *testing.T) {
 	}
 }
 
+func TestOverviewShowsSessionPurposeCountsWhenAvailable(t *testing.T) {
+	input := explorerInput()
+	second := input.Sessions[0]
+	second.ID = "second-session"
+	second.Key = usage.NewSessionKey(second.Source, second.ID)
+	input.Sessions = append(input.Sessions, second)
+	secondTurn := input.Turns[0]
+	secondTurn.ID = "second-turn"
+	secondTurn.SessionID = second.ID
+	input.Turns = append(input.Turns, secondTurn)
+	input.Purposes = map[string]string{
+		usage.NewSessionKey(input.Sessions[0].Source, input.Sessions[0].ID): "Create",
+		usage.NewSessionKey(input.Sessions[1].Source, input.Sessions[1].ID): "Debug",
+	}
+	state := NewState(input, query.Filter{}, nil)
+	state.Width = 100
+
+	view := strings.Join(state.overviewLines(), "\n")
+	for _, want := range []string{"Session Purpose", "Create", "Debug", "1 session"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("overview missing purpose statistic %q: %s", want, view)
+		}
+	}
+	if strings.Contains(view, "Classified") {
+		t.Fatalf("overview should not display a total row among purpose categories: %s", view)
+	}
+	if strings.Index(view, "Session Purpose") < strings.Index(view, "Top Skills") {
+		t.Fatalf("purpose section should follow Top Skills: %s", view)
+	}
+
+	state = NewState(explorerInput(), query.Filter{}, nil)
+	if view := strings.Join(state.overviewLines(), "\n"); strings.Contains(view, "Session Purpose") {
+		t.Fatalf("overview should omit purpose statistics when no session is classified: %s", view)
+	}
+}
+
 func TestOverviewSectionsFollowSemanticGroups(t *testing.T) {
 	state := NewState(explorerInput(), query.Filter{}, nil)
 	state.Width = 120
@@ -1329,7 +1365,12 @@ func TestStateSearchReloadAndBoundedView(t *testing.T) {
 }
 
 func TestDetailViewKeepsRowsAndFooterWithinTheFrame(t *testing.T) {
-	state := NewState(longExplorerInput(), query.Filter{}, nil)
+	input := longExplorerInput()
+	input.Purposes = make(map[string]string)
+	for _, session := range input.Sessions {
+		input.Purposes[usage.NewSessionKey(session.Source, session.ID)] = "Debug"
+	}
+	state := NewState(input, query.Filter{}, nil)
 	state.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'5'}})
 	state.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -1344,7 +1385,8 @@ func TestDetailViewKeepsRowsAndFooterWithinTheFrame(t *testing.T) {
 		t.Fatalf("session detail should advertise turn detail action: %s", view)
 	}
 	body := view[strings.Index(view, "Session detail"):]
-	if !strings.Contains(body, "Provider:") || !strings.Contains(body, "Project:") || strings.Contains(body, "Source:") || strings.Contains(body, "Agent:") {
+	wantPurpose := mutedStyle.Render("  Purpose: ") + "Debug"
+	if !strings.Contains(body, "Provider:") || !strings.Contains(body, "Project:") || !strings.Contains(body, wantPurpose) || strings.Contains(body, "Source:") || strings.Contains(body, "Agent:") {
 		t.Fatalf("session detail metadata is duplicated or misaligned: %s", view)
 	}
 	for _, line := range strings.Split(view, "\n") {

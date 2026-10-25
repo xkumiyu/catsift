@@ -109,6 +109,7 @@ func (n *normalizer) consume(event Envelope) {
 		turn := n.ensureTurn(session, event, turnID(data))
 		n.touchTurn(turn, event.Timestamp, false)
 		turn.turn.UserPrompts++
+		turn.turn.UserMessages = append(turn.turn.UserMessages, valueText(firstValue(data, "content", "text", "message")))
 		if !event.Timestamp.IsZero() {
 			turn.turn.UserPromptTimes = append(turn.turn.UserPromptTimes, event.Timestamp)
 		}

@@ -467,6 +467,9 @@ func (n *normalizer) result() IngestResult {
 	})
 	result := IngestResult{Sessions: sessions, Agents: []string{"opencode"}, Warnings: n.warnings.values()}
 	for _, turn := range turns {
+		for _, text := range turn.userTexts {
+			turn.turn.UserMessages = append(turn.turn.UserMessages, text.text)
+		}
 		result.Turns = append(result.Turns, turn.turn)
 	}
 	return result
