@@ -95,7 +95,7 @@ func TestClassifyChoiceWithFakeServer(t *testing.T) {
 		t.Fatal("fingerprint must use user-authored input, matching the request")
 	}
 	old := result
-	old.Version = "1"
+	old.InputFingerprint = Fingerprint("title\x00<skill name=\"report\">private context</skill>user text")
 	if Current(old, "title", []string{"user text"}) {
 		t.Fatal("classification from before context filtering was reused")
 	}
