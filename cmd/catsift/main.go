@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -735,26 +736,22 @@ type loadedHistory struct {
 }
 
 type historyLoadOptions struct {
-	Source              usage.SourceKind
-	Sources             []usage.SourceKind
-	AutoDetect          bool
-	Days                int
-	DaysSet             bool
-	From                time.Time
-	To                  time.Time
-	Now                 time.Time
-	CacheDir            string
-	RequireUserMessages bool
-	Verbose             bool
-	Diagnostics         diagnosticWriter
-	LoadCtx             ctxHistoryLoader
+	Source      usage.SourceKind
+	Sources     []usage.SourceKind
+	AutoDetect  bool
+	Days        int
+	DaysSet     bool
+	From        time.Time
+	To          time.Time
+	Now         time.Time
+	CacheDir    string
+	Files       []string
+	Verbose     bool
+	Diagnostics diagnosticWriter
+	LoadCtx     ctxHistoryLoader
 }
 
 func loadHistory(options historyLoadOptions) (loadedHistory, error) {
-	if options.RequireUserMessages {
-		// Usage caches omit message bodies, including on TUI reload.
-		options.CacheDir = ""
-	}
 	result := loadedHistory{Input: query.Input{Source: options.Source, From: options.From, To: options.To}}
 	switch options.Source {
 	case usage.SourceCtx:
@@ -793,7 +790,7 @@ func loadHistory(options historyLoadOptions) (loadedHistory, error) {
 			return loadedHistory{}, fmt.Errorf("resolve Codex home: %w", err)
 		}
 		result.SourcePath = home
-		codexOptions := codex.IngestOptions{Days: options.Days, DaysSet: options.DaysSet, From: options.From, To: options.To, Now: options.Now, CacheDir: options.CacheDir}
+		codexOptions := codex.IngestOptions{Days: options.Days, DaysSet: options.DaysSet, From: options.From, To: options.To, Now: options.Now, CacheDir: options.CacheDir, Files: options.Files}
 		if options.Verbose {
 			codexOptions.Diagnostic = func(message string) { options.Diagnostics.write("debug", message) }
 		}
@@ -838,6 +835,14 @@ func loadPurposeSettings(configDir string) (purpose.Config, error) {
 
 const purposeBatchConfirmationThreshold = 20
 
+// purposeVerificationBudget bounds how many stored results are re-verified
+// with message bodies per run. Verified results do not call the API.
+const purposeVerificationBudget = 50
+
+// purposeVerificationInterval is how long an evidence-based reuse is trusted
+// before the budgeted sweep reads the bodies again.
+const purposeVerificationInterval = 7 * 24 * time.Hour
+
 func confirmPurposeClassification(count int, interactive bool, stdin io.Reader, stderr io.Writer) bool {
 	if !interactive {
 		return false
@@ -854,60 +859,157 @@ func confirmPurposeClassification(count int, interactive bool, stdin io.Reader, 
 	return answer == "y" || answer == "yes"
 }
 
-func applyPurposeClassification(input *query.Input, config purpose.Config, base, apiKey string, confirm func(int) bool) error {
+type purposeClassificationOptions struct {
+	Config     purpose.Config
+	Base       string
+	APIKey     string
+	Confirm    func(int) bool
+	LoadBodies func([]usage.Session) (map[string][]string, error)
+	Now        time.Time
+}
+
+type purposeCandidate struct {
+	key      string
+	title    string
+	messages []string
+	evidence string
+}
+
+type purposePlan struct {
+	session  usage.Session
+	key      string
+	evidence string
+	cached   purpose.Result
+	exists   bool
+	classify bool
+}
+
+func applyPurposeClassification(input *query.Input, options purposeClassificationOptions) error {
 	if input == nil {
 		return nil
 	}
-	type candidate struct {
-		key      string
-		title    string
-		messages []string
-	}
-	type outcome struct {
-		candidate candidate
-		result    purpose.Result
-		err       error
-	}
-	var err error
-	apiURL := config.SessionPurpose.APIURL
-	storePath := filepath.Join(base, "purposes.json")
+	apiURL := options.Config.SessionPurpose.APIURL
+	storePath := filepath.Join(options.Base, "purposes.json")
 	results, err := purpose.LoadStore(storePath)
 	if err != nil {
 		return fmt.Errorf("read session purpose results: %w", err)
 	}
+	now := options.Now
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
 	input.Purposes = make(map[string]string)
 	changed := false
-	failed := 0
-	pending := make([]candidate, 0)
+
 	messagesBySession := make(map[string][]string)
+	promptCounts := make(map[string]int)
+	promptTimes := make(map[string][]time.Time)
+	incompleteBodies := make(map[string]bool)
 	for _, turn := range input.Turns {
 		key := usage.NewSessionKey(turn.Source, turn.SessionID)
-		messagesBySession[key] = append(messagesBySession[key], turn.UserMessages...)
+		promptCounts[key] += turn.UserPrompts
+		promptTimes[key] = append(promptTimes[key], turn.UserPromptTimes...)
+		if len(turn.UserMessages) != turn.UserPrompts {
+			incompleteBodies[key] = true
+		}
+		if len(turn.UserMessages) > 0 {
+			messagesBySession[key] = append(messagesBySession[key], turn.UserMessages...)
+		}
 	}
+
+	plans := make([]purposePlan, 0)
+	sweep := make([]purposePlan, 0)
 	for _, session := range input.Sessions {
-		messages := messagesBySession[usage.NewSessionKey(session.Source, session.ID)]
+		key := usage.NewSessionKey(session.Source, session.ID)
+		if promptCounts[key] == 0 && len(messagesBySession[key]) == 0 {
+			continue
+		}
+		item := purposePlan{session: session, key: key, evidence: sessionPurposeEvidence(session, promptCounts[key], promptTimes[key])}
+		cached, exists := results[key]
+		item.cached = cached
+		item.exists = exists
+		switch {
+		case !exists:
+			item.classify = true
+		case cached.Version != purpose.Version || cached.TaxonomyFingerprint != purpose.TaxonomyFingerprint():
+			item.classify = true
+		case purpose.Reusable(cached, item.evidence):
+			input.Purposes[key] = cached.ModeName
+			if cached.VerifiedAt.IsZero() || !cached.VerifiedAt.After(now.Add(-purposeVerificationInterval)) {
+				sweep = append(sweep, item)
+			}
+			continue
+		}
+		plans = append(plans, item)
+	}
+	if len(sweep) > purposeVerificationBudget {
+		sort.SliceStable(sweep, func(i, j int) bool {
+			return sweep[i].cached.VerifiedAt.Before(sweep[j].cached.VerifiedAt)
+		})
+		sweep = sweep[:purposeVerificationBudget]
+	}
+	plans = append(plans, sweep...)
+
+	if len(plans) > 0 && options.LoadBodies != nil {
+		sessions := make([]usage.Session, 0, len(plans))
+		for _, item := range plans {
+			if len(messagesBySession[item.key]) == 0 || incompleteBodies[item.key] {
+				sessions = append(sessions, item.session)
+			}
+		}
+		if len(sessions) > 0 {
+			loaded, loadErr := options.LoadBodies(sessions)
+			if loadErr != nil {
+				return fmt.Errorf("read session purpose input: %w", loadErr)
+			}
+			for _, session := range sessions {
+				key := usage.NewSessionKey(session.Source, session.ID)
+				messagesBySession[key] = loaded[key]
+			}
+		}
+	}
+
+	pending := make([]purposeCandidate, 0, len(plans))
+	for _, item := range plans {
+		delete(input.Purposes, item.key)
+		messages := messagesBySession[item.key]
 		if purpose.Input("", messages) == "" {
 			continue
 		}
-		resultKey := usage.NewSessionKey(session.Source, session.ID)
-		cached, exists := results[resultKey]
-		if exists && purpose.Current(cached, session.Title, messages) {
-			input.Purposes[usage.NewSessionKey(session.Source, session.ID)] = cached.ModeName
+		if !item.classify && item.exists && purpose.Current(item.cached, item.session.Title, messages) {
+			item.cached.VerifiedAt = now
+			item.cached.Evidence = item.evidence
+			results[item.key] = item.cached
+			input.Purposes[item.key] = item.cached.ModeName
+			changed = true
 			continue
 		}
-		pending = append(pending, candidate{key: resultKey, title: session.Title, messages: messages})
+		pending = append(pending, purposeCandidate{key: item.key, title: item.session.Title, messages: messages, evidence: item.evidence})
 	}
-	if len(pending) >= purposeBatchConfirmationThreshold && (confirm == nil || !confirm(len(pending))) {
+
+	if changed {
+		if err := purpose.SaveStore(storePath, results); err != nil {
+			return fmt.Errorf("save session purpose results: %w", err)
+		}
+		changed = false
+	}
+	if len(pending) >= purposeBatchConfirmationThreshold && (options.Confirm == nil || !options.Confirm(len(pending))) {
 		return fmt.Errorf("classification of %d sessions requires confirmation; no API requests sent", len(pending))
 	}
+	failed := 0
 	workers := min(4, len(pending))
 	if workers > 0 {
-		jobs := make(chan candidate)
+		type outcome struct {
+			candidate purposeCandidate
+			result    purpose.Result
+			err       error
+		}
+		jobs := make(chan purposeCandidate)
 		completed := make(chan outcome, len(pending))
 		for range workers {
 			go func() {
 				for job := range jobs {
-					result, err := purpose.Classify(context.Background(), nil, apiURL, apiKey, job.title, job.messages)
+					result, err := purpose.Classify(context.Background(), nil, apiURL, options.APIKey, job.title, job.messages)
 					completed <- outcome{candidate: job, result: result, err: err}
 				}
 			}()
@@ -917,14 +1019,16 @@ func applyPurposeClassification(input *query.Input, config purpose.Config, base,
 		}
 		close(jobs)
 		for range len(pending) {
-			result := <-completed
-			if result.err != nil {
+			outcome := <-completed
+			if outcome.err != nil {
 				failed++
 				continue
 			}
-			results[result.candidate.key] = result.result
+			outcome.result.VerifiedAt = now
+			outcome.result.Evidence = outcome.candidate.evidence
+			results[outcome.candidate.key] = outcome.result
 			changed = true
-			input.Purposes[result.candidate.key] = result.result.ModeName
+			input.Purposes[outcome.candidate.key] = outcome.result.ModeName
 		}
 	}
 	if changed {
@@ -936,6 +1040,80 @@ func applyPurposeClassification(input *query.Input, config purpose.Config, base,
 		return fmt.Errorf("classification failed for %d session(s)", failed)
 	}
 	return nil
+}
+
+// sessionPurposeEvidence describes local metadata used to decide whether a
+// stored classification still applies. It never reads message bodies.
+func sessionPurposeEvidence(session usage.Session, promptCount int, promptTimes []time.Time) string {
+	parts := []string{strconv.Itoa(promptCount), ""}
+	if session.Source.Source == usage.SourceCodex {
+		if path := strings.TrimSpace(session.Source.Path); path != "" {
+			if info, err := os.Stat(path); err == nil {
+				parts[1] = fmt.Sprintf("%d:%d", info.Size(), info.ModTime().UnixNano())
+			}
+		}
+	}
+	// Selected prompt times detect window changes even when counts stay equal.
+	for _, timestamp := range promptTimes {
+		parts = append(parts, timestamp.UTC().Format(time.RFC3339Nano))
+	}
+	return purpose.Evidence(session.Title, session.UpdatedAt, strings.Join(parts, "\x00"))
+}
+
+// loadPurposeMessages reads message bodies only for the sessions that need
+// verification. Codex limits the read to the matching history files.
+func loadPurposeMessages(options historyLoadOptions, sessions []usage.Session) (map[string][]string, error) {
+	bySource := make(map[usage.SourceKind][]usage.Session)
+	order := make([]usage.SourceKind, 0, 2)
+	for _, session := range sessions {
+		source := session.Source.Source
+		if !source.Valid() {
+			continue
+		}
+		if _, ok := bySource[source]; !ok {
+			order = append(order, source)
+		}
+		bySource[source] = append(bySource[source], session)
+	}
+	messages := make(map[string][]string)
+	for _, source := range order {
+		sourceOptions := options
+		sourceOptions.Source = source
+		sourceOptions.Sources = []usage.SourceKind{source}
+		sourceOptions.CacheDir = ""
+		sourceOptions.Files = nil
+		if source == usage.SourceCodex {
+			if files, complete := purposeCodexFiles(bySource[source]); complete {
+				sourceOptions.Files = files
+			}
+		}
+		history, err := loadHistory(sourceOptions)
+		if err != nil {
+			return nil, err
+		}
+		for _, turn := range history.Turns {
+			key := usage.NewSessionKey(turn.Source, turn.SessionID)
+			messages[key] = append(messages[key], turn.UserMessages...)
+		}
+	}
+	return messages, nil
+}
+
+func purposeCodexFiles(sessions []usage.Session) ([]string, bool) {
+	seen := make(map[string]struct{}, len(sessions))
+	files := make([]string, 0, len(sessions))
+	for _, session := range sessions {
+		path := strings.TrimSpace(session.Source.Path)
+		if path == "" {
+			return nil, false
+		}
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		files = append(files, path)
+	}
+	return files, true
 }
 
 func detectDefaultSourceKinds() ([]usage.SourceKind, error) {
@@ -1464,8 +1642,7 @@ func runWithCtxLoader(args []string, stdout, stderr io.Writer, loadCtx ctxHistor
 	stopProgress = progress.Start(label)
 	loadOptions := historyLoadOptions{
 		Source: selectedSource, Sources: selectedSources, AutoDetect: autoDetectSources,
-		RequireUserMessages: classifyPurposes,
-		Days:                *days, DaysSet: daysSet, From: fromDate, To: toDate, Now: now, CacheDir: cacheDir, Verbose: *verbose, Diagnostics: diagnostics, LoadCtx: loadCtx,
+		Days: *days, DaysSet: daysSet, From: fromDate, To: toDate, Now: now, CacheDir: cacheDir, Verbose: *verbose, Diagnostics: diagnostics, LoadCtx: loadCtx,
 	}
 	var loadErr error
 	history, loadErr = loadSelectedHistory(loadOptions)
@@ -1475,6 +1652,17 @@ func runWithCtxLoader(args []string, stdout, stderr io.Writer, loadCtx ctxHistor
 		return 1
 	}
 	selectedSources = append([]usage.SourceKind(nil), history.Sources...)
+	purposeOptions := func(confirm func(int) bool) purposeClassificationOptions {
+		return purposeClassificationOptions{
+			Config:  purposeConfig,
+			Base:    purposeBase,
+			APIKey:  purposeAPIKey,
+			Confirm: confirm,
+			LoadBodies: func(sessions []usage.Session) (map[string][]string, error) {
+				return loadPurposeMessages(loadOptions, sessions)
+			},
+		}
+	}
 	if classifyPurposes {
 		confirm := func(count int) bool {
 			interactive := tui.IsInteractive(os.Stdin, stdout) && tui.IsInteractive(os.Stdin, stderr)
@@ -1488,7 +1676,7 @@ func runWithCtxLoader(args []string, stdout, stderr io.Writer, loadCtx ctxHistor
 			}
 			return confirmed
 		}
-		if err := applyPurposeClassification(&history.Input, purposeConfig, purposeBase, purposeAPIKey, confirm); err != nil {
+		if err := applyPurposeClassification(&history.Input, purposeOptions(confirm)); err != nil {
 			diagnostics.write("warning", "session purpose classification incomplete: "+err.Error())
 		}
 	}
@@ -1525,7 +1713,7 @@ func runWithCtxLoader(args []string, stdout, stderr io.Writer, loadCtx ctxHistor
 				return query.Input{}, err
 			}
 			if classifyPurposes {
-				if err := applyPurposeClassification(&refreshed.Input, purposeConfig, purposeBase, purposeAPIKey, nil); err != nil {
+				if err := applyPurposeClassification(&refreshed.Input, purposeOptions(nil)); err != nil {
 					diagnostics.write("warning", "session purpose classification incomplete: "+err.Error())
 				}
 			}

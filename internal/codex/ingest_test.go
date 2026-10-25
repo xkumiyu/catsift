@@ -2,6 +2,7 @@ package codex
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -171,6 +172,89 @@ func TestLoadAssemblesExplicitAndOrdinalTurnsAndFlushesAbort(t *testing.T) {
 	}
 	if !result.Sessions[0].CreatedAt.Equal(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)) || !result.Sessions[0].UpdatedAt.Equal(time.Date(2026, 1, 1, 0, 0, 5, 0, time.UTC)) {
 		t.Fatalf("session time range = %v to %v", result.Sessions[0].CreatedAt, result.Sessions[0].UpdatedAt)
+	}
+}
+
+func TestLoadReadsOnlySelectedFiles(t *testing.T) {
+	home := t.TempDir()
+	writeSession := func(name, id, message string) string {
+		path := filepath.Join(home, "sessions", "2026", name+".jsonl")
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		contents := strings.Join([]string{
+			`{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"` + id + `"}}`,
+			`{"timestamp":"2026-01-01T00:00:01Z","type":"user_message","payload":{"text":"` + message + `"}}`,
+		}, "\n") + "\n"
+		if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	first := writeSession("one", "session-one", "first only")
+	writeSession("two", "session-two", "second only")
+
+	result, err := Load(home, IngestOptions{Now: time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC), Files: []string{first}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Sessions) != 1 || result.Sessions[0].ID != "session-one" {
+		t.Fatalf("sessions = %#v", result.Sessions)
+	}
+	if len(result.Turns) != 1 || len(result.Turns[0].UserMessages) != 1 || result.Turns[0].UserMessages[0] != "first only" {
+		t.Fatalf("turns = %#v", result.Turns)
+	}
+}
+
+func TestCachedSessionRestoresSourcePathOnlyInMemory(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, "sessions", "2026", "one.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	contents := strings.Join([]string{
+		`{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"s"}}`,
+		`{"timestamp":"2026-01-01T00:00:01Z","type":"user_message","payload":{"text":"hello"}}`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cacheDir := t.TempDir()
+	for attempt := range 2 {
+		result, err := Load(home, IngestOptions{Now: time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC), CacheDir: cacheDir})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(result.Sessions) != 1 || result.Sessions[0].Source.Path != path {
+			t.Fatalf("attempt %d session path = %q, want %q", attempt, result.Sessions[0].Source.Path, path)
+		}
+	}
+	found := 0
+	err := filepath.WalkDir(cacheDir, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil || entry.IsDir() {
+			return walkErr
+		}
+		found++
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		var envelope struct {
+			Snapshot json.RawMessage `json:"snapshot"`
+		}
+		if err := json.Unmarshal(data, &envelope); err != nil {
+			return err
+		}
+		if strings.Contains(string(envelope.Snapshot), home) {
+			return fmt.Errorf("cache snapshot %q persisted a source path", path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if found == 0 {
+		t.Fatal("no cache entries written")
 	}
 }
 

@@ -345,7 +345,10 @@ type IngestOptions struct {
 	To           time.Time
 	Now          time.Time
 	CacheDir     string
-	Diagnostic   func(string)
+	// Files limits a body-reading load to the given history files. It is used
+	// when classification needs message bodies for only a few sessions.
+	Files      []string
+	Diagnostic func(string)
 }
 
 type IngestResult struct {
@@ -372,9 +375,15 @@ func Stream(home string, opts IngestOptions, consume func(usage.Turn)) (sessions
 	if err != nil {
 		return nil, nil, err
 	}
-	files, err := Discover(home)
-	if err != nil {
-		return nil, nil, err
+	var files []string
+	if len(opts.Files) > 0 {
+		files = selectedFiles(opts.Files)
+	} else {
+		var err error
+		files, err = Discover(home)
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 	diagnose(opts, fmt.Sprintf("codex source: root=%q files=%d parser=%s", filepath.Clean(home), len(files), codexParserVersion))
 	collector := &WarningCollector{}
@@ -405,9 +414,30 @@ func Stream(home string, opts IngestOptions, consume func(usage.Turn)) (sessions
 	return sessions, warnings, nil
 }
 
+func selectedFiles(paths []string) []string {
+	seen := make(map[string]struct{}, len(paths))
+	files := make([]string, 0, len(paths))
+	for _, path := range paths {
+		if strings.TrimSpace(path) == "" {
+			continue
+		}
+		clean := filepath.Clean(path)
+		if absolute, err := filepath.Abs(clean); err == nil {
+			clean = absolute
+		}
+		if _, ok := seen[clean]; ok {
+			continue
+		}
+		seen[clean] = struct{}{}
+		files = append(files, clean)
+	}
+	sort.Strings(files)
+	return files
+}
+
 // Load is the collecting convenience wrapper around Stream.
 func Load(home string, opts IngestOptions) (IngestResult, error) {
-	if strings.TrimSpace(opts.CacheDir) != "" {
+	if strings.TrimSpace(opts.CacheDir) != "" && len(opts.Files) == 0 {
 		return loadCached(home, opts)
 	}
 	var result IngestResult
@@ -705,7 +735,11 @@ func resultFromSnapshot(snapshot cache.Snapshot, path string) IngestResult {
 		result.Turns = append(result.Turns, turn.Usage())
 	}
 	for _, session := range snapshot.Sessions {
-		result.Sessions = append(result.Sessions, session.Usage())
+		value := session.Usage()
+		// Restore the source file in memory only. The path is deliberately not
+		// part of the cache snapshot or any report.
+		value.Source.Path = path
+		result.Sessions = append(result.Sessions, value)
 	}
 	return result
 }

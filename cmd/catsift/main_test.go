@@ -2252,13 +2252,14 @@ func TestPurposeClassificationUsesBoundedConcurrency(t *testing.T) {
 		input.Turns = append(input.Turns, usage.Turn{
 			SessionID:    sessionID,
 			Source:       source,
+			UserPrompts:  1,
 			UserMessages: []string{"synthetic user message"},
 		})
 	}
 	config := purpose.Config{SessionPurpose: purpose.SessionPurposeConfig{APIURL: server.URL}}
 	result := make(chan error, 1)
 	go func() {
-		result <- applyPurposeClassification(&input, config, t.TempDir(), "fake-key", nil)
+		result <- applyPurposeClassification(&input, purposeClassificationOptions{Config: config, Base: t.TempDir(), APIKey: "fake-key"})
 	}()
 	for range 4 {
 		select {
@@ -2304,7 +2305,7 @@ func TestPurposeClassificationCombinesAllTurnsForSession(t *testing.T) {
 		},
 	}
 	config := purpose.Config{SessionPurpose: purpose.SessionPurposeConfig{APIURL: server.URL}}
-	if err := applyPurposeClassification(&input, config, t.TempDir(), "fake-key", nil); err != nil {
+	if err := applyPurposeClassification(&input, purposeClassificationOptions{Config: config, Base: t.TempDir(), APIKey: "fake-key"}); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -2328,13 +2329,13 @@ func TestPurposeClassificationConfirmsTwentyNewRequests(t *testing.T) {
 
 	input := purposeClassificationInput(20)
 	confirmations := 0
-	err := applyPurposeClassification(&input, config, t.TempDir(), "fake-key", func(count int) bool {
+	err := applyPurposeClassification(&input, purposeClassificationOptions{Config: config, Base: t.TempDir(), APIKey: "fake-key", Confirm: func(count int) bool {
 		confirmations++
 		if count != 20 {
 			t.Fatalf("new request count = %d, want 20", count)
 		}
 		return false
-	})
+	}})
 	if err == nil || confirmations != 1 || requests.Load() != 0 {
 		t.Fatalf("declined batch: err=%v confirmations=%d requests=%d", err, confirmations, requests.Load())
 	}
@@ -2351,10 +2352,10 @@ func TestPurposeClassificationConfirmsTwentyNewRequests(t *testing.T) {
 		t.Fatal(err)
 	}
 	input = purposeClassificationInput(20)
-	err = applyPurposeClassification(&input, config, base, "fake-key", func(count int) bool {
+	err = applyPurposeClassification(&input, purposeClassificationOptions{Config: config, Base: base, APIKey: "fake-key", Confirm: func(count int) bool {
 		t.Fatalf("cached result counted toward confirmation: new requests=%d", count)
 		return false
-	})
+	}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2389,6 +2390,7 @@ func purposeClassificationInput(count int) query.Input {
 		input.Turns = append(input.Turns, usage.Turn{
 			SessionID:    sessionID,
 			Source:       source,
+			UserPrompts:  1,
 			UserMessages: []string{"synthetic user message"},
 		})
 	}
@@ -2398,11 +2400,11 @@ func purposeClassificationInput(count int) query.Input {
 func TestPurposeClassificationRetainsResultsOnReload(t *testing.T) {
 	home := testHome(t)
 	options := historyLoadOptions{Source: usage.SourceCodex, CacheDir: t.TempDir()}
-	// A pre-existing usage cache must not hide the source's message bodies.
+	// The usage cache omits message bodies, so classification must read the
+	// source again for sessions that need verification.
 	if _, err := loadSelectedHistory(options); err != nil {
 		t.Fatal(err)
 	}
-	options.RequireUserMessages = true
 	var requests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		requests.Add(1)
@@ -2429,7 +2431,9 @@ func TestPurposeClassificationRetainsResultsOnReload(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := applyPurposeClassification(&history.Input, config, base, "fake-key", nil); err != nil {
+		if err := applyPurposeClassification(&history.Input, purposeClassificationOptions{Config: config, Base: base, APIKey: "fake-key", LoadBodies: func(sessions []usage.Session) (map[string][]string, error) {
+			return loadPurposeMessages(options, sessions)
+		}}); err != nil {
 			t.Fatal(err)
 		}
 		if len(history.Purposes) != 1 {
@@ -2450,11 +2454,468 @@ func TestPurposeClassificationSkipsInjectedOnlySessions(t *testing.T) {
 	}))
 	defer server.Close()
 	config := purpose.Config{SessionPurpose: purpose.SessionPurposeConfig{APIURL: server.URL}}
-	if err := applyPurposeClassification(&input, config, t.TempDir(), "fake-key", nil); err != nil {
+	if err := applyPurposeClassification(&input, purposeClassificationOptions{Config: config, Base: t.TempDir(), APIKey: "fake-key"}); err != nil {
 		t.Fatal(err)
 	}
 	if len(input.Purposes) != 0 {
 		t.Fatal("injected-only session received a purpose")
+	}
+}
+
+func TestPurposeClassificationReusesEvidenceWithoutReadingBodies(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		_, _ = w.Write([]byte(`{"answers":{"purpose":{"type":"choice","choice":"debug"}}}`))
+	}))
+	defer server.Close()
+
+	session := usage.NewSession("one", usage.SourceRef{Source: usage.SourceCodex})
+	session.Title = "Synthetic session"
+	session.UpdatedAt = time.Date(2026, 10, 26, 0, 0, 0, 0, time.UTC)
+	messages := []string{"synthetic user message"}
+	key := usage.NewSessionKey(session.Source, session.ID)
+	base := t.TempDir()
+	if err := purpose.SaveStore(filepath.Join(base, "purposes.json"), map[string]purpose.Result{
+		key: {
+			InputFingerprint:    purpose.InputFingerprint(session.Title, messages),
+			TaxonomyFingerprint: purpose.TaxonomyFingerprint(),
+			Version:             purpose.Version,
+			ModeID:              "debug",
+			ModeName:            "Debug",
+			Evidence:            sessionPurposeEvidence(session, 1, nil),
+			VerifiedAt:          time.Date(2026, 10, 26, 0, 0, 0, 0, time.UTC),
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	input := query.Input{
+		Sessions: []usage.Session{session},
+		Turns:    []usage.Turn{{SessionID: session.ID, Source: session.Source, UserPrompts: 1}},
+	}
+	bodyLoads := 0
+	err := applyPurposeClassification(&input, purposeClassificationOptions{
+		Config: purpose.Config{SessionPurpose: purpose.SessionPurposeConfig{APIURL: server.URL}},
+		Base:   base,
+		APIKey: "fake-key",
+		Now:    time.Date(2026, 10, 26, 0, 30, 0, 0, time.UTC),
+		LoadBodies: func([]usage.Session) (map[string][]string, error) {
+			bodyLoads++
+			return map[string][]string{key: messages}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bodyLoads != 0 || requests.Load() != 0 {
+		t.Fatalf("body loads = %d, requests = %d, want none", bodyLoads, requests.Load())
+	}
+	if input.Purposes[key] != "Debug" {
+		t.Fatalf("purposes = %v, want saved result", input.Purposes)
+	}
+}
+
+func TestPurposeClassificationVerifiesChangedEvidenceWithoutAPI(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		_, _ = w.Write([]byte(`{"answers":{"purpose":{"type":"choice","choice":"debug"}}}`))
+	}))
+	defer server.Close()
+
+	session := usage.NewSession("one", usage.SourceRef{Source: usage.SourceCodex})
+	session.Title = "Synthetic session"
+	session.UpdatedAt = time.Date(2026, 10, 26, 0, 0, 0, 0, time.UTC)
+	messages := []string{"synthetic user message"}
+	key := usage.NewSessionKey(session.Source, session.ID)
+	base := t.TempDir()
+	old := time.Date(2026, 10, 25, 0, 0, 0, 0, time.UTC)
+	if err := purpose.SaveStore(filepath.Join(base, "purposes.json"), map[string]purpose.Result{
+		key: {
+			InputFingerprint:    purpose.InputFingerprint(session.Title, messages),
+			TaxonomyFingerprint: purpose.TaxonomyFingerprint(),
+			Version:             purpose.Version,
+			ModeID:              "debug",
+			ModeName:            "Debug",
+			Evidence:            "stale",
+			VerifiedAt:          old,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	input := query.Input{
+		Sessions: []usage.Session{session},
+		Turns:    []usage.Turn{{SessionID: session.ID, Source: session.Source, UserPrompts: 1}},
+	}
+	var loaded []usage.Session
+	now := time.Date(2026, 10, 26, 1, 0, 0, 0, time.UTC)
+	err := applyPurposeClassification(&input, purposeClassificationOptions{
+		Config: purpose.Config{SessionPurpose: purpose.SessionPurposeConfig{APIURL: server.URL}},
+		Base:   base,
+		APIKey: "fake-key",
+		Now:    now,
+		LoadBodies: func(sessions []usage.Session) (map[string][]string, error) {
+			loaded = sessions
+			return map[string][]string{key: messages}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 1 || requests.Load() != 0 {
+		t.Fatalf("loaded = %d, requests = %d, want body verification only", len(loaded), requests.Load())
+	}
+	if input.Purposes[key] != "Debug" {
+		t.Fatalf("purposes = %v, want verified result", input.Purposes)
+	}
+	stored, err := purpose.LoadStore(filepath.Join(base, "purposes.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !stored[key].VerifiedAt.Equal(now) || stored[key].Evidence != sessionPurposeEvidence(session, 1, nil) {
+		t.Fatalf("verification metadata not updated: %+v", stored[key])
+	}
+}
+
+func TestPurposeClassificationReclassifiesChangedFingerprint(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		_, _ = w.Write([]byte(`{"answers":{"purpose":{"type":"choice","choice":"review"}}}`))
+	}))
+	defer server.Close()
+
+	session := usage.NewSession("one", usage.SourceRef{Source: usage.SourceCodex})
+	session.Title = "Synthetic session"
+	session.UpdatedAt = time.Date(2026, 10, 26, 0, 0, 0, 0, time.UTC)
+	key := usage.NewSessionKey(session.Source, session.ID)
+	base := t.TempDir()
+	if err := purpose.SaveStore(filepath.Join(base, "purposes.json"), map[string]purpose.Result{
+		key: {
+			InputFingerprint:    purpose.InputFingerprint(session.Title, []string{"old message"}),
+			TaxonomyFingerprint: purpose.TaxonomyFingerprint(),
+			Version:             purpose.Version,
+			ModeID:              "debug",
+			ModeName:            "Debug",
+			Evidence:            "stale",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	input := query.Input{
+		Sessions: []usage.Session{session},
+		Turns:    []usage.Turn{{SessionID: session.ID, Source: session.Source, UserPrompts: 1}},
+	}
+	err := applyPurposeClassification(&input, purposeClassificationOptions{
+		Config: purpose.Config{SessionPurpose: purpose.SessionPurposeConfig{APIURL: server.URL}},
+		Base:   base,
+		APIKey: "fake-key",
+		LoadBodies: func([]usage.Session) (map[string][]string, error) {
+			return map[string][]string{key: {"new message"}}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requests.Load() != 1 || input.Purposes[key] != "Review" {
+		t.Fatalf("requests = %d, purposes = %v, want one reclassification", requests.Load(), input.Purposes)
+	}
+}
+
+func TestPurposeClassificationSweepsOldestEntriesWithinBudget(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		_, _ = w.Write([]byte(`{"answers":{"purpose":{"type":"choice","choice":"debug"}}}`))
+	}))
+	defer server.Close()
+
+	const count = 60
+	base := t.TempDir()
+	results := make(map[string]purpose.Result, count)
+	input := query.Input{}
+	messages := make(map[string][]string, count)
+	keys := make([]string, 0, count)
+	now := time.Date(2026, 10, 26, 2, 0, 0, 0, time.UTC)
+	for index := range count {
+		session := usage.NewSession(fmt.Sprintf("session-%02d", index), usage.SourceRef{Source: usage.SourceCodex})
+		session.Title = "Synthetic session"
+		session.UpdatedAt = now
+		key := usage.NewSessionKey(session.Source, session.ID)
+		keys = append(keys, key)
+		messages[key] = []string{"synthetic user message"}
+		results[key] = purpose.Result{
+			InputFingerprint:    purpose.InputFingerprint(session.Title, messages[key]),
+			TaxonomyFingerprint: purpose.TaxonomyFingerprint(),
+			Version:             purpose.Version,
+			ModeID:              "debug",
+			ModeName:            "Debug",
+			Evidence:            sessionPurposeEvidence(session, 1, nil),
+			VerifiedAt:          now.Add(-purposeVerificationInterval - time.Duration(index+1)*time.Minute),
+		}
+		input.Sessions = append(input.Sessions, session)
+		input.Turns = append(input.Turns, usage.Turn{SessionID: session.ID, Source: session.Source, UserPrompts: 1})
+	}
+	if err := purpose.SaveStore(filepath.Join(base, "purposes.json"), results); err != nil {
+		t.Fatal(err)
+	}
+	loaded := make(map[string]struct{}, count)
+	err := applyPurposeClassification(&input, purposeClassificationOptions{
+		Config: purpose.Config{SessionPurpose: purpose.SessionPurposeConfig{APIURL: server.URL}},
+		Base:   base,
+		APIKey: "fake-key",
+		Now:    now,
+		LoadBodies: func(sessions []usage.Session) (map[string][]string, error) {
+			loadedMap := make(map[string][]string, len(sessions))
+			for _, session := range sessions {
+				key := usage.NewSessionKey(session.Source, session.ID)
+				loaded[key] = struct{}{}
+				loadedMap[key] = messages[key]
+			}
+			return loadedMap, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != purposeVerificationBudget || requests.Load() != 0 {
+		t.Fatalf("verified = %d, requests = %d, want %d and none", len(loaded), requests.Load(), purposeVerificationBudget)
+	}
+	stored, err := purpose.LoadStore(filepath.Join(base, "purposes.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := range count {
+		_, verified := loaded[keys[index]]
+		// Entries are the newest (index 0..9) and must not be swept.
+		wantVerified := index >= count-purposeVerificationBudget
+		if verified != wantVerified {
+			t.Fatalf("entry %d verified = %t, want %t", index, verified, wantVerified)
+		}
+		if !wantVerified && !stored[keys[index]].VerifiedAt.Equal(results[keys[index]].VerifiedAt) {
+			t.Fatalf("unswept entry %d changed verified_at", index)
+		}
+	}
+	if len(input.Purposes) != count {
+		t.Fatalf("purposes = %d, want %d", len(input.Purposes), count)
+	}
+}
+
+func TestPurposeClassificationVersionMismatchReclassifies(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		_, _ = w.Write([]byte(`{"answers":{"purpose":{"type":"choice","choice":"review"}}}`))
+	}))
+	defer server.Close()
+
+	session := usage.NewSession("one", usage.SourceRef{Source: usage.SourceCodex})
+	session.Title = "Synthetic session"
+	messages := []string{"synthetic user message"}
+	key := usage.NewSessionKey(session.Source, session.ID)
+	base := t.TempDir()
+	if err := purpose.SaveStore(filepath.Join(base, "purposes.json"), map[string]purpose.Result{
+		key: {
+			InputFingerprint:    purpose.InputFingerprint(session.Title, messages),
+			TaxonomyFingerprint: purpose.TaxonomyFingerprint(),
+			Version:             "old",
+			ModeID:              "debug",
+			ModeName:            "Debug",
+			Evidence:            sessionPurposeEvidence(session, 1, nil),
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	input := query.Input{
+		Sessions: []usage.Session{session},
+		Turns:    []usage.Turn{{SessionID: session.ID, Source: session.Source, UserPrompts: 1}},
+	}
+	err := applyPurposeClassification(&input, purposeClassificationOptions{
+		Config: purpose.Config{SessionPurpose: purpose.SessionPurposeConfig{APIURL: server.URL}},
+		Base:   base,
+		APIKey: "fake-key",
+		LoadBodies: func([]usage.Session) (map[string][]string, error) {
+			return map[string][]string{key: messages}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requests.Load() != 1 || input.Purposes[key] != "Review" {
+		t.Fatalf("requests = %d, purposes = %v, want reclassification", requests.Load(), input.Purposes)
+	}
+}
+
+func TestPurposeClassificationVerifiesChangedWindow(t *testing.T) {
+	boundary := time.Date(2026, 1, 1, 0, 0, 6, 0, time.UTC)
+	for _, tc := range []struct {
+		name          string
+		first, second historyLoadOptions
+	}{
+		{name: "expanded", first: historyLoadOptions{To: boundary}},
+		{name: "same count", first: historyLoadOptions{To: boundary}, second: historyLoadOptions{From: boundary}},
+		{name: "rolling days", first: historyLoadOptions{Days: 1, DaysSet: true, Now: boundary.Add(24 * time.Hour)}, second: historyLoadOptions{Days: 1, DaysSet: true, Now: boundary.Add(24*time.Hour - 6*time.Second)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			testHome(t)
+			var requests atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				requests.Add(1)
+				_, _ = w.Write([]byte(`{"answers":{"purpose":{"choice":"debug"}}}`))
+			}))
+			defer server.Close()
+			cacheDir, base := t.TempDir(), t.TempDir()
+			for i, opts := range []historyLoadOptions{tc.first, tc.second, tc.second} {
+				opts.Source, opts.CacheDir = usage.SourceCodex, cacheDir
+				history, err := loadSelectedHistory(opts)
+				if err != nil {
+					t.Fatal(err)
+				}
+				err = applyPurposeClassification(&history.Input, purposeClassificationOptions{
+					Config: purpose.Config{SessionPurpose: purpose.SessionPurposeConfig{APIURL: server.URL}}, Base: base, APIKey: "fake-key",
+					LoadBodies: func(sessions []usage.Session) (map[string][]string, error) {
+						return loadPurposeMessages(opts, sessions)
+					},
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if want := int32(min(i+1, 2)); requests.Load() != want {
+					t.Fatalf("load %d: requests=%d, want %d", i, requests.Load(), want)
+				}
+			}
+		})
+	}
+}
+
+func TestPurposeClassificationOpenCodeEvidenceSurvivesCache(t *testing.T) {
+	writeOpenCodeHome(t)
+	opts := historyLoadOptions{Source: usage.SourceOpenCode, CacheDir: t.TempDir()}
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		_, _ = w.Write([]byte(`{"answers":{"purpose":{"choice":"debug"}}}`))
+	}))
+	defer server.Close()
+	base := t.TempDir()
+	for i := range 3 {
+		history, err := loadSelectedHistory(opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		bodyLoads := 0
+		err = applyPurposeClassification(&history.Input, purposeClassificationOptions{
+			Config: purpose.Config{SessionPurpose: purpose.SessionPurposeConfig{APIURL: server.URL}}, Base: base, APIKey: "fake-key",
+			LoadBodies: func(sessions []usage.Session) (map[string][]string, error) {
+				bodyLoads++
+				return loadPurposeMessages(opts, sessions)
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if requests.Load() != 1 || len(history.Purposes) != 1 {
+			t.Fatalf("load %d: requests=%d, purposes=%v", i, requests.Load(), history.Purposes)
+		}
+		if i > 0 && bodyLoads != 0 {
+			t.Fatalf("unchanged cached source reloaded bodies %d times", bodyLoads)
+		}
+	}
+}
+
+func TestPurposeClassificationLoadsOnlyMissingBodies(t *testing.T) {
+	for _, missing := range []bool{false, true} {
+		t.Run(strconv.FormatBool(missing), func(t *testing.T) {
+			input := purposeClassificationInput(2)
+			if missing {
+				input.Turns[1].UserMessages = nil
+			}
+			var requests atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				requests.Add(1)
+				_, _ = w.Write([]byte(`{"answers":{"purpose":{"choice":"debug"}}}`))
+			}))
+			defer server.Close()
+			loads := 0
+			err := applyPurposeClassification(&input, purposeClassificationOptions{
+				Config: purpose.Config{SessionPurpose: purpose.SessionPurposeConfig{APIURL: server.URL}}, Base: t.TempDir(), APIKey: "fake-key",
+				LoadBodies: func(sessions []usage.Session) (map[string][]string, error) {
+					loads++
+					if !missing || len(sessions) != 1 || sessions[0].ID != input.Sessions[1].ID {
+						t.Errorf("unexpected body reads: %+v", sessions)
+					}
+					key := input.Sessions[1].QualifiedKey()
+					return map[string][]string{key: {"synthetic user message"}}, nil
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantLoads := 0
+			if missing {
+				wantLoads = 1
+			}
+			if loads != wantLoads || requests.Load() != 2 || len(input.Purposes) != 2 {
+				t.Fatalf("loads=%d requests=%d purposes=%v", loads, requests.Load(), input.Purposes)
+			}
+		})
+	}
+}
+
+func TestPurposeClassificationReloadsPartiallyFilteredBodies(t *testing.T) {
+	input := purposeClassificationInput(1)
+	// A cache miss can retain unfiltered bodies alongside filtered prompt counts.
+	input.Turns[0].UserMessages = []string{"outside the window", "selected message"}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"answers":{"purpose":{"choice":"debug"}}}`))
+	}))
+	defer server.Close()
+	base := t.TempDir()
+	key := input.Sessions[0].QualifiedKey()
+	loads := 0
+	err := applyPurposeClassification(&input, purposeClassificationOptions{
+		Config: purpose.Config{SessionPurpose: purpose.SessionPurposeConfig{APIURL: server.URL}},
+		Base:   base, APIKey: "fake-key",
+		LoadBodies: func([]usage.Session) (map[string][]string, error) {
+			loads++
+			return map[string][]string{key: {"selected message"}}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := purpose.LoadStore(filepath.Join(base, "purposes.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loads != 1 || !purpose.Current(stored[key], input.Sessions[0].Title, []string{"selected message"}) {
+		t.Fatalf("loads=%d, stored fingerprint does not match selected input", loads)
+	}
+}
+
+func TestSessionPurposeEvidenceUsesOnlyCodexFileRevision(t *testing.T) {
+	for _, source := range []usage.SourceKind{usage.SourceCodex, usage.SourceOpenCode, usage.SourceCopilot, usage.SourceCtx} {
+		t.Run(string(source), func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "synthetic-history")
+			if err := os.WriteFile(path, []byte("synthetic"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			session := usage.NewSession("one", usage.SourceRef{Source: source, Path: path})
+			before := sessionPurposeEvidence(session, 1, nil)
+			if err := os.WriteFile(path, []byte("changed synthetic history"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			after := sessionPurposeEvidence(session, 1, nil)
+			if changed := before != after; changed != (source == usage.SourceCodex) {
+				t.Fatalf("file revision changed evidence=%t", changed)
+			}
+			if source != usage.SourceCodex {
+				session.Source.Path = ""
+				if sessionPurposeEvidence(session, 1, nil) != before {
+					t.Fatal("cache omitted path changed evidence")
+				}
+			}
+		})
 	}
 }
 

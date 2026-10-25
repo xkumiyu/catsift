@@ -22,6 +22,11 @@ import (
 
 // Version tracks classification compatibility independently of CLI releases.
 const Version = "1"
+
+// StoreSchemaVersion tracks the persisted store layout. It is independent of
+// Version: a layout change must not invalidate classification results.
+const StoreSchemaVersion = 2
+
 const DefaultURL = "https://api.typesafe.ai/v1/systemone"
 const maxCodePoints = 8000
 
@@ -53,15 +58,18 @@ type SessionPurposeConfig struct {
 }
 
 type Result struct {
-	InputFingerprint    string `json:"input_fingerprint"`
-	TaxonomyFingerprint string `json:"taxonomy_fingerprint"`
-	Version             string `json:"version"`
-	ModeID              string `json:"mode_id"`
-	ModeName            string `json:"mode_name"`
+	InputFingerprint    string    `json:"input_fingerprint"`
+	TaxonomyFingerprint string    `json:"taxonomy_fingerprint"`
+	Version             string    `json:"version"`
+	ModeID              string    `json:"mode_id"`
+	ModeName            string    `json:"mode_name"`
+	VerifiedAt          time.Time `json:"verified_at,omitempty"`
+	Evidence            string    `json:"evidence,omitempty"`
 }
 
 type store struct {
-	Results map[string]Result `json:"results"`
+	SchemaVersion int               `json:"schema_version,omitempty"`
+	Results       map[string]Result `json:"results"`
 }
 
 var defaultHTTPClient = &http.Client{Timeout: 30 * time.Second}
@@ -119,6 +127,12 @@ func inputFingerprint(title string, messages []string) string {
 	return Fingerprint(title + "\x00" + strings.Join(messages, "\x00"))
 }
 
+// InputFingerprint returns the fingerprint used to validate a stored result
+// against the current session title and messages.
+func InputFingerprint(title string, messages []string) string {
+	return inputFingerprint(title, messages)
+}
+
 func Input(title string, messages []string) string {
 	title, messages = classificationInput(title, messages)
 	parts := make([]string, 0, len(messages)+1)
@@ -146,9 +160,40 @@ func Fingerprint(value string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func Current(result Result, title string, messages []string) bool {
+var taxonomyFingerprint = func() string {
 	taxonomy, _ := json.Marshal(defaultModes)
-	return result.InputFingerprint == inputFingerprint(title, messages) && result.TaxonomyFingerprint == Fingerprint(string(taxonomy)) && result.Version == Version
+	return Fingerprint(string(taxonomy))
+}()
+
+// TaxonomyFingerprint returns the fingerprint of the built-in taxonomy.
+func TaxonomyFingerprint() string { return taxonomyFingerprint }
+
+// Evidence identifies the local metadata a stored result was verified against.
+// It must not include message bodies or source paths.
+func Evidence(title string, updatedAt time.Time, fileRevision string) string {
+	return Fingerprint(strings.Join([]string{
+		strings.TrimSpace(title),
+		updatedAt.UTC().Format(time.RFC3339Nano),
+		strings.TrimSpace(fileRevision),
+	}, "\x00"))
+}
+
+// Reusable reports whether a stored result matches the classifier
+// compatibility fields and the local revision evidence.
+func Reusable(result Result, evidence string) bool {
+	if strings.TrimSpace(evidence) == "" {
+		return false
+	}
+	return result.Version == Version &&
+		result.TaxonomyFingerprint == taxonomyFingerprint &&
+		result.Evidence != "" &&
+		result.Evidence == evidence
+}
+
+func Current(result Result, title string, messages []string) bool {
+	return result.InputFingerprint == inputFingerprint(title, messages) &&
+		result.TaxonomyFingerprint == taxonomyFingerprint &&
+		result.Version == Version
 }
 
 func Classify(ctx context.Context, client *http.Client, apiURL, key, title string, messages []string) (Result, error) {
@@ -264,7 +309,7 @@ func SaveStore(path string, results map[string]Result) error {
 		current[key] = result
 	}
 	// Preserve results saved by concurrent processes after our initial load.
-	data, err := json.MarshalIndent(store{Results: current}, "", "  ")
+	data, err := json.MarshalIndent(store{SchemaVersion: StoreSchemaVersion, Results: current}, "", "  ")
 	if err != nil {
 		return err
 	}
