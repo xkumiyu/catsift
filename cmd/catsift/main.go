@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 
@@ -36,6 +37,7 @@ const usageText = `Usage:
   catsift <command> [options]
 
 Run catsift without a command in an interactive terminal to open the read-only TUI.
+Report subcommands output JSON by default.
 
 Commands:
   stats     Show an overview of agent usage
@@ -48,6 +50,8 @@ Commands:
 
 Options:
   --source SOURCE   codex, copilot, opencode, or ctx; repeatable or comma-separated (default: detected agent histories; ctx is opt-in)
+  --root PATH       Scan installed skills under this root (repeatable; default: ~/.agents/skills)
+  --strict          Count confirmed skill evidence only
   --verbose         Show input/cache diagnostics and TUI source-load timings
   --strict-input    Exit non-zero when input records are skipped
   --help            Show this help
@@ -65,10 +69,10 @@ Options:
   --days N          Include the last N days (N >= 1; default: all time)
   --from DATE       Include records on or after DATE (YYYY-MM-DD)
   --to DATE         Include records before the day after DATE (YYYY-MM-DD)
-  --color MODE      auto, always, or never (default: auto; human report only)
+  --color MODE      auto, always, or never (default: auto; accepted for compatibility; JSON is unchanged)
   --verbose         Show input and cache diagnostic details
   --strict-input    Exit non-zero when input records are skipped
-  --json            Emit JSON
+  --json            Deprecated: JSON is default; removed in v0.7.0 (false also emits JSON)
   --help            Show this help
 `
 
@@ -81,10 +85,10 @@ Options:
   --days N          Include the last N days (N >= 1; default: all time)
   --from DATE       Include records on or after DATE (YYYY-MM-DD)
   --to DATE         Include records before the day after DATE (YYYY-MM-DD)
-  --color MODE      auto, always, or never (default: auto; human report only)
+  --color MODE      auto, always, or never (default: auto; accepted for compatibility; JSON is unchanged)
   --verbose         Show input and cache diagnostic details
   --strict-input    Exit non-zero when input records are skipped
-  --json            Emit JSON
+  --json            Deprecated: JSON is default; removed in v0.7.0 (false also emits JSON)
   --help            Show this help
 `
 
@@ -97,11 +101,11 @@ Options:
   --days N          Include the last N days (N >= 1; default: all time)
   --from DATE       Include records on or after DATE (YYYY-MM-DD)
   --to DATE         Include records before the day after DATE (YYYY-MM-DD)
-  --color MODE      auto, always, or never (default: auto; human report only)
+  --color MODE      auto, always, or never (default: auto; accepted for compatibility; JSON is unchanged)
   --layer LAYER     effective, runtime, or model (default: effective)
   --verbose         Show input and cache diagnostic details
   --strict-input    Exit non-zero when input records are skipped
-  --json            Emit JSON
+  --json            Deprecated: JSON is default; removed in v0.7.0 (false also emits JSON)
   --help            Show this help
 `
 
@@ -114,10 +118,10 @@ Options:
   --days N          Include the last N days (N >= 1; default: all time)
   --from DATE       Include records on or after DATE (YYYY-MM-DD)
   --to DATE         Include records before the day after DATE (YYYY-MM-DD)
-  --color MODE      auto, always, or never (default: auto; human report only)
+  --color MODE      auto, always, or never (default: auto; accepted for compatibility; JSON is unchanged)
   --verbose         Show input and cache diagnostic details
   --strict-input    Exit non-zero when input records are skipped
-  --json            Emit JSON
+  --json            Deprecated: JSON is default; removed in v0.7.0 (false also emits JSON)
   --help            Show this help
 
 Detail:
@@ -133,15 +137,15 @@ Options:
   --days N          Include the last N days (N >= 1; default: all time)
   --from DATE       Include records on or after DATE (YYYY-MM-DD)
   --to DATE         Include records before the day after DATE (YYYY-MM-DD)
-  --color MODE      auto, always, or never (default: auto; human report only)
+  --color MODE      auto, always, or never (default: auto; accepted for compatibility; JSON is unchanged)
   --group-by UNIT   turn or session (default: turn; no effect on --unused)
   --strict          Count confirmed skill evidence only
-  --view VIEW       auto, compact, mode, state, or all (default: auto; human report only)
+  --view VIEW       auto, compact, mode, state, or all (default: auto; accepted for compatibility; JSON is unchanged)
   --unused          Show installed skills with no recorded usage
   --root PATH       Scan a scope root for .agents/skills, .codex/skills, plugin cache layouts (repeatable; only with --unused; default if omitted: ~/.agents/skills)
   --verbose         Show input and cache diagnostic details
   --strict-input    Exit non-zero when input records are skipped
-  --json            Emit JSON
+  --json            Deprecated: JSON is default; removed in v0.7.0 (false also emits JSON)
   --help            Show this help
 
 Detail:
@@ -157,10 +161,10 @@ Options:
   --days N          Include the last N days (N >= 1; default: all time)
   --from DATE       Include records on or after DATE (YYYY-MM-DD)
   --to DATE         Include records before the day after DATE (YYYY-MM-DD)
-  --color MODE      auto, always, or never (default: auto; human report only)
+  --color MODE      auto, always, or never (default: auto; accepted for compatibility; JSON is unchanged)
   --verbose         Show input and cache diagnostic details
   --strict-input    Exit non-zero when input records are skipped
-  --json            Emit JSON
+  --json            Deprecated: JSON is default; removed in v0.7.0 (false also emits JSON)
   --help            Show this help
 
 Detail:
@@ -174,10 +178,10 @@ const detailCommonOptionsText = `  --source SOURCE   codex, copilot, opencode, o
   --days N          Include the last N days (N >= 1; default: all time)
   --from DATE       Include records on or after DATE (YYYY-MM-DD)
   --to DATE         Include records before the day after DATE (YYYY-MM-DD)
-  --color MODE      auto, always, or never (default: auto; human report only)
+  --color MODE      auto, always, or never (default: auto; accepted for compatibility; JSON is unchanged)
   --verbose         Show input and cache diagnostic details
   --strict-input    Exit non-zero when input records are skipped
-  --json            Emit JSON
+  --json            Deprecated: JSON is default; removed in v0.7.0 (false also emits JSON)
   --help            Show this help
 `
 
@@ -190,12 +194,14 @@ TUI reload skips batches at this threshold.
 
 Options:
   --source SOURCE   codex, copilot, opencode, or ctx; repeatable or comma-separated (default: detected agent histories; ctx is opt-in)
+  --root PATH       Scan installed skills under this root (repeatable; default: ~/.agents/skills)
+  --strict          Count confirmed skill evidence only
   --verbose         Show input/cache diagnostics and source-load timings
   --strict-input    Exit non-zero when input records are skipped
   --help            Show this help
 
 Keys:
-  1/2/3/4           Overview, Models, Skills, Sessions
+  1/2/3/4/5         Overview, Activity, Models, Skills, Sessions
   Tab/Shift+Tab      Move to the next/previous view
   Enter             Open detail; b/Esc returns to the previous view
   d                 Set period: all, N, YYYY-MM-DD[..YYYY-MM-DD]
@@ -204,7 +210,8 @@ Keys:
   a                 Filter Sessions by selected agent
   p                 Filter Sessions by selected project
   o                 Toggle source visibility
-  r                 Reload the source snapshot
+  u                 Switch Skills usage/unused
+  r                 Reload the source and inventory snapshot
   s                 Cycle list sort
   c                 Clear TUI filters
   ?                 Show help
@@ -1232,20 +1239,20 @@ func runWithCtxLoader(args []string, stdout, stderr io.Writer, loadCtx ctxHistor
 	days := flags.Int("days", 0, "include the last N days")
 	from := flags.String("from", "", "include records on or after date")
 	to := flags.String("to", "", "include records through date")
-	color := flags.String("color", string(output.ColorAuto), "human report color mode")
+	color := flags.String("color", string(output.ColorAuto), "compatibility color mode (JSON is unchanged)")
 	layer := flags.String("layer", string(usage.LayerEffective), "tool layer")
 	var groupBy *string
 	if kind == "skills" {
 		groupBy = flags.String("group-by", string(aggregate.SkillGroupByTurn), "skill aggregation unit")
 	}
 	strict := flags.Bool("strict", false, "count confirmed skills only")
-	view := flags.String("view", string(output.SkillUsageViewAuto), "skill report view")
+	view := flags.String("view", string(output.SkillUsageViewAuto), "compatibility skill view (JSON is unchanged)")
 	unused := flags.Bool("unused", false, "show installed skills with no recorded usage")
 	var roots stringList
-	flags.Var(&roots, "root", "scan a scope root for supported skill layouts (repeatable; only with --unused)")
+	flags.Var(&roots, "root", "scan a scope root for supported skill layouts (repeatable; interactive view or skills --unused)")
 	verbose := flags.Bool("verbose", false, "show input and cache diagnostic details")
 	strictInput := flags.Bool("strict-input", false, "exit non-zero when input records are skipped")
-	jsonOutput := flags.Bool("json", false, "emit JSON")
+	flags.Bool("json", false, "deprecated: JSON is default; removed in v0.7.0")
 	if err := flags.Parse(commandArgs); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
@@ -1256,7 +1263,13 @@ func runWithCtxLoader(args []string, stdout, stderr io.Writer, loadCtx ctxHistor
 		diagnostics.errorf("unexpected argument %q", extra[0])
 		return 2
 	}
-	if kind == usageExplorerKind && *jsonOutput {
+	jsonFlagSet := false
+	flags.Visit(func(f *flag.Flag) {
+		if f.Name == "json" {
+			jsonFlagSet = true
+		}
+	})
+	if kind == usageExplorerKind && jsonFlagSet {
 		diagnostics.errorf("--json is not supported for the interactive view")
 		return 2
 	}
@@ -1267,7 +1280,6 @@ func runWithCtxLoader(args []string, stdout, stderr io.Writer, loadCtx ctxHistor
 		}{
 			{name: "--color", used: hasOption(commandArgs, "--color")},
 			{name: "--layer", used: hasOption(commandArgs, "--layer")},
-			{name: "--strict", used: hasOption(commandArgs, "--strict")},
 			{name: "--view", used: hasOption(commandArgs, "--view")},
 		} {
 			if option.used {
@@ -1284,8 +1296,11 @@ func runWithCtxLoader(args []string, stdout, stderr io.Writer, loadCtx ctxHistor
 	}
 	mode := output.ColorMode(*color)
 	diagnostics = newDiagnosticWriter(stderr, mode, noColor)
-	if *jsonOutput {
+	if kind != usageExplorerKind {
 		diagnostics = newDiagnosticWriter(stderr, output.ColorNever, noColor)
+	}
+	if jsonFlagSet {
+		diagnostics.write("warning", "--json is deprecated: --json is unnecessary because JSON is now default and will be removed in v0.7.0")
 	}
 	if !mode.Valid() {
 		diagnostics.errorf("invalid --color %q (want auto, always, or never)", *color)
@@ -1308,7 +1323,7 @@ func runWithCtxLoader(args []string, stdout, stderr io.Writer, loadCtx ctxHistor
 			return 2
 		}
 	}
-	if kind != "skills" && *strict {
+	if kind != "skills" && kind != usageExplorerKind && *strict {
 		diagnostics.errorf("--strict is only valid for skills")
 		return 2
 	}
@@ -1343,7 +1358,7 @@ func runWithCtxLoader(args []string, stdout, stderr io.Writer, loadCtx ctxHistor
 		_, _ = fmt.Fprintln(stderr, "error: --unused is only valid for skills")
 		return 2
 	}
-	if len(roots) > 0 && (kind != "skills" || !*unused) {
+	if len(roots) > 0 && kind != usageExplorerKind && (kind != "skills" || !*unused) {
 		_, _ = fmt.Fprintln(stderr, "error: --root is only valid with --unused for skills")
 		return 2
 	}
@@ -1439,7 +1454,7 @@ func runWithCtxLoader(args []string, stdout, stderr io.Writer, loadCtx ctxHistor
 		diagnostics.errorf("%v; use catsift stats, catsift activity, catsift tools, or catsift skills for non-interactive reports", tui.ErrNotInteractive)
 		return 1
 	}
-	progress := newSpinner(stderr, !*jsonOutput && diagnostics.capabilities.IsTTY, diagnostics.capabilities.ColorsEnabled())
+	progress := newSpinner(stderr, kind == usageExplorerKind && diagnostics.capabilities.IsTTY, diagnostics.capabilities.ColorsEnabled())
 	diagnostics.progress = progress.writeDiagnostic
 	var (
 		history      loadedHistory
@@ -1479,7 +1494,15 @@ func runWithCtxLoader(args []string, stdout, stderr io.Writer, loadCtx ctxHistor
 	}
 	if kind == usageExplorerKind {
 		stopProgress()
-		filter := query.Filter{From: fromDate, To: toDate, Sources: append([]usage.SourceKind(nil), selectedSources...)}
+		inventory, err := discoverSkillInventory([]string(roots))
+		if err != nil {
+			diagnostics.errorf("scan skill roots: %v", err)
+			return 1
+		}
+		history.SkillInventory = &inventory
+		var inventoryWarnings atomic.Bool
+		inventoryWarnings.Store(len(inventory.Warnings) > 0)
+		filter := query.Filter{Strict: *strict, From: fromDate, To: toDate, Sources: append([]usage.SourceKind(nil), selectedSources...)}
 		if len(selectedSources) == 1 {
 			filter.Source = selectedSources[0]
 		}
@@ -1506,13 +1529,19 @@ func runWithCtxLoader(args []string, stdout, stderr io.Writer, loadCtx ctxHistor
 					diagnostics.write("warning", "session purpose classification incomplete: "+err.Error())
 				}
 			}
+			inventory, err := discoverSkillInventory([]string(roots))
+			if err != nil {
+				return query.Input{}, fmt.Errorf("scan skill roots: %w", err)
+			}
+			refreshed.SkillInventory = &inventory
+			inventoryWarnings.Store(len(inventory.Warnings) > 0)
 			return refreshed.Input, nil
 		}
 		if err := tui.Run(tui.RunOptions{Input: history.Input, Filter: filter, SourcePath: history.SourcePath, SourcePaths: history.SourcePaths, Reload: reload, Stdin: os.Stdin, Stdout: stdout}); err != nil {
 			diagnostics.errorf("run interactive view: %v", err)
 			return 1
 		}
-		if *strictInput && len(history.Warnings) > 0 {
+		if *strictInput && (len(history.Warnings) > 0 || inventoryWarnings.Load()) {
 			diagnostics.errorf("input diagnostics encountered (--strict-input)")
 			return 1
 		}
@@ -1548,25 +1577,11 @@ func runWithCtxLoader(args []string, stdout, stderr io.Writer, loadCtx ctxHistor
 	}
 	if activityReport {
 		stopProgress()
-		if *jsonOutput {
-			if err := output.WriteJSON(stdout, kind, context, aggregate.Report{}); err != nil {
-				diagnostics.errorf("render json: %v", err)
-				return 1
-			}
-		} else {
-			capabilities := output.TerminalCapabilities{ColorMode: mode, NoColor: noColor}
-			if file, ok := stdout.(*os.File); ok {
-				capabilities = output.DetectCapabilities(file, mode, capabilities.NoColor)
-			}
-			text := output.RenderHuman(kind, context, aggregate.Report{}, capabilities)
-			if _, err := io.WriteString(stdout, text); err != nil {
-				diagnostics.errorf("write report: %v", err)
-				return 1
-			}
+		if err := output.WriteJSON(stdout, kind, context, aggregate.Report{}); err != nil {
+			diagnostics.errorf("render json: %v", err)
+			return 1
 		}
-		if !*jsonOutput && !*verbose && len(warnings) > 0 {
-			_, _ = io.WriteString(stderr, "\n")
-		}
+
 		writeWarnings(stderr, warnings, *verbose, diagnostics.capabilities)
 		if *strictInput && len(warnings) > 0 {
 			diagnostics.errorf("input diagnostics encountered (--strict-input)")
@@ -1604,25 +1619,11 @@ func runWithCtxLoader(args []string, stdout, stderr io.Writer, loadCtx ctxHistor
 				detailKey = selected.Key
 			}
 		}
-		if *jsonOutput {
-			if err := output.WriteQueryJSON(stdout, kind, context, readModel, detailKey); err != nil {
-				diagnostics.errorf("render json: %v", err)
-				return 1
-			}
-		} else {
-			capabilities := output.TerminalCapabilities{ColorMode: mode, NoColor: noColor}
-			if file, ok := stdout.(*os.File); ok {
-				capabilities = output.DetectCapabilities(file, mode, capabilities.NoColor)
-			}
-			text := output.RenderQueryHuman(kind, context, readModel, detailKey, capabilities)
-			if _, err := io.WriteString(stdout, text); err != nil {
-				diagnostics.errorf("write report: %v", err)
-				return 1
-			}
+		if err := output.WriteQueryJSON(stdout, kind, context, readModel, detailKey); err != nil {
+			diagnostics.errorf("render json: %v", err)
+			return 1
 		}
-		if !*jsonOutput && !*verbose && len(warnings) > 0 {
-			_, _ = io.WriteString(stderr, "\n")
-		}
+
 		writeWarnings(stderr, warnings, *verbose, diagnostics.capabilities)
 		if *strictInput && len(warnings) > 0 {
 			diagnostics.errorf("input diagnostics encountered (--strict-input)")
@@ -1635,25 +1636,11 @@ func runWithCtxLoader(args []string, stdout, stderr io.Writer, loadCtx ctxHistor
 	var inventorySnapshot skillinventory.InventorySnapshot
 	if *unused {
 		stopProgress = startProgressPhase(stopProgress, progress.Start, "Scanning installed skills")
-		userHome, err := os.UserHomeDir()
+		var err error
+		inventorySnapshot, err = discoverSkillInventory([]string(roots))
 		if err != nil {
 			stopProgress()
-			_, _ = fmt.Fprintf(stderr, "error: resolve user home for skill inventory: %v\n", err)
-			return 1
-		}
-		resolvedRoots, err := skillinventory.ResolveRoots([]string(roots), userHome)
-		if err != nil {
-			stopProgress()
-			_, _ = fmt.Fprintf(stderr, "error: resolve skill roots: %v\n", err)
-			return 1
-		}
-		inventorySnapshot, err = skillinventory.Discover(skillinventory.DiscoverOptions{
-			Roots:             resolvedRoots,
-			AllowMissingRoots: len(roots) == 0,
-		})
-		if err != nil {
-			stopProgress()
-			_, _ = fmt.Fprintf(stderr, "error: scan skill roots: %v\n", err)
+			diagnostics.errorf("scan skill roots: %v", err)
 			return 1
 		}
 		report = aggregate.BuildUnusedReport(aggregateInput, inventorySnapshot, *strict, selectedGroupBy)
@@ -1672,24 +1659,9 @@ func runWithCtxLoader(args []string, stdout, stderr io.Writer, loadCtx ctxHistor
 	if *unused {
 		context.SkillRoots = append([]string{}, inventorySnapshot.Roots...)
 	}
-	if *jsonOutput {
-		if err := output.WriteJSON(stdout, kind, context, report); err != nil {
-			diagnostics.errorf("render json: %v", err)
-			return 1
-		}
-	} else {
-		capabilities := output.TerminalCapabilities{ColorMode: mode, NoColor: noColor}
-		if file, ok := stdout.(*os.File); ok {
-			capabilities = output.DetectCapabilities(file, mode, capabilities.NoColor)
-		}
-		text := output.RenderHuman(kind, context, report, capabilities)
-		if _, err := io.WriteString(stdout, text); err != nil {
-			diagnostics.errorf("write report: %v", err)
-			return 1
-		}
-	}
-	if !*jsonOutput && !*verbose && len(warnings) > 0 {
-		_, _ = io.WriteString(stderr, "\n")
+	if err := output.WriteJSON(stdout, kind, context, report); err != nil {
+		diagnostics.errorf("render json: %v", err)
+		return 1
 	}
 	writeWarnings(stderr, warnings, *verbose, diagnostics.capabilities)
 	if *strictInput && len(warnings) > 0 {
@@ -1946,4 +1918,16 @@ func cleanWarningValue(value string) string {
 		}
 		return r
 	}, value)
+}
+
+func discoverSkillInventory(roots []string) (skillinventory.InventorySnapshot, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return skillinventory.InventorySnapshot{}, fmt.Errorf("resolve user home for skill inventory: %w", err)
+	}
+	resolved, err := skillinventory.ResolveRoots(roots, home)
+	if err != nil {
+		return skillinventory.InventorySnapshot{}, fmt.Errorf("resolve skill roots: %w", err)
+	}
+	return skillinventory.Discover(skillinventory.DiscoverOptions{Roots: resolved, AllowMissingRoots: len(roots) == 0})
 }
