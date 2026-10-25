@@ -45,3 +45,4 @@
 
 - Before opening a PR, run `openspec list --json` and check for completed changes still outside `openspec/changes/archive/`.
 - Archive completed changes with OpenSpec tooling, for example `openspec archive <change-name>`, before opening the PR.
+- Write pull request bodies in English.
