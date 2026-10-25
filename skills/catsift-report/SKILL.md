@@ -19,8 +19,9 @@ make it available before collecting data.
 Use only CatSift's normalized reports for analysis. Do not read raw history to
 fill gaps. Keep reports local. Never include raw prompts, commands, tool
 arguments, or Skill bodies in a report. Do not classify history through custom
-HTTP requests or a third-party SDK; use CatSift's supported invocation for any
-classification.
+HTTP requests or a third-party SDK. Running CatSift commands is allowed,
+including any classification performed by CatSift under its existing settings.
+Do not enable or change classification settings yourself.
 
 ## Analyze
 
@@ -41,15 +42,6 @@ Use per-session purpose labels when CatSift provides them. Treat labels as
 descriptive metadata, not proof of intent or outcome. If labels are unavailable
 or incomplete, disclose that limitation and do not infer replacement labels
 from raw session content.
-
-Respect the classifier's opt-in setting. CatSift may classify as part of its
-normal invocation when the existing setting is opted in; do not enable or
-change that setting yourself. If classification is disabled, do not attempt it;
-report that plainly and continue with other available evidence when useful.
-Note that classifying new sessions requires interactive confirmation, so a
-non-interactive CLI run classifies nothing and reports only labels already in
-its cache. When labels may be incomplete, disclose what the setting and
-non-interactive run allowed.
 
 ## Write the report
 
