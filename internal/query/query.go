@@ -22,6 +22,7 @@ type Input struct {
 	From     time.Time
 	To       time.Time
 	Filter   Filter
+	Purposes map[string]string
 }
 
 // Filter is shared by the static input path and interactive views. From is
@@ -78,6 +79,7 @@ type UsageTrend struct {
 	SkillUses           int              `json:"skill_uses"`
 	TokenUsage          usage.TokenUsage `json:"token_usage"`
 	TokenUsageAvailable bool             `json:"token_usage_available"`
+	Purpose             string           `json:"purpose,omitempty"`
 }
 
 // ModelSummary is the aggregate row for one provider/model identity.
@@ -180,6 +182,7 @@ type SessionSummary struct {
 	SkillUses           int              `json:"skill_uses"`
 	TokenUsage          usage.TokenUsage `json:"token_usage"`
 	TokenUsageAvailable bool             `json:"token_usage_available"`
+	Purpose             string           `json:"purpose,omitempty"`
 	Aborted             bool             `json:"aborted,omitempty"`
 }
 
@@ -350,6 +353,12 @@ func Build(input Input, filters ...Filter) ReadModel {
 	readModel.Overview = buildOverview(filter, input.Agents, input.Warnings, selected, len(sessionKeys), skillUses)
 	readModel.Sessions = sessionRows(index, sessionKeys, selectedBySession, skillUses)
 	readModel.buildDetails(index, sessionKeys, selectedBySession, modelAccumulators, skillUses, skillAccumulators)
+	for i := range readModel.Sessions {
+		readModel.Sessions[i].Purpose = input.Purposes[readModel.Sessions[i].Key]
+		detail := readModel.sessionDetails[readModel.Sessions[i].Key]
+		detail.Summary.Purpose = readModel.Sessions[i].Purpose
+		readModel.sessionDetails[readModel.Sessions[i].Key] = detail
+	}
 	return readModel
 }
 

@@ -105,6 +105,22 @@ activation modeとevidence stateは独立した軸です。1つの利用に複�
 
 詳細は各commandの`--help`を参照してください。
 
+### Optional: Session purpose classification
+
+Jevでセッションの用途を分類できます。
+
+- 分類は`catsift sessions`の実行時、またはTUIで`catsift`を起動したときに行います。
+- セッションタイトルとユーザーが入力したメッセージを利用します。
+- 新規に100セッションを分類した場合、費用はおよそ$0.01です。メッセージの分量により異なります。[^1]
+
+[^1]: $0.042 / 100万入力トークンで計算
+
+#### 設定方法
+
+1. `catsift config init`を実行して、設定ファイルを作成します。
+2. 設定ファイルを開き、`session_purpose.enabled`を`true`にします。
+3. 環境変数`TYPESAFE_API_KEY`を設定します。
+
 ### Usage overview
 
 ```sh
@@ -205,8 +221,6 @@ flatな`SKILL.md`配置は無視されます。
 
 ## Data handling
 
-CatSiftは、選択したCodex、GitHub Copilot CLI、OpenCode、またはctxの履歴を
-読み取ります。すべての入力はread-onlyかつlocal-onlyで、外部へ送信しません。
-`skills --unused`ではインストール済みSkill inventoryも読み取ります。
-TUIとreportではprompt本文、command本文、Tool arguments、Skill bodies、
-provider payload、その他のraw event detailsを含めません。
+- CatSiftは、選択したCodex、GitHub Copilot CLI、OpenCode、またはctxの履歴をread-onlyで読み取ります。
+- Optional purpose classificationを有効にした場合、Session titleとuser-authored messageをTypeSafe System Oneへ送信します。送信した内容は保存しません。
+- `skills --unused`ではインストール済みSkill inventoryも読み取ります。TUIとreportではprompt本文、command本文、Tool arguments、Skill bodies、provider payload、その他のraw event detailsを含めません。

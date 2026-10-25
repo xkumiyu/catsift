@@ -162,6 +162,7 @@ func renderSessionDetail(detail query.SessionDetail, ctx ReportContext, width in
 	lines := querySummaryLines([]queryField{
 		{label: "Session", value: sessionDisplay(row.Title, row.ID)},
 		{label: "Session ID", value: row.ID},
+		{label: "Purpose", value: row.Purpose},
 		{label: "Source", value: string(row.Source)},
 		{label: "Agent", value: row.Agent},
 		{label: "Provider", value: row.Provider},

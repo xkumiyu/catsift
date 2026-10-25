@@ -432,6 +432,9 @@ func TestLoadRejectsUnchangedCursor(t *testing.T) {
 func TestLoadNormalizesSkillEvidenceAndIgnoresToolOutputAsPrompt(t *testing.T) {
 	lines := []string{
 		eventLine(t, "injected", "codex", "session", "message", "user", "2026-01-01T00:00:00Z", `<skill name="review">instructions</skill>`, nil),
+		eventLine(t, "actual", "codex", "session", "message", "user", "2026-01-01T00:00:00.500Z", "actual user prompt", nil),
+		eventLine(t, "assistant", "codex", "session", "message", "assistant", "2026-01-01T00:00:00.750Z", "assistant output", nil),
+		eventLine(t, "system", "codex", "session", "message", "system", "2026-01-01T00:00:00.875Z", "injected system context", nil),
 		eventLine(t, "skill-tool", "codex", "session", "tool_call", "assistant", "2026-01-01T00:00:01Z", "", map[string]any{
 			"invocation": map[string]any{"id": "skill-call", "name": "Skill", "arguments": map[string]any{"name": "review"}},
 		}),
@@ -449,10 +452,13 @@ func TestLoadNormalizesSkillEvidenceAndIgnoresToolOutputAsPrompt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Turns) != 1 || result.Turns[0].UserPrompts != 0 {
+	if len(result.Turns) != 1 || result.Turns[0].UserPrompts != 1 {
 		t.Fatalf("injected prompt count = %#v", result.Turns)
 	}
 	turn := result.Turns[0]
+	if len(turn.UserMessages) != 1 || turn.UserMessages[0] != "actual user prompt" {
+		t.Fatalf("classification messages = %#v", turn.UserMessages)
+	}
 	if len(turn.ModelTools) != 1 || turn.ModelTools[0].RawName != "Skill" {
 		t.Fatalf("model tools = %#v", turn.ModelTools)
 	}

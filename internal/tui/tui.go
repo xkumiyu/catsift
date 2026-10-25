@@ -1560,6 +1560,10 @@ func (state *State) overviewLines() []string {
 		lines = append(lines, "")
 		lines = append(lines, topSkills...)
 	}
+	if purposeLines := overviewPurposeLines(state.ReadModel, width); len(purposeLines) > 0 {
+		lines = append(lines, "")
+		lines = append(lines, purposeLines...)
+	}
 	periodInfo := state.periodInfoLines()
 	for _, group := range []struct {
 		level string
@@ -1799,6 +1803,42 @@ func overviewTopSkillsLines(model query.ReadModel, width int) []string {
 	return lines
 }
 
+func overviewPurposeLines(model query.ReadModel, width int) []string {
+	counts := make(map[string]int)
+	for _, session := range model.Sessions {
+		if session.Purpose == "" {
+			continue
+		}
+		counts[session.Purpose]++
+	}
+	if len(counts) == 0 {
+		return nil
+	}
+	purposes := make([]string, 0, len(counts))
+	for purpose := range counts {
+		purposes = append(purposes, purpose)
+	}
+	sort.Slice(purposes, func(i, j int) bool {
+		if counts[purposes[i]] != counts[purposes[j]] {
+			return counts[purposes[i]] > counts[purposes[j]]
+		}
+		return purposes[i] < purposes[j]
+	})
+	lines := []string{sectionStyle.Render("Session Purpose")}
+	for _, purpose := range purposes {
+		lines = append(lines, overviewSummaryRow(width, purpose, sessionCountLabel(counts[purpose])))
+	}
+	return lines
+}
+
+func sessionCountLabel(count int) string {
+	unit := "sessions"
+	if count == 1 {
+		unit = "session"
+	}
+	return formatInt(count) + " " + unit
+}
+
 func overviewTopModelsLines(model query.ReadModel, width int) []string {
 	if len(model.Models) == 0 {
 		return nil
@@ -1996,6 +2036,12 @@ func (state *State) viewSessionDetail(height int) []string {
 		titleStyle.Render(truncate("Session detail", width)),
 		identityStyle.Render(truncate("  Session name: "+emptyDash(row.Title), width)),
 		mutedStyle.Render(truncate("  Session ID: "+row.ID, width)),
+	}
+	if row.Purpose != "" {
+		labelWidth := lipgloss.Width("  Purpose: ")
+		label := mutedStyle.Render(truncate("  Purpose: ", width))
+		value := truncate(row.Purpose, maxInt(0, width-labelWidth))
+		lines = append(lines, label+value)
 	}
 	if row.Aborted {
 		lines = append(lines, mutedStyle.Render(truncate("  Status: aborted", width)))
