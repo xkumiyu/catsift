@@ -1,11 +1,14 @@
 package main
 
 import (
+	"bufio"
+	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,6 +23,7 @@ import (
 	"github.com/xkumiyu/catsift/internal/githubcopilot"
 	"github.com/xkumiyu/catsift/internal/opencode"
 	"github.com/xkumiyu/catsift/internal/output"
+	"github.com/xkumiyu/catsift/internal/purpose"
 	"github.com/xkumiyu/catsift/internal/query"
 	"github.com/xkumiyu/catsift/internal/skillinventory"
 	"github.com/xkumiyu/catsift/internal/tui"
@@ -40,6 +44,7 @@ Commands:
   tools     Show tool usage by canonical name
   skills    Show skill usage and evidence state
   sessions  Show session usage and details
+  config    Initialize configuration
 
 Options:
   --source SOURCE   codex, copilot, opencode, or ctx; repeatable or comma-separated (default: detected agent histories; ctx is opt-in)
@@ -160,6 +165,9 @@ Options:
 
 Detail:
   catsift sessions detail ID [options]
+
+When 20 or more new purpose requests are needed, Catsift asks before sending them.
+Saved results do not count; non-interactive runs skip the batch.
 `
 
 const detailCommonOptionsText = `  --source SOURCE   codex, copilot, opencode, or ctx; repeatable or comma-separated (default: detected agent histories; ctx is opt-in)
@@ -177,6 +185,8 @@ const explorerUsageText = `Usage: catsift [options]
 
 Explore model, usage, skill, and session details in an interactive terminal.
 The TUI is read-only and does not display prompt text, tool arguments, or skill bodies.
+When 20 or more new purpose requests are needed, Catsift asks before sending them.
+TUI reload skips batches at this threshold.
 
 Options:
   --source SOURCE   codex, copilot, opencode, or ctx; repeatable or comma-separated (default: detected agent histories; ctx is opt-in)
@@ -718,21 +728,26 @@ type loadedHistory struct {
 }
 
 type historyLoadOptions struct {
-	Source      usage.SourceKind
-	Sources     []usage.SourceKind
-	AutoDetect  bool
-	Days        int
-	DaysSet     bool
-	From        time.Time
-	To          time.Time
-	Now         time.Time
-	CacheDir    string
-	Verbose     bool
-	Diagnostics diagnosticWriter
-	LoadCtx     ctxHistoryLoader
+	Source              usage.SourceKind
+	Sources             []usage.SourceKind
+	AutoDetect          bool
+	Days                int
+	DaysSet             bool
+	From                time.Time
+	To                  time.Time
+	Now                 time.Time
+	CacheDir            string
+	RequireUserMessages bool
+	Verbose             bool
+	Diagnostics         diagnosticWriter
+	LoadCtx             ctxHistoryLoader
 }
 
 func loadHistory(options historyLoadOptions) (loadedHistory, error) {
+	if options.RequireUserMessages {
+		// Usage caches omit message bodies, including on TUI reload.
+		options.CacheDir = ""
+	}
 	result := loadedHistory{Input: query.Input{Source: options.Source, From: options.From, To: options.To}}
 	switch options.Source {
 	case usage.SourceCtx:
@@ -804,6 +819,116 @@ func loadHistory(options historyLoadOptions) (loadedHistory, error) {
 	result.Sources = []usage.SourceKind{options.Source}
 	result.SourcePaths = map[usage.SourceKind]string{options.Source: result.SourcePath}
 	return result, nil
+}
+
+func loadPurposeSettings(configDir string) (purpose.Config, error) {
+	config, err := purpose.LoadConfig(filepath.Join(configDir, "catsift", "config.yaml"))
+	if err != nil {
+		return purpose.Config{}, fmt.Errorf("read session purpose config: %w", err)
+	}
+	return config, nil
+}
+
+const purposeBatchConfirmationThreshold = 20
+
+func confirmPurposeClassification(count int, interactive bool, stdin io.Reader, stderr io.Writer) bool {
+	if !interactive {
+		return false
+	}
+	if _, err := fmt.Fprintf(stderr, "%d new session purpose requests to TypeSafe may incur API charges. Continue? [y/N]: ", count); err != nil {
+		return false
+	}
+	answer, err := bufio.NewReader(stdin).ReadString('\n')
+	_, _ = fmt.Fprintln(stderr)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return false
+	}
+	answer = strings.ToLower(strings.TrimSpace(answer))
+	return answer == "y" || answer == "yes"
+}
+
+func applyPurposeClassification(input *query.Input, config purpose.Config, base, apiKey string, confirm func(int) bool) error {
+	if input == nil {
+		return nil
+	}
+	type candidate struct {
+		key      string
+		title    string
+		messages []string
+	}
+	type outcome struct {
+		candidate candidate
+		result    purpose.Result
+		err       error
+	}
+	var err error
+	apiURL := config.SessionPurpose.APIURL
+	storePath := filepath.Join(base, "purposes.json")
+	results, err := purpose.LoadStore(storePath)
+	if err != nil {
+		return fmt.Errorf("read session purpose results: %w", err)
+	}
+	input.Purposes = make(map[string]string)
+	changed := false
+	failed := 0
+	pending := make([]candidate, 0)
+	messagesBySession := make(map[string][]string)
+	for _, turn := range input.Turns {
+		key := usage.NewSessionKey(turn.Source, turn.SessionID)
+		messagesBySession[key] = append(messagesBySession[key], turn.UserMessages...)
+	}
+	for _, session := range input.Sessions {
+		messages := messagesBySession[usage.NewSessionKey(session.Source, session.ID)]
+		if purpose.Input("", messages) == "" {
+			continue
+		}
+		resultKey := usage.NewSessionKey(session.Source, session.ID)
+		cached, exists := results[resultKey]
+		if exists && purpose.Current(cached, session.Title, messages) {
+			input.Purposes[usage.NewSessionKey(session.Source, session.ID)] = cached.ModeName
+			continue
+		}
+		pending = append(pending, candidate{key: resultKey, title: session.Title, messages: messages})
+	}
+	if len(pending) >= purposeBatchConfirmationThreshold && (confirm == nil || !confirm(len(pending))) {
+		return fmt.Errorf("classification of %d sessions requires confirmation; no API requests sent", len(pending))
+	}
+	workers := min(4, len(pending))
+	if workers > 0 {
+		jobs := make(chan candidate)
+		completed := make(chan outcome, len(pending))
+		for range workers {
+			go func() {
+				for job := range jobs {
+					result, err := purpose.Classify(context.Background(), nil, apiURL, apiKey, job.title, job.messages)
+					completed <- outcome{candidate: job, result: result, err: err}
+				}
+			}()
+		}
+		for _, job := range pending {
+			jobs <- job
+		}
+		close(jobs)
+		for range len(pending) {
+			result := <-completed
+			if result.err != nil {
+				failed++
+				continue
+			}
+			results[result.candidate.key] = result.result
+			changed = true
+			input.Purposes[result.candidate.key] = result.result.ModeName
+		}
+	}
+	if changed {
+		if err := purpose.SaveStore(storePath, results); err != nil {
+			return fmt.Errorf("save session purpose results: %w", err)
+		}
+	}
+	if failed > 0 {
+		return fmt.Errorf("classification failed for %d session(s)", failed)
+	}
+	return nil
 }
 
 func detectDefaultSourceKinds() ([]usage.SourceKind, error) {
@@ -1020,6 +1145,29 @@ func runWithCtxLoader(args []string, stdout, stderr io.Writer, loadCtx ctxHistor
 	_, noColor := os.LookupEnv("NO_COLOR")
 	diagnostics := newDiagnosticWriter(stderr, output.ColorAuto, noColor)
 	kind := strings.ToLower(args[0])
+	if kind == "config" {
+		if len(args) == 2 && strings.EqualFold(args[1], "init") {
+			configDir, err := os.UserConfigDir()
+			if err != nil {
+				diagnostics.errorf("resolve user config directory: %v", err)
+				return 1
+			}
+			path := filepath.Join(configDir, "catsift", "config.yaml")
+			if err := purpose.InitializeConfig(path); err != nil {
+				diagnostics.errorf("initialize config: %v", err)
+				return 1
+			}
+			_, _ = fmt.Fprintf(stdout, "Created %s\nSet session_purpose.enabled: true to enable session purpose classification.\n", path)
+			return 0
+		}
+		if (len(args) == 2 && (args[1] == "--help" || args[1] == "-h")) ||
+			(len(args) == 3 && strings.EqualFold(args[1], "init") && (args[2] == "--help" || args[2] == "-h")) {
+			writeHelp(stdout, "Usage: catsift config init\n\nCreate a YAML configuration file without overwriting an existing one.\n")
+			return 0
+		}
+		diagnostics.errorf("usage: catsift config init")
+		return 2
+	}
 	if kind == "help" || kind == "--help" || kind == "-h" {
 		if kind == "help" && len(args) > 1 {
 			requested := strings.ToLower(args[1])
@@ -1261,6 +1409,28 @@ func runWithCtxLoader(args []string, stdout, stderr io.Writer, loadCtx ctxHistor
 
 	now := time.Now().UTC()
 	cacheDir, _ := cache.DefaultDir()
+	classifyPurposes := false
+	var purposeConfig purpose.Config
+	var purposeBase, purposeAPIKey string
+	if kind == "sessions" || kind == usageExplorerKind {
+		configDir, err := os.UserConfigDir()
+		if err != nil {
+			diagnostics.write("warning", "session purpose classification skipped: cannot locate user config directory")
+		} else {
+			purposeBase = filepath.Join(configDir, "catsift")
+			purposeConfig, err = loadPurposeSettings(configDir)
+			if err != nil {
+				diagnostics.write("warning", "session purpose classification skipped: "+err.Error())
+			} else if purposeConfig.SessionPurpose.Enabled {
+				purposeAPIKey = strings.TrimSpace(os.Getenv("TYPESAFE_API_KEY"))
+				if purposeAPIKey == "" {
+					diagnostics.write("warning", "session purpose is enabled but TYPESAFE_API_KEY is not set; classification skipped")
+				} else {
+					classifyPurposes = true
+				}
+			}
+		}
+	}
 	if *verbose {
 		diagnostics.write("debug", fmt.Sprintf("catsift version: %s", appversion.String()))
 		diagnostics.write("debug", fmt.Sprintf("cache version: %s schema=%d dir=%q", cache.Version, cache.SchemaVersion, cacheDir))
@@ -1279,7 +1449,8 @@ func runWithCtxLoader(args []string, stdout, stderr io.Writer, loadCtx ctxHistor
 	stopProgress = progress.Start(label)
 	loadOptions := historyLoadOptions{
 		Source: selectedSource, Sources: selectedSources, AutoDetect: autoDetectSources,
-		Days: *days, DaysSet: daysSet, From: fromDate, To: toDate, Now: now, CacheDir: cacheDir, Verbose: *verbose, Diagnostics: diagnostics, LoadCtx: loadCtx,
+		RequireUserMessages: classifyPurposes,
+		Days:                *days, DaysSet: daysSet, From: fromDate, To: toDate, Now: now, CacheDir: cacheDir, Verbose: *verbose, Diagnostics: diagnostics, LoadCtx: loadCtx,
 	}
 	var loadErr error
 	history, loadErr = loadSelectedHistory(loadOptions)
@@ -1289,6 +1460,23 @@ func runWithCtxLoader(args []string, stdout, stderr io.Writer, loadCtx ctxHistor
 		return 1
 	}
 	selectedSources = append([]usage.SourceKind(nil), history.Sources...)
+	if classifyPurposes {
+		confirm := func(count int) bool {
+			interactive := tui.IsInteractive(os.Stdin, stdout) && tui.IsInteractive(os.Stdin, stderr)
+			if !interactive {
+				return false
+			}
+			stopProgress()
+			confirmed := confirmPurposeClassification(count, true, os.Stdin, stderr)
+			if confirmed {
+				stopProgress = progress.Start("Classifying session purposes")
+			}
+			return confirmed
+		}
+		if err := applyPurposeClassification(&history.Input, purposeConfig, purposeBase, purposeAPIKey, confirm); err != nil {
+			diagnostics.write("warning", "session purpose classification incomplete: "+err.Error())
+		}
+	}
 	if kind == usageExplorerKind {
 		stopProgress()
 		filter := query.Filter{From: fromDate, To: toDate, Sources: append([]usage.SourceKind(nil), selectedSources...)}
@@ -1312,6 +1500,11 @@ func runWithCtxLoader(args []string, stdout, stderr io.Writer, loadCtx ctxHistor
 			refreshed, err = loadSelectedHistory(loadOptions)
 			if err != nil {
 				return query.Input{}, err
+			}
+			if classifyPurposes {
+				if err := applyPurposeClassification(&refreshed.Input, purposeConfig, purposeBase, purposeAPIKey, nil); err != nil {
+					diagnostics.write("warning", "session purpose classification incomplete: "+err.Error())
+				}
 			}
 			return refreshed.Input, nil
 		}

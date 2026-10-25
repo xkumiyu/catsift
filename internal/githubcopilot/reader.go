@@ -181,7 +181,7 @@ func knownEventType(eventType string) bool {
 	// them so non-usage records do not make otherwise complete statistics look
 	// incomplete; normalize.go intentionally ignores their non-usage payloads.
 	switch strings.ToLower(strings.TrimSpace(eventType)) {
-	case "session.start", "session.shutdown", "session.error", "session.info", "session.model_change",
+	case "session.start", "session.shutdown", "session.error", "session.info", "session.model_change", "session.usage_record",
 		"session.context_changed", "session.usage_checkpoint", "session.compaction_start", "session.compaction_complete",
 		"session.plan_changed", "session.auto_mode_resolved", "session.resume", "session.workspace_file_changed",
 		"system.message", "user.message", "assistant.message", "assistant.usage", "assistant.turn_start", "assistant.turn_end",

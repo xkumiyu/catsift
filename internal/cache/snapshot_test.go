@@ -19,6 +19,7 @@ func TestTurnDTOOmitsPromptPayloadToolArgumentsAndRawSourcePosition(t *testing.T
 	}
 	turn := usage.NewTurn("session", "turn", 1, source)
 	turn.UserPrompts = 1
+	turn.UserMessages = []string{"raw user-only prompt"}
 	turn.ModelTools = []usage.ToolObservation{{
 		SessionID:     "session",
 		TurnID:        "turn",
@@ -46,7 +47,7 @@ func TestTurnDTOOmitsPromptPayloadToolArgumentsAndRawSourcePosition(t *testing.T
 		t.Fatal(err)
 	}
 	serialized := string(data)
-	for _, forbidden := range []string{"private/history.jsonl", "secret", "arguments", "prompt text"} {
+	for _, forbidden := range []string{"private/history.jsonl", "secret", "arguments", "prompt text", "raw user-only prompt"} {
 		if strings.Contains(serialized, forbidden) {
 			t.Fatalf("cache DTO contains %q: %s", forbidden, serialized)
 		}

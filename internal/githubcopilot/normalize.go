@@ -11,7 +11,7 @@ import (
 	"github.com/xkumiyu/catsift/internal/usage"
 )
 
-const ParserVersion = "copilot-normalizer-v6"
+const ParserVersion = "copilot-normalizer-v7"
 
 type IngestResult struct {
 	Turns    []usage.Turn
@@ -103,12 +103,14 @@ func (n *normalizer) consume(event Envelope) {
 		if role := strings.ToLower(firstString(data, "role", "author")); role != "" && role != "user" {
 			return
 		}
-		if valueText(firstValue(data, "content", "text", "message")) == "" {
+		text := valueText(firstValue(data, "content", "text", "message"))
+		if text == "" {
 			return
 		}
 		turn := n.ensureTurn(session, event, turnID(data))
 		n.touchTurn(turn, event.Timestamp, false)
 		turn.turn.UserPrompts++
+		turn.turn.UserMessages = append(turn.turn.UserMessages, text)
 		if !event.Timestamp.IsZero() {
 			turn.turn.UserPromptTimes = append(turn.turn.UserPromptTimes, event.Timestamp)
 		}
@@ -117,7 +119,7 @@ func (n *normalizer) consume(event Envelope) {
 		turn := n.ensureTurn(session, event, turnID(data))
 		n.touchTurn(turn, event.Timestamp, false)
 		n.observeRuntimeTool(turn, event)
-	case "assistant.message", "assistant.usage", "model.message", "model.model_call_started", "model.model_call_success", "model.response", "session.compaction_complete":
+	case "assistant.message", "assistant.usage", "model.message", "model.model_call_started", "model.model_call_success", "model.response", "session.compaction_complete", "session.usage_record":
 		if !n.eventHasObservation(event) {
 			return
 		}

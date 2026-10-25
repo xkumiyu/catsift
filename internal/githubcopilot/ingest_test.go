@@ -137,6 +137,47 @@ func TestLoadCachesCopilotShutdownTokenMetrics(t *testing.T) {
 	}
 }
 
+func TestLoadInvalidatesV6CacheForSessionUsageRecord(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "session-state", "session-a", "events.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := `{"id":"usage-record","timestamp":"2026-01-01T00:00:01Z","type":"session.usage_record","data":{"model":"model-a","usage":{"inputTokens":10,"outputTokens":4}}}` + "\n"
+	if err := os.WriteFile(path, []byte(content), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	files, err := Discover(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope := mustAbs(t, root)
+	revision, err := sourceRevision(scope, files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cacheDir := t.TempDir()
+	warnings := &WarningCollector{}
+	warnings.AddType("unknown_type", "session.usage_record", path, 1)
+	oldSnapshot := snapshotFromResult(IngestResult{Warnings: warnings.Warnings()})
+	if err := cache.New(cacheDir).Write(stringSource(), scope, revision, "copilot-normalizer-v6", oldSnapshot); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"reparsed", "warm"} {
+		result, err := Load(root, IngestOptions{CacheDir: cacheDir})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(result.Warnings) != 0 || len(result.Turns) != 1 || len(result.Turns[0].TokenUsageEvents) != 1 {
+			t.Fatalf("%s result = %#v", name, result)
+		}
+		got := result.Turns[0].TokenUsageEvents[0]
+		if got.Model.Name != "model-a" || got.Usage.TotalTokens != 14 {
+			t.Fatalf("%s token usage = %#v", name, got)
+		}
+	}
+}
+
 func TestLoadInvalidatesCacheWhenSessionFilesChange(t *testing.T) {
 	root := t.TempDir()
 	writeCopilotFixture(t, root, "session-a", false)

@@ -156,6 +156,7 @@ func TestDecodeFileAcceptsCurrentCopilotMetadataEvents(t *testing.T) {
 		`{"id":"event-012","timestamp":"2026-01-02T03:04:16Z","type":"skill.context_delivered_ref","data":{}}`,
 		`{"id":"event-013","timestamp":"2026-01-02T03:04:17Z","type":"session.workspace_file_changed","data":{}}`,
 		`{"id":"event-014","timestamp":"2026-01-02T03:04:18Z","type":"tool.user_requested","data":{}}`,
+		`{"id":"event-015","timestamp":"2026-01-02T03:04:19Z","type":"session.usage_record","data":{"usage":{"inputTokens":1,"outputTokens":2}}}`,
 	}, "\n") + "\n"
 	if err := os.WriteFile(path, []byte(content), 0o640); err != nil {
 		t.Fatal(err)
@@ -166,7 +167,7 @@ func TestDecodeFileAcceptsCurrentCopilotMetadataEvents(t *testing.T) {
 	if err := DecodeFile(path, DecodeOptions{Warnings: warnings}, func(event Envelope) { events = append(events, event) }); err != nil {
 		t.Fatal(err)
 	}
-	if len(events) != 14 || len(warnings.Warnings()) != 0 {
+	if len(events) != 15 || len(warnings.Warnings()) != 0 {
 		t.Fatalf("metadata events = %#v warnings = %#v", events, warnings.Warnings())
 	}
 }

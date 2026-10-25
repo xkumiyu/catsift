@@ -8,7 +8,7 @@ ctxが保持する複数Agentの履歴を、内部DB schemaに依存せず、cat
 
 ### Requirement: ctx履歴を公開された読み取り専用イベント列挙から取得する
 
-`ctx` sourceが選択された場合、システムはctxが提供する公開された読み取り専用の履歴イベント列挙を入力として使用しなければならない（SHALL）。ctxの `usage.sqlite`、検索インデックス、またはその他の内部schemaを統計入力として直接参照してはならず（MUST NOT）、ctxまたはprovider-owned履歴を変更してはならない（MUST NOT）。
+`ctx` sourceが選択された場合、システムはctxが提供する公開された読み取り専用の履歴イベント列挙を入力として使用しなければならない（SHALL）。ctxの `usage.sqlite`、検索インデックス、またはその他の内部schemaを統計入力として直接参照してはならず（MUST NOT）、ctxまたはprovider-owned履歴を変更してはならない（MUST NOT）。履歴内容をnetworkへ送信してはならない（MUST NOT）。ただし、session purpose分類が明示的に有効で`TYPESAFE_API_KEY`が設定されている場合、分類用に抽出したsession titleと実際のuser-authored messageだけをTypeSafe System One互換endpointへ送信してよい。
 
 #### Scenario: ctx sourceを選択する
 
@@ -23,7 +23,7 @@ ctxが保持する複数Agentの履歴を、内部DB schemaに依存せず、cat
 #### Scenario: ctx入力を実行する
 
 - **WHEN** userがctx sourceで任意の統計commandを実行する
-- **THEN** ctxのstorage、provider-owned履歴、および外部networkの状態は実行前後で変化しない
+- **THEN** ctxのstorageとprovider-owned履歴は変化せず、分類が無効またはkey未設定なら外部network通信を行わず、分類を有効にした場合もsession titleと実際のuser-authored messageだけを送信する
 
 ### Requirement: ctxに含まれる複数Agentを履歴scopeへ含める
 

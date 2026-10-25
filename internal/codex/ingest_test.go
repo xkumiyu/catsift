@@ -140,6 +140,9 @@ func TestLoadAssemblesExplicitAndOrdinalTurnsAndFlushesAbort(t *testing.T) {
 		`{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"s","project_path":"/project","cli_version":"1"}}`,
 		`{"timestamp":"2026-01-01T00:00:01Z","type":"task_started","payload":{"turn_id":"turn-a"}}`,
 		`{"timestamp":"2026-01-01T00:00:02Z","type":"event_msg","payload":{"type":"user_message","text":"hello"}}`,
+		`{"timestamp":"2026-01-01T00:00:02.500Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"assistant output"}]}}`,
+		`{"timestamp":"2026-01-01T00:00:02.750Z","type":"event_msg","payload":{"type":"user_message","text":"<skill name=\"review\">injected instructions</skill>"}}`,
+		`{"timestamp":"2026-01-01T00:00:02.875Z","type":"tool_result","payload":{"text":"tool output"}}`,
 		`{"timestamp":"2026-01-01T00:00:03Z","type":"task_complete","payload":{"turn_id":"turn-a"}}`,
 		`{"timestamp":"2026-01-01T00:00:04Z","type":"user_message","payload":{"text":"next"}}`,
 		`{"timestamp":"2026-01-01T00:00:05Z","type":"turn_aborted","payload":{}}`,
@@ -156,6 +159,9 @@ func TestLoadAssemblesExplicitAndOrdinalTurnsAndFlushesAbort(t *testing.T) {
 	}
 	if result.Turns[0].ID != "turn-a" || result.Turns[0].UserPrompts != 1 || result.Turns[1].Ordinal != 2 || !result.Turns[1].Aborted {
 		t.Fatalf("assembled turns = %#v", result.Turns)
+	}
+	if got := result.Turns[0].UserMessages; len(got) != 1 || got[0] != "hello" {
+		t.Fatalf("classification messages = %#v", got)
 	}
 	if len(result.Sessions) != 1 || result.Sessions[0].ProjectPath != "/project" {
 		t.Fatalf("sessions = %#v", result.Sessions)
