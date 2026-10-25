@@ -2789,7 +2789,17 @@ func TestPurposeClassificationVerifiesChangedWindow(t *testing.T) {
 }
 
 func TestPurposeClassificationOpenCodeEvidenceSurvivesCache(t *testing.T) {
-	writeOpenCodeHome(t)
+	root := writeOpenCodeHome(t)
+	database, err := sql.Open("sqlite", filepath.Join(root, "opencode.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO part VALUES (?, ?, ?, ?, ?, ?)`, "p3", "m1", "s1", int64(1_700_000_001_100), int64(1_700_000_001_100), `{"type":"text","text":"inspect the changes"}`); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
 	opts := historyLoadOptions{Source: usage.SourceOpenCode, CacheDir: t.TempDir()}
 	var requests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -2817,9 +2827,109 @@ func TestPurposeClassificationOpenCodeEvidenceSurvivesCache(t *testing.T) {
 		if requests.Load() != 1 || len(history.Purposes) != 1 {
 			t.Fatalf("load %d: requests=%d, purposes=%v", i, requests.Load(), history.Purposes)
 		}
-		if i > 0 && bodyLoads != 0 {
-			t.Fatalf("unchanged cached source reloaded bodies %d times", bodyLoads)
+		if bodyLoads != 0 {
+			t.Fatalf("load %d: complete or unchanged source reloaded bodies %d times", i, bodyLoads)
 		}
+	}
+}
+
+func TestPurposeClassificationSweepVerification(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		messages []string
+		loadErr  error
+		wantMode string
+		wantAPI  int32
+	}{
+		{name: "unchanged", messages: []string{"old message"}, wantMode: "Debug"},
+		{name: "changed", messages: []string{"new message"}, wantMode: "Review", wantAPI: 1},
+		{name: "unavailable", wantMode: "Debug"},
+		{name: "read error", loadErr: fmt.Errorf("synthetic read failure"), wantMode: "Debug"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var requests atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				requests.Add(1)
+				_, _ = w.Write([]byte(`{"answers":{"purpose":{"choice":"review"}}}`))
+			}))
+			defer server.Close()
+			input := purposeClassificationInput(1)
+			input.Turns[0].UserMessages = nil
+			session := input.Sessions[0]
+			key := usage.NewSessionKey(session.Source, session.ID)
+			now := time.Date(2026, 10, 26, 0, 0, 0, 0, time.UTC)
+			old := now.Add(-2 * purposeVerificationInterval)
+			base := t.TempDir()
+			storePath := filepath.Join(base, "purposes.json")
+			if err := purpose.SaveStore(storePath, map[string]purpose.Result{key: {
+				InputFingerprint:    purpose.InputFingerprint(session.Title, []string{"old message"}),
+				TaxonomyFingerprint: purpose.TaxonomyFingerprint(), Version: purpose.Version,
+				ModeID: "debug", ModeName: "Debug", VerifiedAt: old,
+				Evidence: sessionPurposeEvidence(session, 1, nil),
+			}}); err != nil {
+				t.Fatal(err)
+			}
+			err := applyPurposeClassification(&input, purposeClassificationOptions{
+				Config: purpose.Config{SessionPurpose: purpose.SessionPurposeConfig{APIURL: server.URL}}, Base: base, APIKey: "fake-key", Now: now,
+				LoadBodies: func([]usage.Session) (map[string][]string, error) {
+					return map[string][]string{key: tc.messages}, tc.loadErr
+				},
+			})
+			if (err != nil) != (tc.loadErr != nil) {
+				t.Fatalf("error = %v, want load error %v", err, tc.loadErr)
+			}
+			if input.Purposes[key] != tc.wantMode || requests.Load() != tc.wantAPI {
+				t.Fatalf("purposes = %v, requests = %d", input.Purposes, requests.Load())
+			}
+			stored, err := purpose.LoadStore(storePath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantVerified := old
+			if len(tc.messages) > 0 {
+				wantVerified = now
+			}
+			if !stored[key].VerifiedAt.Equal(wantVerified) {
+				t.Fatalf("verified_at = %v, want %v", stored[key].VerifiedAt, wantVerified)
+			}
+		})
+	}
+}
+
+func TestPurposeClassificationContinuesAfterSourceReadError(t *testing.T) {
+	testHome(t)
+	if err := os.WriteFile(filepath.Join(os.Getenv("OPENCODE_HOME"), "opencode.db"), []byte("synthetic invalid database"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	opts := historyLoadOptions{Source: usage.SourceCodex, CacheDir: t.TempDir()}
+	if _, err := loadSelectedHistory(opts); err != nil {
+		t.Fatal(err)
+	}
+	history, err := loadSelectedHistory(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := usage.NewSessionKey(history.Sessions[0].Source, history.Sessions[0].ID)
+	failed := usage.NewSession("failed", usage.SourceRef{Source: usage.SourceOpenCode})
+	history.Sessions = append([]usage.Session{failed}, history.Sessions...)
+	history.Turns = append(history.Turns, usage.Turn{SessionID: failed.ID, Source: failed.Source, UserPrompts: 1})
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		_, _ = w.Write([]byte(`{"answers":{"purpose":{"choice":"debug"}}}`))
+	}))
+	defer server.Close()
+	err = applyPurposeClassification(&history.Input, purposeClassificationOptions{
+		Config: purpose.Config{SessionPurpose: purpose.SessionPurposeConfig{APIURL: server.URL}}, Base: t.TempDir(), APIKey: "fake-key",
+		LoadBodies: func(sessions []usage.Session) (map[string][]string, error) {
+			return loadPurposeMessages(opts, sessions)
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "opencode") {
+		t.Fatalf("error = %v, want OpenCode failure", err)
+	}
+	if requests.Load() != 1 || history.Purposes[key] != "Debug" || len(history.Purposes) != 1 {
+		t.Fatalf("requests = %d, purposes = %v, want surviving source classified", requests.Load(), history.Purposes)
 	}
 }
 

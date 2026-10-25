@@ -239,6 +239,15 @@ func (n *normalizer) finishUserMessage(session *sessionState, message *messageSt
 		turn.turn.UserPrompts++
 		turn.turn.UserPromptTimes = append(turn.turn.UserPromptTimes, message.row.CreatedAt)
 	}
+	var messages []string
+	for _, part := range message.texts {
+		if !onlyInjectedSkill(part.text) {
+			messages = append(messages, part.text)
+		}
+	}
+	if len(messages) > 0 {
+		turn.turn.UserMessages = append(turn.turn.UserMessages, strings.Join(messages, "\n"))
+	}
 	turn.userTexts = append(turn.userTexts, message.texts...)
 	turn.touch(message.row.CreatedAt)
 	n.applyTools(turn, message.tools)
@@ -467,11 +476,6 @@ func (n *normalizer) result() IngestResult {
 	})
 	result := IngestResult{Sessions: sessions, Agents: []string{"opencode"}, Warnings: n.warnings.values()}
 	for _, turn := range turns {
-		for _, text := range turn.userTexts {
-			if !onlyInjectedSkill(text.text) {
-				turn.turn.UserMessages = append(turn.turn.UserMessages, text.text)
-			}
-		}
 		result.Turns = append(result.Turns, turn.turn)
 	}
 	return result

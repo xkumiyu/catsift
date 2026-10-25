@@ -71,6 +71,11 @@ systemは、revision証拠に依存する再利用の見逃しに備え、検証
 - **WHEN** 対象sessionの本文parseまたはfingerprint計算に失敗する
 - **THEN** systemはそのentryの検証時刻を更新せず、次回の実行で再試行する
 
+#### Scenario: 巡回検証の本文を取得できない
+
+- **WHEN** revision証拠が一致する巡回検証対象の本文を取得できない
+- **THEN** systemは保存済み分類をreportに維持し、検証時刻を更新しない
+
 ### Requirement: 分類のための本文parseを再検証対象に限定する
 
 分類が有効な実行は、まずmessage bodyを保存しないingestion cacheからsession一覧を読み込み、再検証対象を決定しなければならない（SHALL）。本文は再検証対象のsessionに限ってsourceからparseし、対象外sessionの本文をparseしてはならない（MUST NOT）。Codexでは対象sessionに対応するfileだけを読み、単一databaseを読むsourceでは対象sessionが存在する場合に限りdatabaseをparseする（SHALL）。parseした本文はingestion cacheへ書き込んではならない（MUST NOT）。
@@ -99,3 +104,13 @@ systemは、revision証拠に依存する再利用の見逃しに備え、検証
 
 - **WHEN** 再検証対象に、本文を取得済みのsessionと本文が不足するsessionが混在する
 - **THEN** systemは本文が不足するsessionだけを本文loaderへ渡す
+
+#### Scenario: OpenCodeのmessageが複数のtext partを持つ
+
+- **WHEN** 1つのuser messageが複数のtext partから構成される
+- **THEN** systemは注入されたSkill本文だけのpartを除外し、残りを1つの分類用messageとして扱い、完全な本文を追加parseしない
+
+#### Scenario: 一部sourceの本文parseに失敗する
+
+- **WHEN** 再検証対象のうち1つのsourceで本文parseに失敗する
+- **THEN** systemは他sourceの分類と結果保存を継続し、失敗をwarningとして通知する

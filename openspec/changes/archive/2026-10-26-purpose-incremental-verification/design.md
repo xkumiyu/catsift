@@ -9,6 +9,10 @@
 
 cache missで判定相が本文を取得済みの場合は、その本文を再利用する。session内の各turnでmessage数と選択済みprompt数が一致する場合だけ取得済み本文を完全とみなす。本文を持たないturnや、期間filter後のprompt数と未filterのmessage数が異なるturnを含むsessionだけを本文相で読み直す。
 
+OpenCodeでは、1つのuser messageに属するtext partから注入されたSkill本文だけのpartを除外し、残りを改行で結合して1つの分類用messageとする。Skill evidenceの検出では元のpart単位の情報を維持する。既存storeの複数partのfingerprintとは異なるため、次回の再検証時に1回再分類される場合がある。ingestion cacheの保存内容は変わらない。
+
+本文相ではsourceごとの失敗を集約し、他sourceの分類と保存は継続する。巡回検証で本文を取得できない場合は、revision証拠が一致する保存済み分類をreportに維持し、検証時刻を進めず次回に再試行する。
+
 `RequireUserMessages`によるcache bypassは廃止する。分類のために全履歴の本文を最初から読み込む必要がなくなるためである。
 
 ## revision証拠

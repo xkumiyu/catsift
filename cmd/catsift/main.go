@@ -950,6 +950,7 @@ func applyPurposeClassification(input *query.Input, options purposeClassificatio
 	}
 	plans = append(plans, sweep...)
 
+	var bodyLoadErr error
 	if len(plans) > 0 && options.LoadBodies != nil {
 		sessions := make([]usage.Session, 0, len(plans))
 		for _, item := range plans {
@@ -960,7 +961,7 @@ func applyPurposeClassification(input *query.Input, options purposeClassificatio
 		if len(sessions) > 0 {
 			loaded, loadErr := options.LoadBodies(sessions)
 			if loadErr != nil {
-				return fmt.Errorf("read session purpose input: %w", loadErr)
+				bodyLoadErr = fmt.Errorf("read session purpose input: %w", loadErr)
 			}
 			for _, session := range sessions {
 				key := usage.NewSessionKey(session.Source, session.ID)
@@ -971,11 +972,11 @@ func applyPurposeClassification(input *query.Input, options purposeClassificatio
 
 	pending := make([]purposeCandidate, 0, len(plans))
 	for _, item := range plans {
-		delete(input.Purposes, item.key)
 		messages := messagesBySession[item.key]
 		if purpose.Input("", messages) == "" {
 			continue
 		}
+		delete(input.Purposes, item.key)
 		if !item.classify && item.exists && purpose.Current(item.cached, item.session.Title, messages) {
 			item.cached.VerifiedAt = now
 			item.cached.Evidence = item.evidence
@@ -1037,9 +1038,9 @@ func applyPurposeClassification(input *query.Input, options purposeClassificatio
 		}
 	}
 	if failed > 0 {
-		return fmt.Errorf("classification failed for %d session(s)", failed)
+		return errors.Join(bodyLoadErr, fmt.Errorf("classification failed for %d session(s)", failed))
 	}
-	return nil
+	return bodyLoadErr
 }
 
 // sessionPurposeEvidence describes local metadata used to decide whether a
@@ -1076,6 +1077,7 @@ func loadPurposeMessages(options historyLoadOptions, sessions []usage.Session) (
 		bySource[source] = append(bySource[source], session)
 	}
 	messages := make(map[string][]string)
+	var loadErrors []error
 	for _, source := range order {
 		sourceOptions := options
 		sourceOptions.Source = source
@@ -1089,14 +1091,15 @@ func loadPurposeMessages(options historyLoadOptions, sessions []usage.Session) (
 		}
 		history, err := loadHistory(sourceOptions)
 		if err != nil {
-			return nil, err
+			loadErrors = append(loadErrors, fmt.Errorf("%s: %w", source, err))
+			continue
 		}
 		for _, turn := range history.Turns {
 			key := usage.NewSessionKey(turn.Source, turn.SessionID)
 			messages[key] = append(messages[key], turn.UserMessages...)
 		}
 	}
-	return messages, nil
+	return messages, errors.Join(loadErrors...)
 }
 
 func purposeCodexFiles(sessions []usage.Session) ([]string, bool) {
