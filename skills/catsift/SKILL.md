@@ -1,6 +1,6 @@
 ---
 name: catsift
-description: Analyze local coding-agent usage with CatSift when a request concerns activity, models, tools, skills, sessions, tokens, or unused skills. Prefer its sanitized JSON reports over reading raw agent history.
+description: Analyze local coding-agent usage with CatSift when a request concerns activity, models, tools, skills, sessions, tokens, or unused skills, and create local report artifacts when explicitly requested. Prefer its sanitized JSON reports over reading raw agent history.
 ---
 
 # CatSift
@@ -24,6 +24,10 @@ bodies.
 - Record the returned `source`/`sources` and `period` in any summary. An empty
   result means no records were available in the selected scope; it does not
   prove that the agent was never used.
+- Do not classify history through custom HTTP requests or a third-party SDK.
+  Running CatSift commands is allowed, including classification performed by
+  CatSift under its existing settings. Do not enable or change classification
+  settings yourself.
 
 ## Commands
 
@@ -76,5 +80,23 @@ Use common options as needed:
   alongside conclusions. Do not silently turn unavailable data into zeros.
 - Session purpose labels appear as the `purpose` field on session summaries and
   details only when session purpose classification is opted in via
-  configuration. Treat missing or partial labels as a limitation and never
-  infer labels from raw session content.
+  configuration. Treat labels as descriptive metadata, not proof of intent or
+  outcome. Disclose missing or partial labels and never infer replacements
+  from raw session content.
+- Connect substantive insights to observations, interpretations, evidence
+  limits, and useful next questions. Correlation and activity volume alone do
+  not establish causality or productivity.
+
+## Report artifacts
+
+Answer ordinary analysis, reporting, and status requests in the conversation.
+Create a standalone report file only when the user explicitly asks to create
+a report artifact. Interpret intent in context rather than matching a fixed
+phrase; the request need not name CatSift or a command.
+
+For an explicitly requested artifact, default to self-contained HTML unless
+the user specifies another format. Keep the report local and honor the user's
+scope and audience. Include selected sources and period, relevant warnings,
+evidence for insights, limits, and useful next questions. Keep detail
+proportional to the request and never include raw prompts, commands, tool
+arguments, or Skill bodies.
