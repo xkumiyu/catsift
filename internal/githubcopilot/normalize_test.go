@@ -240,6 +240,28 @@ func TestNormalizeReadsAssistantUsageAliases(t *testing.T) {
 	}
 }
 
+func TestNormalizeReadsSessionUsageRecord(t *testing.T) {
+	result := Normalize([]Envelope{
+		testEvent("session-a", "usage-record", "session.usage_record", time.Unix(2, 0), map[string]any{
+			"model": "model-a",
+			"usage": map[string]any{"inputTokens": 10, "outputTokens": 4},
+		}),
+	})
+
+	if len(result.Turns) != 1 || len(result.Turns[0].TokenUsageEvents) != 1 {
+		t.Fatalf("session usage record = %#v", result.Turns)
+	}
+	got := result.Turns[0].TokenUsageEvents[0]
+	if got.Model.Name != "model-a" || got.Usage.InputTokens != 10 || got.Usage.OutputTokens != 4 || got.Usage.TotalTokens != 14 {
+		t.Fatalf("session usage record token usage = %#v", got)
+	}
+
+	ignored := Normalize([]Envelope{testEvent("session-b", "metadata-only", "session.usage_record", time.Unix(3, 0), map[string]any{"kind": "checkpoint"})})
+	if len(ignored.Turns) != 0 {
+		t.Fatalf("unrecognized session usage record created a turn: %#v", ignored.Turns)
+	}
+}
+
 func TestNormalizeKeepsShutdownTokenMetricsWithoutTurnEvents(t *testing.T) {
 	result := Normalize([]Envelope{
 		testEvent("session-a", "shutdown", "session.shutdown", time.Unix(3, 0), map[string]any{
