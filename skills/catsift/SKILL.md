@@ -1,6 +1,6 @@
 ---
 name: catsift
-description: Analyze local coding-agent usage with CatSift when a request concerns activity, models, tools, skills, sessions, tokens, or unused skills. Prefer its sanitized JSON reports over reading raw agent history.
+description: Analyze local coding-agent usage with CatSift when a request concerns activity, models, tools, skills, sessions, tokens, or unused skills, and create local report artifacts when explicitly requested. Prefer its sanitized JSON reports over reading raw agent history.
 ---
 
 # CatSift
@@ -13,7 +13,11 @@ bodies.
 ## Invocation
 
 - Prefer the installed `catsift` executable. In a non-interactive agent session,
-  use a CLI subcommand with `--json`; do not launch the default TUI.
+  use a CLI subcommand, which emits JSON by default in v0.6.0. Running `catsift`
+  without arguments launches the interactive TUI.
+- Omit `--json`: it is a compatibility flag that warns on stderr only when
+  explicitly supplied that it is unnecessary and will be removed in v0.7.0.
+  Even `--json=false` still emits JSON.
 - If `catsift` is unavailable, report that it must be installed. Use
   `npx --yes catsift` only when the user has authorized fetching a package.
 - Capture and parse stdout as JSON. Treat stderr diagnostics and a non-zero exit
@@ -24,22 +28,26 @@ bodies.
 - Record the returned `source`/`sources` and `period` in any summary. An empty
   result means no records were available in the selected scope; it does not
   prove that the agent was never used.
+- Do not classify history through custom HTTP requests or a third-party SDK.
+  Running CatSift commands is allowed, including classification performed by
+  CatSift under its existing settings. Do not enable or change classification
+  settings yourself.
 
 ## Commands
 
 Choose the narrowest report that answers the question:
 
 ```sh
-catsift stats --json                                      # overall totals
-catsift activity --from 2026-01-01 --to 2026-01-31 --json # daily activity
-catsift models --json                                    # model totals
-catsift models detail PROVIDER/NAME --json               # one model
-catsift tools --layer effective --json                   # effective tool totals
-catsift skills --json                                    # skill usage and evidence
-catsift skills detail NAME --json                        # one skill
-catsift skills --unused --json                           # installed but unused skills
-catsift sessions --json                                  # sessions and metadata
-catsift sessions detail ID --json                        # one session and turns
+catsift stats                                         # overall totals
+catsift activity --from 2026-01-01 --to 2026-01-31       # daily activity
+catsift models                                        # model totals
+catsift models detail PROVIDER/NAME                    # one model
+catsift tools --layer effective                        # effective tool totals
+catsift skills                                        # skill usage and evidence
+catsift skills detail NAME                            # one skill
+catsift skills --unused                               # installed but unused skills
+catsift sessions                                      # sessions and metadata
+catsift sessions detail ID                            # one session and turns
 ```
 
 Use common options as needed:
@@ -74,3 +82,32 @@ Use common options as needed:
   user's question; never reproduce raw history content.
 - Surface source-load warnings, missing sources, and mixed-source limitations
   alongside conclusions. Do not silently turn unavailable data into zeros.
+- Session purpose labels appear as the `purpose` field on session summaries and
+  details only when session purpose classification is opted in via
+  configuration. Treat labels as descriptive metadata, not proof of intent or
+  outcome. Disclose missing or partial labels and never infer replacements
+  from raw session content.
+- Connect substantive insights to observations, interpretations, evidence
+  limits, and useful next questions. Correlation and activity volume alone do
+  not establish causality or productivity.
+
+## Report artifacts
+
+Answer ordinary analysis, reporting, and status requests in the conversation.
+Create a standalone report file only when the user explicitly asks to create
+a report artifact. Interpret intent in context rather than matching a fixed
+phrase; the request need not name CatSift or a command.
+
+For an explicitly requested artifact, default to self-contained HTML unless
+the user specifies another format. Keep the report local and honor the user's
+scope and audience. Include selected sources and period, relevant warnings,
+evidence for insights, limits, and useful next questions. Keep detail
+proportional to the request and never include raw prompts, commands, tool
+arguments, or Skill bodies.
+
+Display large counts, including tokens, with base-1,000 suffixes (K, M, B, T,
+and higher as needed), at most one decimal place, and no trailing `.0`
+(e.g. `702,945,673` becomes `702.9M`). Keep counts below 1,000 as integers
+and state the unit convention. Keep exact values for calculations and make
+them available on request or through HTML tooltips; honor requests for exact
+figures in the report itself.
