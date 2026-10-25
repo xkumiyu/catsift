@@ -13,7 +13,11 @@ bodies.
 ## Invocation
 
 - Prefer the installed `catsift` executable. In a non-interactive agent session,
-  use a CLI subcommand with `--json`; do not launch the default TUI.
+  use a CLI subcommand, which emits JSON by default in v0.6.0. Running `catsift`
+  without arguments launches the interactive TUI.
+- Omit `--json`: it is a compatibility flag that warns on stderr only when
+  explicitly supplied that it is unnecessary and will be removed in v0.7.0.
+  Even `--json=false` still emits JSON.
 - If `catsift` is unavailable, report that it must be installed. Use
   `npx --yes catsift` only when the user has authorized fetching a package.
 - Capture and parse stdout as JSON. Treat stderr diagnostics and a non-zero exit
@@ -34,16 +38,16 @@ bodies.
 Choose the narrowest report that answers the question:
 
 ```sh
-catsift stats --json                                      # overall totals
-catsift activity --from 2026-01-01 --to 2026-01-31 --json # daily activity
-catsift models --json                                    # model totals
-catsift models detail PROVIDER/NAME --json               # one model
-catsift tools --layer effective --json                   # effective tool totals
-catsift skills --json                                    # skill usage and evidence
-catsift skills detail NAME --json                        # one skill
-catsift skills --unused --json                           # installed but unused skills
-catsift sessions --json                                  # sessions and metadata
-catsift sessions detail ID --json                        # one session and turns
+catsift stats                                         # overall totals
+catsift activity --from 2026-01-01 --to 2026-01-31       # daily activity
+catsift models                                        # model totals
+catsift models detail PROVIDER/NAME                    # one model
+catsift tools --layer effective                        # effective tool totals
+catsift skills                                        # skill usage and evidence
+catsift skills detail NAME                            # one skill
+catsift skills --unused                               # installed but unused skills
+catsift sessions                                      # sessions and metadata
+catsift sessions detail ID                            # one session and turns
 ```
 
 Use common options as needed:
