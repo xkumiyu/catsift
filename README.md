@@ -59,7 +59,7 @@ Explore local agent usage with the following views:
 | Overview | Usage totals, recent activity, recent sessions, and top skills/models |
 | Activity | Daily or monthly activity |
 | Models | Token usage by provider and model, with related sessions |
-| Skills | [Skill usage](#skill-usage-fields), evidence state, and related sessions |
+| Skills | [Skill usage](#skill-usage-fields), evidence state, related sessions, and installed skills unobserved in selected history |
 | Sessions | Session metadata and chronological turn details |
 
 Filter usage by period or keywords and sort lists. Press `?` inside the TUI for details.
@@ -106,95 +106,21 @@ Run a subcommand to execute CatSift in CLI mode.
 
 Use a command's `detail` subcommand to view one model, skill, or session.
 
-Use `--json` to emit machine-readable output.
-
 See each command's `--help` output for details.
-
-### Usage overview
-
-```sh
-catsift stats
-```
-
-```text
-USAGE OVERVIEW
-Source: Codex (~/.codex), OpenCode (~/.local/share/opencode)
-Agents: Codex, OpenCode
-Period: 2026-01-01 to 2026-01-31
-
-Activity
-  Sessions                    123
-  Turns                       456
-  User Prompts                789
-  Tool Calls                   42
-
-Skill Usage
-  By turn                       9
-  By session                    6
-
-Token Usage
-  Total Tokens                3.16B
-    Input Tokens              3.14B
-      Cached Tokens           3.06B
-    Output Tokens             13.3M
-      Reasoning Tokens        6.40M
-```
-
-`Period` shows the date range of data included in the aggregation.
-
-For ctx sources, token usage is not available.
 
 ### Skill usage
 
-```sh
-catsift skills --view mode
-```
-
-```text
-SKILL USAGE
-Source: Codex (~/.codex), OpenCode (~/.local/share/opencode)
-Agents: Codex, OpenCode
-Period: 2026-01-01 to 2026-01-31
-Group by: turn
-Strict: false
-View: mode
-
-Skill                       Explicit  Implicit  Unknown  Total
-──────────────────────────────────────────────────────────────
-code-review                       5         1        0      6
-openspec-apply-change             2         1        0      3
-
-2 skills, 9 uses total
-```
-
-### Skill command options
-
-#### Skill usage view
-
-Choose the Skill usage view with `--view`:
+Use `--group-by` to aggregate by turn or session, and `--strict` to include only confirmed usage.
 
 ```sh
-catsift skills --view compact  # Total only
-catsift skills --view mode     # Activation mode
-catsift skills --view state    # Evidence state
-catsift skills --view all      # Both tables
-```
-
-The default `--view auto` selects `compact`, `mode`, or `all` from the terminal width.
-
-Use `--group-by` to group usage by turn or session, and `--strict` to include
-only `Confirmed` usage.
-
-Use `skills detail NAME` to show one Skill's deduplicated detail and related sessions:
-
-```sh
+catsift skills --group-by session --strict
 catsift skills detail review
 ```
 
 #### Unused skills
 
-Use `--unused` with `skills` to compare the selected history source with the
-installed skill inventory:
+Use the TUI Skills view or `catsift skills --unused` to find installed skills
+unobserved in the selected history.
 
 ```sh
 catsift skills --unused
@@ -238,6 +164,6 @@ CatSift reads selected history from Codex, GitHub Copilot CLI, OpenCode, or ctx.
 All inputs are read-only. History remains local unless optional purpose
 classification is enabled, in which case session titles and user-authored
 messages are sent to TypeSafe System One.
-`skills --unused` also reads the installed skill inventory. The TUI and reports
+The TUI and `skills --unused` also read the installed skill inventory. The TUI and reports
 exclude prompt text, command text, Tool arguments, Skill bodies, provider
 payloads, and other raw event details.

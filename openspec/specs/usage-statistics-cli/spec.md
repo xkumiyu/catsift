@@ -7,40 +7,40 @@ Codexのsession・user prompt・Tool・Skill利用を、system logではなく�
 ## Requirements
 
 ### Requirement: overview統計を表示する
-`catsift stats` は内容を示す `USAGE OVERVIEW` headingに続けて、入力source、対象Agent一覧、および期間をlabel付きcontext行として表示し、Sessions、Turns、User Prompts、Tool Calls、Skill Uses (turn)、およびSkill Uses (session)を視覚的に区切られたsummaryとして表示しなければならない（SHALL）。ctx sourceで複数Agentが対象になる場合、6つの集計値は選択scope内の全Agentを合算しなければならない（SHALL）。グローバルな実行ファイル名または製品名だけのtitle（例: `CatSift`、`catsift stats`）をreportのheadingとして表示してはならない（MUST NOT）。Tool Callsはeffective Tool view、Skill Uses (turn)はturn単位、Skill Uses (session)はsession単位で重複排除した全確認状態の利用を使用しなければならない（SHALL）。`stats` はSkill groupingを単一選択する `--group-by` optionを受け付けてはならない（MUST NOT）。
+`catsift stats` は入力source、対象Agent一覧、実際の対象期間、およびSessions、Turns、User Prompts、Tool Calls、Skill Uses (turn)、Skill Uses (session)を既存JSON fieldへ出力しなければならない（SHALL）。ctx sourceで複数Agentが対象になる場合、6つの集計値は選択scope内の全Agentを合算しなければならない（SHALL）。stdoutへtext headingを追加してはならない（MUST NOT）。Tool Callsはeffective Tool view、Skill Uses (turn)はturn単位、Skill Uses (session)はsession単位で重複排除した全確認状態の利用を使用しなければならない（SHALL）。`stats` はSkill groupingを単一選択する `--group-by` optionを受け付けてはならない（MUST NOT）。
 
 #### Scenario: 履歴が存在する
 
 - **WHEN** userが有効なCodex履歴に対して `catsift stats` を実行する
-- **THEN** システムは `USAGE OVERVIEW` heading、`Source: Codex (~/.codex)`、`Agents: Codex`、対象期間、および6つの集計値を既定のhuman-readable report形式でstdoutへ出力する
+- **THEN** システムはCodexのsource・agents、対象期間、および6つの集計値を既定のJSON形式でstdoutへ出力する
 
 #### Scenario: ctx sourceに複数Agentの履歴が存在する
 
 - **WHEN** userが `catsift stats --source ctx` を実行し、ctxの選択scopeにCodexとOpenCodeの履歴がある
-- **THEN** システムは `Agents: Codex, OpenCode` を表示し、両AgentのSessions、Turns、User Prompts、Tool Calls、Skill Uses (turn)、およびSkill Uses (session)を合算して出力する
+- **THEN** システムは canonical agentsをJSONに含め、両AgentのSessions、Turns、User Prompts、Tool Calls、Skill Uses (turn)、およびSkill Uses (session)を合算して出力する
 
 #### Scenario: 対象履歴が空である
 
 - **WHEN** 読取対象に有効な利用Eventが存在しない
-- **THEN** システムは `USAGE OVERVIEW` headingと対象Agent・選択期間のcontextを表示し、各集計値を0として出力するとともに、選択期間に利用がないことを説明するempty-state messageを表示して0で終了する
+- **THEN** システムは対象source・AgentとperiodをJSONで表示し、各集計値を0として出力して0で終了する
 
 ### Requirement: Tool統計を表示する
-`catsift tools` は `TOOL USAGE` headingに続けて、入力source、対象Agent一覧、選択中の期間、およびlayerをそれぞれlabel付きのcontext行として表示し、canonical Tool名ごとのCalls、Failures、およびLast Usedを見出し付きtableとして表示しなければならない（SHALL）。ctx sourceで複数Agentが対象になる場合、同じcanonical Tool名の観測はAgentをまたいで合算しなければならない（SHALL）。footerは対象Tool数と総Callsをdomain用語で表示し、`Rows`という実装用語や中点区切りを使用してはならない（MUST NOT）。既定ではeffective layerを集計し、`--layer effective|runtime|model` により集計layerを選択できなければならない（SHALL）。
+`catsift tools` は入力source、対象Agent一覧、対象期間、layer、およびcanonical Tool名ごとのCalls、Failures、Last Usedを既存JSON fieldへ出力しなければならない（SHALL）。ctx sourceで複数Agentが対象になる場合、同じcanonical Tool名の観測はAgentをまたいで合算しなければならない（SHALL）。text footerを出力してはならない（MUST NOT）。既定ではeffective layerを集計し、`--layer effective|runtime|model` により集計layerを選択できなければならない（SHALL）。
 
 #### Scenario: 既定のTool統計を表示する
 
 - **WHEN** userがlayer指定なしで `catsift tools` を実行する
-- **THEN** システムは `TOOL USAGE` heading、Source・Agents・Period・Layerのcontext、effective Tool利用をCalls降順、同数の場合はTool名昇順で出力する
+- **THEN** システムは Source・Agents・Period・LayerのJSON context、effective Tool利用をCalls降順、同数の場合はTool名昇順で出力する
 
 #### Scenario: 複数Agentの同じcanonical Toolを合算する
 
 - **WHEN** ctxのCodexとOpenCodeがそれぞれcanonical Tool `shell` を利用している
-- **THEN** システムはTool tableに `shell` を1rowだけ出力し、CallsとFailuresを両Agent分合算する
+- **THEN** システムはJSON rowsに `shell` を1rowだけ出力し、CallsとFailuresを両Agent分合算する
 
 #### Scenario: Tool footerを表示する
 
-- **WHEN** userが対象Toolのあるhuman-readable `catsift tools` reportを表示する
-- **THEN** システムはfooterに `N tools, M calls total` 相当の、対象Tool数と総Callsが分かる表現を表示する。1件の場合は `tool` と `call`、0件の場合は `tools` と `calls` のように自然な単数・複数形を使用する
+- **WHEN** userが対象Toolのある`catsift tools` reportを表示する
+- **THEN** システムはtext footerを出力せず、JSON rowsのCallsとFailuresを保持する
 
 #### Scenario: model layerを指定する
 
@@ -53,22 +53,22 @@ Codexのsession・user prompt・Tool・Skill利用を、system logではなく�
 - **THEN** システムは引数errorをstderrへ出力し、非0の終了codeを返す
 
 ### Requirement: Skill統計を表示する
-`catsift skills` は `SKILL USAGE` headingに続けて、入力source、対象Agent一覧、選択中の期間、grouping、およびstrict状態をそれぞれlabel付きのcontext行として表示し、Skill名ごとのExplicit、Implicit、Confirmed、Inferred、Unconfirmed、Total、およびLast Usedを集計しなければならない（SHALL）。ctx sourceで複数Agentが対象になる場合、同じcanonical Skill名の利用はAgentをまたいで合算しなければならない（SHALL）。human-readable reportは利用可能な幅に応じて内訳columnを調整できるが、Skill名とTotalを常に表示しなければならない（SHALL）。footerは対象Skill数と総Usesをdomain用語で表示し、`Rows`という実装用語や中点区切りを使用してはならない（MUST NOT）。JSONはすべての集計fieldを保持しなければならない（SHALL）。`--strict` が指定された場合はstateが `confirmed` の利用だけをTotalと各mode集計の対象にしなければならない（SHALL）。
+`catsift skills` は入力source、対象Agent一覧、対象期間、grouping、およびstrict状態をJSON contextへ含め、Skill名ごとのExplicit、Implicit、Confirmed、Inferred、Unconfirmed、Total、およびLast Usedを集計しなければならない（SHALL）。ctx sourceで複数Agentが対象になる場合、同じcanonical Skill名の利用はAgentをまたいで合算しなければならない（SHALL）。text heading・table・footerをstdoutへ追加してはならない（MUST NOT）。JSONはすべての集計fieldを保持しなければならない（SHALL）。`--strict` が指定された場合はstateが `confirmed` の利用だけをTotalと各mode集計の対象にしなければならない（SHALL）。
 
 #### Scenario: 全Skill観測を表示する
 
 - **WHEN** userが `catsift skills` を実行する
-- **THEN** システムは `SKILL USAGE` heading、Source・Agents・Period・Group by・Strictのcontext、全確認状態のSkill利用をTotal降順、同数の場合はSkill名昇順で出力する
+- **THEN** システムは Source・Agents・Period・Group by・StrictのJSON context、全確認状態のSkill利用をTotal降順、同数の場合はSkill名昇順で出力する
 
 #### Scenario: 複数Agentの同じSkillを合算する
 
 - **WHEN** ctxのCodexとOpenCodeが同じcanonical Skill `review` を利用している
-- **THEN** システムはSkill tableに `review` を1rowだけ出力し、Agentをまたぐ利用を合算する
+- **THEN** システムはJSON rowsに `review` を1rowだけ出力し、Agentをまたぐ利用を合算する
 
 #### Scenario: Skill footerを表示する
 
-- **WHEN** userが対象Skillのあるhuman-readable `catsift skills` reportを表示する
-- **THEN** システムはfooterに `N skills, M uses total` 相当の、対象Skill数と総Usesが分かる表現を表示する。1件の場合は `skill` と `use`、0件の場合は `skills` と `uses` のように自然な単数・複数形を使用する
+- **WHEN** userが対象Skillのある`catsift skills` reportを表示する
+- **THEN** システムはtext footerを出力せず、JSON rowsの全集計fieldを保持する
 
 #### Scenario: strict modeを使用する
 
@@ -115,91 +115,67 @@ Codexのsession・user prompt・Tool・Skill利用を、system logではなく�
 - **THEN** システムはGitHub Copilot eventのcutoff以後の観測だけからSkill統計を生成する
 
 ### Requirement: human-readable report・JSONを提供する
-各統計commandは既定で、report内容を示すheading、入力source、対象Agent一覧、適用中のfilterをlabel付きcontext行、明確なsectionまたはcolumn heading、整列した値、および必要なfooterを持つhuman-readable static reportを出力しなければならない（SHALL）。human-readable reportの`Source`はsourceのdisplay nameと、取得できる場合は有効なsource pathを括弧内へ表示しなければならない（SHALL）。source pathを表示する場合は`Source`行へ含め、別の`History`または`Data root` context行を追加してはならない（MUST NOT）。複数Agentの表示はcanonical IDの決定的な順序に対応するdisplay nameをcomma区切りで示し、context行を中点で連結してはならない（MUST NOT）。countは桁区切りして右揃えにし、tableのLast Usedはtimezoneを含む簡潔なlocal日時で表示しなければならない（SHALL）。`--json`でmachine-readable出力へ切り替えられなければならず（SHALL）、JSONはhuman-readable reportと同じfilter・集計結果を表し、`source`とcanonical Agent IDの`agents` arrayを含まなければならない（SHALL）。既存の`agent` string fieldは後方互換のため保持し、単一Agentでは従来の値、複数Agentではcanonical IDを決定的順序でcomma区切りした値を格納しなければならない（SHALL）。JSONのfield順、timestamp形式、およびwarningをstdoutへ混入させない規則を維持しなければならない（SHALL）。
 
-`Period`は`last`、`from`、`through`などのoption入力をそのまま表示せず、実際に集計へ含まれたレコードの最初の日から最後の日までを、常に`YYYY-MM-DD to YYYY-MM-DD`形式で表示しなければならない（SHALL）。対象レコードがない場合は`no data`と表示しなければならない（SHALL）。
-
-指定された期間が実際に利用データの存在する期間と一致しない場合、human-readable reportは`info:`メッセージでその不一致を説明しなければならない（SHALL）。指定期間に利用がない場合も、empty-state messageを`info: No usage found for the selected period.`として表示しなければならない（SHALL）。これは入力errorやデータ欠損を示すwarningではない（MUST NOT）。
-
-Token usageをhuman-readable reportへ表示する場合、`Total Tokens`を親として`Input Tokens`と`Output Tokens`を階層表示し、`Cached Tokens`および非zeroの`Cache Write Input Tokens`をInputの内訳、`Reasoning Tokens`をOutputの内訳として表示しなければならない（SHALL）。token数は読みやすい`K`、`M`、`B`などのcompact表記を使用し、zeroの`Cache Write Input Tokens`はhuman-readable reportへ表示してはならない（MUST NOT）。JSONでは既存のtoken usage fieldと正確な値を保持しなければならない（SHALL）。
+すべてのreport subcommand（stats/activity/models/tools/skills/sessions、unusedとdetailを含む）は既定で単独のJSON documentをstdoutへ出力しなければならない（SHALL）。static human report modeは提供してはならない（MUST NOT）。既存のJSON schema、field順、集計、filter、timestamp、warningと終了codeの規則を維持しなければならない（SHALL）。`agent`互換fieldとcanonical `agents` arrayを維持し、periodは実際の最初と最後の日付（YYYY-MM-DD to YYYY-MM-DD）、空ならno dataとし、token usageは正確な数値を保持しなければならない（SHALL）。人向けの探索は引数なしのTUIを使用しなければならない（SHALL）。
 
 #### Scenario: 既定reportを表示する
+- **WHEN** userが任意のreportまたはdetailを出力形式指定なしで実行する
+- **THEN** stdoutは有効なJSONだけを含み、既存のsource、agents、periodおよび集計fieldを保持する
 
-- **WHEN** userが出力形式を指定せず任意の統計commandを実行する
-- **THEN** システムはreport内容を示すheading、入力source、対象Agentとfilterのcontext、指標名と値の関係を一読できるsummaryまたはtable、およびdomain用語で表現されたfooterを持つstatic reportをstdoutへ出力する
+#### Scenario: 診断とJSONを分離する
+- **WHEN** warningやstrict-inputによる失敗が発生する
+- **THEN** reportのJSONをstdoutへ出力し、診断はstderrへ出力する
 
 #### Scenario: contextを読みやすく表示する
-
-- **WHEN** userが `catsift tools` または `catsift skills` を実行する
-- **THEN** システムは `Source: ...`、`Agents: ...`、`Period: ...`、およびcommand固有のfilterを別々のlabel付き行へ出力し、項目間の区切りに中点や実装用の`Rows`を使用しない
+- **WHEN** reportを実行する
+- **THEN** contextはhuman labelでなくJSON fieldとして保持する
 
 #### Scenario: 複数Agentのhuman-readable reportを表示する
-
-- **WHEN** ctx sourceのscopeにCodexとOpenCodeが含まれる
-- **THEN** システムは `Source: ctx` と `Agents: Codex, OpenCode` を別々のcontext行へ出力する
+- **WHEN** 複数Agentのreportを実行する
+- **THEN** static human modeは提供せず、agentsをJSONに含める
 
 #### Scenario: OpenCode sourceのhuman-readable reportを表示する
-
-- **WHEN** userが`catsift stats --source opencode`を実行する
-- **THEN** システムは`Source: OpenCode`、有効なdata root、`Agents: OpenCode`、対象期間、およびOpenCodeから集計した値を表示する
+- **WHEN** OpenCodeのreportを実行する
+- **THEN** static human modeは提供せず、sourceをJSONに含める
 
 #### Scenario: JSONを出力する
-
-- **WHEN** userが任意の統計commandへ `--json` を指定する
-- **THEN** stdout全体は単独の有効なJSON documentとなり、`source`、`agents`、既存の集計fieldを含み、warningや進捗messageを含まない
+- **WHEN** reportを実行する
+- **THEN** 追加flagなしでJSONを出力する
 
 #### Scenario: token usageを階層とcompact表記で表示する
-
-- **WHEN** provider token usageが利用可能な`stats` reportをhuman-readable modeで表示し、cache writeがzeroである
-- **THEN** システムは`Total Tokens`、Input/Output、および各内訳を階層表示し、token数をcompact表記で出力し、`Cache Write Input Tokens`を表示しない。`--json`では正確なtoken usage fieldを保持する
+- **WHEN** token usageのあるreportを実行する
+- **THEN** JSONの正確な数値を維持し、compact human表記はTUIで扱う
 
 ### Requirement: terminal capabilityに応じて安全に装飾する
-既定の `--color auto` では、システムはstdoutがTTYであり `NO_COLOR` が設定されていない場合だけhuman-readable reportへANSI styleを適用しなければならない（SHALL）。`--color always` は明示的にstyleを有効化し、`--color never` は無効化しなければならず、この2つの強制modeは `NO_COLOR` より優先しなければならない（SHALL）。JSONにはoptionやterminal状態にかかわらずANSI escape sequenceを含めてはならない（MUST NOT）。色は補助表現に限り、label、text、数値、または配置なしに意味を伝えてはならない（MUST NOT）。colorが有効なhuman-readable reportでは、report headingを共通のaccent styleで目立たせ、table headerをheadingと区別できるstyleで表示しなければならない（SHALL）。通常のlabel・table row・count・Failures・Skillのevidence status値は既定色を基本とし、table cellをerror colorやwarning colorで強調してはならない（MUST NOT）。通常状態を示すためだけの一律なsuccess colorを全rowへ適用してはならない（MUST NOT）。
+
+JSON reportと診断はTTY、NO_COLOR、`--color`の値にかかわらずANSIを含んではならない（MUST NOT）。`--color auto|always|never`はvalidation付きの互換optionとして受け付けなければならない（SHALL）。TUIの装飾は既存のTUI規則に従わなければならない（SHALL）。
 
 #### Scenario: TTYへ既定reportを出力する
-
-- **WHEN** stdoutがcolor対応TTYで、`--color` が未指定か `auto` であり、`NO_COLOR` が設定されていない
-- **THEN** システムはreport headingとtable headerを補助styleで判別しやすく表示する
+- **WHEN** userがreportをTTYまたはredirect先へ出力し、color設定を指定するか省略する
+- **THEN** stdoutはANSIを含まないJSONで、診断もplain textを維持する
 
 #### Scenario: reportをredirectする
-
-- **WHEN** stdoutがTTYでなく、`--color` が未指定か `auto` である
-- **THEN** システムはANSI escape sequenceを含まない、整列したplain-text reportを出力する
+- **WHEN** userがreportをTTYまたはredirect先へ出力し、color設定を指定するか省略する
+- **THEN** stdoutはANSIを含まないJSONで、診断もplain textを維持する
 
 #### Scenario: NO_COLORを尊重する
-
-- **WHEN** `NO_COLOR` が設定され、`--color` が明示されていない
-- **THEN** システムはhuman-readable reportへANSI styleを適用しない
+- **WHEN** userがreportをTTYまたはredirect先へ出力し、color設定を指定するか省略する
+- **THEN** stdoutはANSIを含まないJSONで、診断もplain textを維持する
 
 #### Scenario: colorを明示指定する
-
-- **WHEN** userが `--color always` または `--color never` を指定する
-- **THEN** システムはTTY判定や `NO_COLOR` より明示指定を優先してstyleを有効化または無効化する
+- **WHEN** userがreportをTTYまたはredirect先へ出力し、color設定を指定するか省略する
+- **THEN** stdoutはANSIを含まないJSONで、診断もplain textを維持する
 
 #### Scenario: machine-readable出力でcolorを強制する
-
-- **WHEN** userが `--json --color always` を指定する
-- **THEN** システムはANSIを含まない有効なJSONを出力する
-
-### Requirement: terminal幅に応じてreportをcompact化する
-human-readable reportは取得可能なterminal幅へ収まるようにlayoutを選択しなければならない（SHALL）。狭い幅では補助的な内訳columnを省略またはcompact化できるが、report内容を示すheading、対象Agent・期間を示すcontext、row identity、および主要countを保持しなければならない（SHALL）。長いnameはcolumn境界内で省略記号付きに短縮し、異なるrowの値に見える折返しをしてはならない（MUST NOT）。
-
-#### Scenario: 十分に広いterminalで表示する
-
-- **WHEN** terminal幅が全columnを表示できる
-- **THEN** システムはToolまたはSkillの定義済み内訳とLast Usedを含むwide layoutを表示する
-
-#### Scenario: 狭いterminalで表示する
-
-- **WHEN** terminal幅がwide layoutに不足する
-- **THEN** システムはreport heading、Agent・Periodのcontext、主要nameとcountを残したcompact layoutを表示し、table rowを誤解を招く形で折り返さない
+- **WHEN** userがreportをTTYまたはredirect先へ出力し、color設定を指定するか省略する
+- **THEN** stdoutはANSIを含まないJSONで、診断もplain textを維持する
 
 ### Requirement: 空結果を行動可能なmessageで示す
-`tools` または `skills` の対象rowが0件の場合、human-readable reportは空tableだけを表示せず、対象期間に該当利用がないことと適用中のfilterを説明しなければならない（SHALL）。JSONは空arrayを出力しなければならない（SHALL）。
+`tools`または`skills`の対象rowが0件の場合、JSONはcontextと空のrows arrayを出力して0で終了しなければならない（SHALL）。人向けのempty-state説明はTUIで提供しなければならない（SHALL）。
 
 #### Scenario: 期間内にSkill利用がない
 - **WHEN** userが `catsift skills --days 1` を実行し、対象Skill利用が0件である
-- **THEN** human-readable reportは選択期間にSkill利用が見つからないことを説明して0で終了する
+- **THEN** JSON reportはrows: []とcontextを出力して0で終了する
 
 ### Requirement: CLI errorとwarningを分離する
 無効なcommand・option・値、または必須sourceを解決できない場合、システムは簡潔なerrorをstderrへ出力して非0で終了しなければならない（SHALL）。一部の履歴だけをskipして有効な結果を生成できる場合は、結果をstdout、warning要約をstderrへ出力して0で終了しなければならない（SHALL）。
@@ -213,7 +189,7 @@ human-readable reportは取得可能なterminal幅へ収まるようにlayoutを
 - **THEN** stdoutは有効なJSON documentのままであり、warning要約はstderrだけに出力される
 
 ### Requirement: 同一入力から決定的な結果を生成する
-システムは同じhistory source、同じsource固有scope、同じfilter、および同じ基準時刻に対して、入力の列挙順やAgentの発見順に依存しない同一の件数、Agent一覧、row順序、およびJSON値を生成しなければならない（SHALL）。同じterminal capability、幅、およびcolor modeを与えたhuman-readable reportはbyte単位で決定的でなければならない（SHALL）。
+システムは同じhistory source、同じsource固有scope、同じfilter、および同じ基準時刻に対して、入力の列挙順やAgentの発見順に依存しない同一の件数、Agent一覧、row順序、およびJSON値を生成しなければならない（SHALL）。JSONの値はterminal capability、幅、color modeに依存してはならない（MUST NOT）。
 
 #### Scenario: file列挙順が変わる
 - **WHEN** 同一内容の履歴fileが異なる順序で列挙される
@@ -227,15 +203,15 @@ human-readable reportは取得可能なterminal幅へ収まるようにlayoutを
 #### Scenario: sourceとfilterを固定する
 
 - **WHEN** 同じsource、scope、filter、基準時刻、およびterminal capabilityで複数回reportを生成する
-- **THEN** human-readable reportとJSONの結果は一致する
+- **THEN** JSONの結果は一致する
 
 #### Scenario: terminal capabilityを固定する
 - **WHEN** 同じ集計resultを同じ幅、color profile、TTY状態、基準時刻で複数回描画する
-- **THEN** human-readable reportの出力byte列は一致する
+- **THEN** JSON reportの出力byte列は一致する
 
 ### Requirement: skills commandでunused viewを選択できる
 
-`catsift skills` は `--unused` optionを受け付け、指定された場合は通常のSkill利用集計ではなく、`unused-skill-report` capabilityで定義された未使用Skillreportを生成しなければならない（SHALL）。`--unused` がない場合の `catsift skills` の集計結果とoutput形式は変更してはならない（MUST NOT）。`--root` は `--unused` と同時に指定された場合だけ有効で、repeatableに受け付けなければならない（SHALL）。
+`catsift skills` は `--unused` optionを受け付け、指定された場合は通常のSkill利用集計ではなく、`unused-skill-report` capabilityで定義された未使用Skillreportを生成しなければならない（SHALL）。`--unused`がない場合は通常の利用集計を既定のJSONで出力しなければならない（SHALL）。CLI reportの`--root`は`skills --unused`だけで有効で、TUIもinventory用のrepeatable `--root`を受け付けなければならない（SHALL）。
 
 #### Scenario: unused viewを明示的に選択する
 
@@ -283,9 +259,9 @@ human-readable reportは取得可能なterminal幅へ収まるようにlayoutを
 
 ### Requirement: Usage Explorerを既定入口として提供する
 
-interactive terminalでcommandを省略した`catsift`は、既存のhistory source選択、cache、およびwarningの規則を継承してTUI Usage Explorerを起動しなければならない（SHALL）。Usage Explorerの期間はTUI上で変更でき、static report用の`--days`、`--from`、`--to` optionを受け付けてはならない（MUST NOT）。Usage Explorerは履歴をread-onlyで扱い、既存の`stats`、`tools`、`skills`を置き換えてはならない（MUST NOT）。
+interactive terminalでcommandを省略した`catsift`は、既存のhistory source選択、cache、およびwarningの規則を継承してTUI Usage Explorerを起動しなければならない（SHALL）。Usage Explorerの期間はTUI上で変更でき、CLI report用の`--days`、`--from`、`--to` optionを受け付けてはならない（MUST NOT）。Usage Explorerは履歴をread-onlyで扱い、既存の`stats`、`tools`、`skills`を置き換えてはならない（MUST NOT）。
 
-CLIとTUIは同じnormalized data、scope filter、warning、および集計意味論を使用しなければならない（SHALL）。TUIの`Period`は実際に集計されたdata範囲を表示し、`Daily activity`も同じ日付範囲を表示しなければならない（SHALL）。指定されたperiodと一致しない場合は`Input notes`で差分を説明し、period確定直後にはtab直下に`Notice:` messageを表示幅に合わせて折り返し表示してtab移動またはclearまで保持しなければならない（SHALL）。ただしCLIはstaticなsummaryとmachine-readable output、TUIは一覧からdetailへ辿るinteractive viewとして、それぞれの用途に適した表示量を提供してよい（MAY）。
+CLIとTUIは同じnormalized data、scope filter、warning、および集計意味論を使用しなければならない（SHALL）。TUIの`Period`は実際に集計されたdata範囲を表示し、`Daily activity`も同じ日付範囲を表示しなければならない（SHALL）。指定されたperiodと一致しない場合は`Input notes`で差分を説明し、period確定直後にはtab直下に`Notice:` messageを表示幅に合わせて折り返し表示してtab移動またはclearまで保持しなければならない（SHALL）。ただしCLIはJSONのsummary/detail、TUIは一覧からdetailへ辿るinteractive viewとして、それぞれの用途に適した表示量を提供してよい（MAY）。
 
 #### Scenario: commandなしでUsage Explorerを起動する
 
@@ -300,7 +276,7 @@ CLIとTUIは同じnormalized data、scope filter、warning、および集計意�
 #### Scenario: 既存static commandを実行する
 
 - **WHEN** userが `stats`、`tools`、または`skills`を既存optionで実行する
-- **THEN** システムはTUIの追加によって既存のhuman-readable/JSON reportのfield、集計、終了規則を変更しない
+- **THEN** システムは既存のJSON field、集計、終了規則を維持し、既定でJSONを出力する
 
 ### Requirement: TUIの出力形式とterminal境界を検証する
 
@@ -337,7 +313,7 @@ Usage Explorerはinteractive terminal向けの出力だけを提供し、`--json
 
 ### Requirement: GitHub Copilot sourceをreportとJSONへ反映する
 
-GitHub Copilot sourceを選択した各統計reportは、source display name、canonical Agent ID `copilot`、適用中のperiod、および取得できた集計値を既存のhuman-readable・JSON出力規則で表示しなければならない（SHALL）。履歴が空の場合も、既存のempty-stateと終了codeの規則を維持しなければならない（SHALL）。
+GitHub Copilot sourceを選択した各統計reportは、canonical source `copilot`、canonical Agent ID `copilot`、適用中のperiod、および取得できた集計値を既定のJSON出力規則で表示しなければならない（SHALL）。履歴が空の場合も、既存のempty-stateと終了codeの規則を維持しなければならない（SHALL）。
 
 #### Scenario: GitHub Copilotのhuman-readable reportを表示する
 
@@ -357,16 +333,16 @@ GitHub Copilot sourceを選択した各統計reportは、source display name、c
 #### Scenario: GitHub Copilotのproject nameを表示する
 
 - **WHEN** userがproject metadataを含むCopilot sessionで`catsift sessions --source copilot`またはSession detailを実行する
-- **THEN** human-readable reportはproject nameを表示し、JSONは`project_name`と取得可能な`project_path`をsanitized metadataとして含む
+- **THEN** JSONは`project_name`と取得可能な`project_path`をsanitized metadataとして含む
 
 #### Scenario: GitHub Copilotの履歴が空である
 
 - **WHEN** userが `catsift stats --source copilot` を実行し、有効な利用eventが存在しない
-- **THEN** システムはsource、Agent、Period、および0件のsummaryとempty-state messageを出力して0で終了する
+- **THEN** システムはsource、Agent、Period、および0件のJSON summaryを出力して0で終了する
 
 ### Requirement: activityでOverviewのdaily activityを取得できる
 
-`catsift activity`は、TUI Overviewの対象scopeと同じnormalized historyからdaily activityを生成し、日付、Sessions、およびTurnsだけをhuman-readable reportへ表示しなければならない（SHALL）。`--json`を併用した場合は、同じscopeと集計結果を`rows` arrayとして出力しなければならない（SHALL）。既存の`catsift stats`はsummaryのみを表示し、出力を変更してはならない（MUST NOT）。
+`catsift activity`は、TUI Overviewの対象scopeと同じnormalized historyからdaily activityを生成し、日付、Sessions、およびTurnsを既定のJSON rows arrayへ出力しなければならない（SHALL）。`catsift stats`はJSON summaryのみを出力しなければならない（SHALL）。
 
 #### Scenario: daily activityを表示する
 
@@ -376,7 +352,7 @@ GitHub Copilot sourceを選択した各統計reportは、source display name、c
 #### Scenario: daily activityをJSONで取得する
 
 - **WHEN** userが `catsift activity --json` を実行する
-- **THEN** stdoutのJSONはstats overviewを含めず、human-readable reportと同じ日付・Sessions・Turnsを持つ`rows` arrayを含む
+- **THEN** stdoutのJSONはstats overviewを含めず、同じscopeの日付・Sessions・Turnsを持つ`rows` arrayを含む
 
 ### Requirement: CLIでModel一覧とModel detailを取得できる
 
@@ -399,7 +375,7 @@ GitHub Copilot sourceを選択した各統計reportは、source display name、c
 
 ### Requirement: CLIでSkill detailを取得できる
 
-既存の`catsift skills`は`skills detail NAME`を受け付け、TUI Skill detailと同じnormalized Skill evidenceから、Skill全体のUses、Sessions、Turns、usage mode、evidence state、検出method、および利用Sessionごとのsummaryを表示しなければならない（SHALL）。`skills detail`のhuman-readable reportとJSONは同じdetail情報を表さなければならない（SHALL）。detail subcommandはlist/unused専用optionと併用してはならない（MUST NOT）。
+既存の`catsift skills`は`skills detail NAME`を受け付け、TUI Skill detailと同じnormalized Skill evidenceから、Skill全体のUses、Sessions、Turns、usage mode、evidence state、検出method、および利用Sessionごとのsummaryを表示しなければならない（SHALL）。`skills detail`は既定で同じdetail情報をJSONへ出力しなければならない（SHALL）。detail subcommandはlist/unused専用optionと併用してはならない（MUST NOT）。
 
 #### Scenario: Skill detailを表示する
 
@@ -409,7 +385,7 @@ GitHub Copilot sourceを選択した各統計reportは、source display name、c
 #### Scenario: Skill detailの人間向け表示を行う
 
 - **WHEN** userが `catsift skills detail review` を実行する
-- **THEN** システムはSkill名、summary、evidenceの内訳、および関連Session一覧をstatic reportとして表示する
+- **THEN** システムはSkill名、summary、evidenceの内訳、および関連Session一覧をJSONとして表示し、人向けの表示にはTUIを使用する
 
 #### Scenario: unused viewとdetailを併用する
 
@@ -437,7 +413,7 @@ GitHub Copilot sourceを選択した各統計reportは、source display name、c
 
 ### Requirement: CLI detail reportはTUIと同じscopeとprivacy境界を使用する
 
-追加するCLI commandとdetail subcommandは、既存のsource選択、期間、warning、終了code、および`--json`のstdout/stderr分離規則を継承しなければならない（SHALL）。同じsource、期間、および基準時刻を指定した場合、CLIのsummary/detailはTUIのQuery / Read Modelと同じ集計意味論、deduplication、決定的なsortを使用しなければならない（SHALL）。human-readable reportとJSONは同じ論理的な情報を表さなければならない（SHALL）。prompt本文、command本文、Tool arguments、Skill本文、およびprovider payloadを出力してはならない（MUST NOT）。
+追加するCLI commandとdetail subcommandは、既存のsource選択、期間、warning、終了code、およびJSONのstdout/stderr分離規則を継承しなければならない（SHALL）。同じsource、期間、および基準時刻を指定した場合、CLIのsummary/detailはTUIのQuery / Read Modelと同じ集計意味論、deduplication、決定的なsortを使用しなければならない（SHALL）。TUI detailとJSONは同じ論理的な情報を表さなければならない（SHALL）。prompt本文、command本文、Tool arguments、Skill本文、およびprovider payloadを出力してはならない（MUST NOT）。
 
 #### Scenario: CLIとTUIで同じscopeを表示する
 
@@ -453,3 +429,15 @@ GitHub Copilot sourceを選択した各統計reportは、source display name、c
 
 - **WHEN** SessionまたはSkillのdetail対象にprompt本文、Tool arguments、Skill本文、またはprovider payloadが存在する
 - **THEN** CLIはそれらを出力せず、boundedなmetadata、集計値、canonical name、識別子、時刻、および状態だけを表示する
+
+### Requirement: JSON互換flagの廃止を予告する
+
+`--json`は互換boolean flagとして受け付けなければならない（SHALL）。明示指定時は値にかかわらずJSONを維持し、JSONが既定なのでflagは不要でv0.7.0に削除される旨をstderrへ警告しなければならない（SHALL）。未指定時は警告してはならない（MUST NOT）。helpはJSON既定と廃止予定を説明しなければならない（SHALL）。
+
+#### Scenario: 明示flagを指定する
+- **WHEN** userがreportへ`--json`、`--json=true`、`--json=false`または`-json`を渡す
+- **THEN** stdoutはJSONのままで、stderrに廃止警告が一度だけ出力される
+
+#### Scenario: helpと無効なflagを扱う
+- **WHEN** userがhelp、無効なboolean値、またはTUIへの`--json=false`を指定する
+- **THEN** helpは通常のhelpを表示し、無効値とTUIへのJSON flagはreportを出力せず引数errorとして拒否する

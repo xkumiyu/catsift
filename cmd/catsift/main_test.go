@@ -92,25 +92,18 @@ func usageHomeAt(t *testing.T, when time.Time) string {
 }
 
 func TestRunCommandsAndMachineOutput(t *testing.T) {
-	home := testHome(t)
+	testHome(t)
 	var stdout, stderr bytes.Buffer
 	if code := run([]string{"stats", "--color", "never"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("stats exit=%d stderr=%s", code, stderr.String())
 	}
-	for _, want := range []string{"USAGE OVERVIEW", "Source: Codex (" + home + ")", "Agents: Codex", "Activity", "Sessions", "Turns", "User Prompts", "Tool Calls", "Skill Usage", "By turn", "By session", "Token Usage"} {
-		if !strings.Contains(stdout.String(), want) {
-			t.Errorf("stats missing %q: %s", want, stdout.String())
-		}
+	if !json.Valid(stdout.Bytes()) || strings.Contains(stdout.String(), "\x1b[") {
+		t.Fatalf("default stats is not plain JSON: %s", &stdout)
 	}
-	if strings.Contains(stdout.String(), "CATSIFT") || strings.Contains(stdout.String(), " · ") {
-		t.Fatalf("stats contains obsolete display: %s", stdout.String())
-	}
-	if strings.Contains(stdout.String(), "\x1b[") {
-		t.Fatal("plain report contains ANSI")
-	}
+
 	stdout.Reset()
 	stderr.Reset()
-	if code := run([]string{"stats", "--json", "--color", "always"}, &stdout, &stderr); code != 0 {
+	if code := run([]string{"stats", "--color", "always"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("json exit=%d stderr=%s", code, stderr.String())
 	}
 	if strings.Contains(stdout.String(), "\x1b[") {
@@ -124,11 +117,11 @@ func TestRunCommandsAndMachineOutput(t *testing.T) {
 		t.Fatalf("tool_calls=%v", value["tool_calls"])
 	}
 	stdout.Reset()
-	if code := run([]string{"tools", "--color", "never"}, &stdout, &stderr); code != 0 || !strings.Contains(stdout.String(), "shell") || !strings.Contains(stdout.String(), "1 tool, 1 call total") {
+	if code := run([]string{"tools", "--color", "never"}, &stdout, &stderr); code != 0 || !strings.Contains(stdout.String(), "shell") || !json.Valid(stdout.Bytes()) {
 		t.Fatalf("tools exit=%d output=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 	stdout.Reset()
-	if code := run([]string{"tools", "--json"}, &stdout, &stderr); code != 0 {
+	if code := run([]string{"tools"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("tools JSON exit=%d stderr=%s", code, stderr.String())
 	}
 	var toolsValue struct {
@@ -144,7 +137,7 @@ func TestRunCommandsAndMachineOutput(t *testing.T) {
 		toolTotal += row.Calls
 	}
 	stdout.Reset()
-	if code := run([]string{"stats", "--json"}, &stdout, &stderr); code != 0 {
+	if code := run([]string{"stats"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("stats JSON exit=%d stderr=%s", code, stderr.String())
 	}
 	var statsValue struct {
@@ -157,7 +150,7 @@ func TestRunCommandsAndMachineOutput(t *testing.T) {
 		t.Fatalf("overview/tools mismatch: %d != %d", statsValue.ToolCalls, toolTotal)
 	}
 	stdout.Reset()
-	if code := run([]string{"skills", "--json"}, &stdout, &stderr); code != 0 {
+	if code := run([]string{"skills"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("skills JSON exit=%d stderr=%s", code, stderr.String())
 	}
 	var skillsValue struct {
@@ -173,7 +166,7 @@ func TestRunCommandsAndMachineOutput(t *testing.T) {
 		skillTotal += row.Total
 	}
 	stdout.Reset()
-	if code := run([]string{"stats", "--json"}, &stdout, &stderr); code != 0 {
+	if code := run([]string{"stats"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("stats JSON exit=%d stderr=%s", code, stderr.String())
 	}
 	if err := json.Unmarshal(stdout.Bytes(), &statsValue); err != nil {
@@ -470,7 +463,7 @@ func syntheticQueryHistory() ctxHistoryLoader {
 func TestRunQueryReportsUseTheTUIReadModel(t *testing.T) {
 	loader := syntheticQueryHistory()
 	var stdout, stderr bytes.Buffer
-	if code := runWithCtxLoader([]string{"activity", "--source", "ctx", "--json"}, &stdout, &stderr, loader); code != 0 {
+	if code := runWithCtxLoader([]string{"activity", "--source", "ctx"}, &stdout, &stderr, loader); code != 0 {
 		t.Fatalf("activity exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 	var activity struct {
@@ -500,15 +493,15 @@ func TestRunQueryReportsUseTheTUIReadModel(t *testing.T) {
 	stdout.Reset()
 	stderr.Reset()
 	if code := runWithCtxLoader([]string{"activity", "--source", "ctx", "--color", "never"}, &stdout, &stderr, loader); code != 0 {
-		t.Fatalf("activity human exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+		t.Fatalf("activity default exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "ACTIVITY") || !strings.Contains(stdout.String(), "Daily Trend") || !strings.Contains(stdout.String(), "2026-01-02") || strings.Contains(stdout.String(), "USAGE OVERVIEW") {
-		t.Fatalf("activity human report = %q", stdout.String())
+	if !json.Valid(stdout.Bytes()) || !strings.Contains(stdout.String(), "2026-01-02") {
+		t.Fatalf("activity default report = %q", stdout.String())
 	}
 
 	stdout.Reset()
 	stderr.Reset()
-	if code := runWithCtxLoader([]string{"stats", "--source", "ctx", "--json"}, &stdout, &stderr, loader); code != 0 {
+	if code := runWithCtxLoader([]string{"stats", "--source", "ctx"}, &stdout, &stderr, loader); code != 0 {
 		t.Fatalf("stats exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 	var stats map[string]any
@@ -521,7 +514,7 @@ func TestRunQueryReportsUseTheTUIReadModel(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	if code := runWithCtxLoader([]string{"models", "--source", "ctx", "--json"}, &stdout, &stderr, loader); code != 0 {
+	if code := runWithCtxLoader([]string{"models", "--source", "ctx"}, &stdout, &stderr, loader); code != 0 {
 		t.Fatalf("models exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 	var models struct {
@@ -543,7 +536,7 @@ func TestRunQueryReportsUseTheTUIReadModel(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	if code := runWithCtxLoader([]string{"models", "detail", "CODEX/GPT-EXAMPLE", "--source", "ctx", "--json"}, &stdout, &stderr, loader); code != 0 {
+	if code := runWithCtxLoader([]string{"models", "detail", "CODEX/GPT-EXAMPLE", "--source", "ctx"}, &stdout, &stderr, loader); code != 0 {
 		t.Fatalf("model detail exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 	var modelDetail struct {
@@ -563,7 +556,7 @@ func TestRunQueryReportsUseTheTUIReadModel(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	if code := runWithCtxLoader([]string{"skills", "detail", "REVIEW", "--source", "ctx", "--json"}, &stdout, &stderr, loader); code != 0 {
+	if code := runWithCtxLoader([]string{"skills", "detail", "REVIEW", "--source", "ctx"}, &stdout, &stderr, loader); code != 0 {
 		t.Fatalf("skill detail exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 	var skillDetail struct {
@@ -583,7 +576,7 @@ func TestRunQueryReportsUseTheTUIReadModel(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	if code := runWithCtxLoader([]string{"skills", "detail", "review", "--source", "ctx", "--strict", "--json"}, &stdout, &stderr, loader); code != 0 {
+	if code := runWithCtxLoader([]string{"skills", "detail", "review", "--source", "ctx", "--strict"}, &stdout, &stderr, loader); code != 0 {
 		t.Fatalf("strict skill detail exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 	if err := json.Unmarshal(stdout.Bytes(), &skillDetail); err != nil {
@@ -595,7 +588,7 @@ func TestRunQueryReportsUseTheTUIReadModel(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	if code := runWithCtxLoader([]string{"sessions", "detail", "session-001", "--source", "ctx", "--json"}, &stdout, &stderr, loader); code != 0 {
+	if code := runWithCtxLoader([]string{"sessions", "detail", "session-001", "--source", "ctx"}, &stdout, &stderr, loader); code != 0 {
 		t.Fatalf("session detail exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 	var sessionDetail struct {
@@ -621,13 +614,13 @@ func TestRunQueryReportsUseTheTUIReadModel(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	if code := runWithCtxLoader([]string{"sessions", "detail", "session", "--source", "ctx", "--json"}, &stdout, &stderr, loader); code != 2 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "ambiguous") || !strings.Contains(stderr.String(), "session-001") || !strings.Contains(stderr.String(), "session-002") {
+	if code := runWithCtxLoader([]string{"sessions", "detail", "session", "--source", "ctx"}, &stdout, &stderr, loader); code != 2 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "ambiguous") || !strings.Contains(stderr.String(), "session-001") || !strings.Contains(stderr.String(), "session-002") {
 		t.Fatalf("ambiguous session exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 
 	stdout.Reset()
 	stderr.Reset()
-	if code := runWithCtxLoader([]string{"models", "detail", "codex/missing", "--source", "ctx", "--json"}, &stdout, &stderr, loader); code != 2 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "was not found") {
+	if code := runWithCtxLoader([]string{"models", "detail", "codex/missing", "--source", "ctx"}, &stdout, &stderr, loader); code != 2 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "was not found") {
 		t.Fatalf("missing model exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 
@@ -638,7 +631,7 @@ func TestRunQueryReportsUseTheTUIReadModel(t *testing.T) {
 	}
 	stdout.Reset()
 	stderr.Reset()
-	if code := runWithCtxLoader([]string{"sessions", "--source", "ctx", "--json"}, &stdout, &stderr, warningLoader); code != 0 {
+	if code := runWithCtxLoader([]string{"sessions", "--source", "ctx"}, &stdout, &stderr, warningLoader); code != 0 {
 		t.Fatalf("warning session list exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 	var warningValue map[string]any
@@ -739,9 +732,9 @@ func TestRunDefaultsAndSelectsMultipleSources(t *testing.T) {
 	testHome(t)
 	writeOpenCodeHome(t)
 	for _, args := range [][]string{
-		{"stats", "--json"},
-		{"stats", "--source", "codex,opencode", "--json"},
-		{"stats", "--source", "codex", "--source", "opencode", "--json"},
+		{"stats"},
+		{"stats", "--source", "codex,opencode"},
+		{"stats", "--source", "codex", "--source", "opencode"},
 	} {
 		var stdout, stderr bytes.Buffer
 		if code := run(args, &stdout, &stderr); code != 0 {
@@ -763,11 +756,11 @@ func TestRunDefaultsAndSelectsMultipleSources(t *testing.T) {
 	}
 }
 
-func TestRunOpenCodeSourceProducesJSONAndHumanReports(t *testing.T) {
-	root := writeOpenCodeHome(t)
+func TestRunOpenCodeSourceProducesJSONReports(t *testing.T) {
+	writeOpenCodeHome(t)
 
 	var stdout, stderr bytes.Buffer
-	if code := run([]string{"stats", "--source", "opencode", "--json"}, &stdout, &stderr); code != 0 {
+	if code := run([]string{"stats", "--source", "opencode"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("OpenCode stats JSON exit=%d stderr=%s", code, stderr.String())
 	}
 	var stats struct {
@@ -792,15 +785,15 @@ func TestRunOpenCodeSourceProducesJSONAndHumanReports(t *testing.T) {
 	if code := run([]string{"tools", "--source", "opencode", "--color", "never"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("OpenCode tools exit=%d stderr=%s", code, stderr.String())
 	}
-	for _, want := range []string{"Source: OpenCode (" + root + ")", "Agents: OpenCode", "shell"} {
+	for _, want := range []string{`"source": "opencode"`, `"agents": [`, `"opencode"`, `"name": "shell"`} {
 		if !strings.Contains(stdout.String(), want) {
-			t.Errorf("OpenCode human report missing %q: %s", want, stdout.String())
+			t.Errorf("OpenCode JSON report missing %q: %s", want, stdout.String())
 		}
 	}
 
 	stdout.Reset()
 	stderr.Reset()
-	if code := run([]string{"skills", "--source", "opencode", "--json"}, &stdout, &stderr); code != 0 {
+	if code := run([]string{"skills", "--source", "opencode"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("OpenCode skills JSON exit=%d stderr=%s", code, stderr.String())
 	}
 	var skills struct {
@@ -820,7 +813,7 @@ func TestRunOpenCodeSourceProducesJSONAndHumanReports(t *testing.T) {
 	writeTestSkill(t, filepath.Join(skillRoot, ".agents", "skills", "review"), "review")
 	stdout.Reset()
 	stderr.Reset()
-	if code := run([]string{"skills", "--source", "opencode", "--unused", "--root", skillRoot, "--json"}, &stdout, &stderr); code != 0 {
+	if code := run([]string{"skills", "--source", "opencode", "--unused", "--root", skillRoot}, &stdout, &stderr); code != 0 {
 		t.Fatalf("OpenCode unused skills JSON exit=%d stderr=%s", code, stderr.String())
 	}
 	var unused struct {
@@ -839,7 +832,7 @@ func TestRunOpenCodeSourceProducesJSONAndHumanReports(t *testing.T) {
 	t.Setenv("OPENCODE_HOME", emptyRoot)
 	stdout.Reset()
 	stderr.Reset()
-	if code := run([]string{"stats", "--source", "opencode", "--json"}, &stdout, &stderr); code != 0 {
+	if code := run([]string{"stats", "--source", "opencode"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("empty OpenCode source exit=%d stderr=%s", code, stderr.String())
 	}
 	var empty struct {
@@ -869,7 +862,7 @@ func TestRunOpenCodeWarningsStayOnStderrAndStrictInputFails(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	if code := run([]string{"stats", "--source", "opencode", "--json", "--strict-input"}, &stdout, &stderr); code != 1 {
+	if code := run([]string{"stats", "--source", "opencode", "--strict-input"}, &stdout, &stderr); code != 1 {
 		t.Fatalf("strict OpenCode exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 	var value map[string]any
@@ -884,10 +877,10 @@ func TestRunOpenCodeWarningsStayOnStderrAndStrictInputFails(t *testing.T) {
 func TestRunOpenCodeAcceptsCommonReportOptions(t *testing.T) {
 	writeOpenCodeHome(t)
 	for _, args := range [][]string{
-		{"stats", "--source", "opencode", "--days", "1", "--json"},
-		{"stats", "--source", "opencode", "--from", "2023-11-14", "--to", "2023-11-14", "--json"},
-		{"tools", "--source", "opencode", "--layer", "runtime", "--json"},
-		{"skills", "--source", "opencode", "--group-by", "session", "--strict", "--json"},
+		{"stats", "--source", "opencode", "--days", "1"},
+		{"stats", "--source", "opencode", "--from", "2023-11-14", "--to", "2023-11-14"},
+		{"tools", "--source", "opencode", "--layer", "runtime"},
+		{"skills", "--source", "opencode", "--group-by", "session", "--strict"},
 	} {
 		var stdout, stderr bytes.Buffer
 		if code := run(args, &stdout, &stderr); code != 0 {
@@ -956,7 +949,7 @@ func TestRunDateRangeFiltersCodexHistory(t *testing.T) {
 	writeSession("selected.jsonl", "selected", "2026-01-02T12:00:00Z")
 
 	var stdout, stderr bytes.Buffer
-	code := run([]string{"stats", "--from", "2026-01-02", "--to", "2026-01-02", "--json"}, &stdout, &stderr)
+	code := run([]string{"stats", "--from", "2026-01-02", "--to", "2026-01-02"}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("exit=%d stderr=%s", code, stderr.String())
 	}
@@ -974,7 +967,7 @@ func TestRunDateRangeFiltersCodexHistory(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	code = run([]string{"stats", "--json"}, &stdout, &stderr)
+	code = run([]string{"stats"}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("all-time stats exit=%d stderr=%s", code, stderr.String())
 	}
@@ -987,7 +980,7 @@ func TestRunDateRangeFiltersCodexHistory(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	code = run([]string{"stats", "--from", "2026-01-02", "--json"}, &stdout, &stderr)
+	code = run([]string{"stats", "--from", "2026-01-02"}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("open-start date range exit=%d stderr=%s", code, stderr.String())
 	}
@@ -1004,13 +997,16 @@ func TestRunDateRangeFiltersCodexHistory(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("partial date range exit=%d stderr=%s", code, stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "info: selected period starts before the first usage record (2026-01-01)") {
+	if err := json.Unmarshal(stdout.Bytes(), &value); err != nil {
+		t.Fatal(err)
+	}
+	if value.Period != "2026-01-01 to 2026-01-02" {
 		t.Fatalf("partial date range info = %q", stdout.String())
 	}
 
 	stdout.Reset()
 	stderr.Reset()
-	code = run([]string{"stats", "--to", "2026-01-02", "--json"}, &stdout, &stderr)
+	code = run([]string{"stats", "--to", "2026-01-02"}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("open-end date range exit=%d stderr=%s", code, stderr.String())
 	}
@@ -1027,7 +1023,10 @@ func TestRunDateRangeFiltersCodexHistory(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("empty date range exit=%d stderr=%s", code, stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "info: No usage found for the selected period.") {
+	if err := json.Unmarshal(stdout.Bytes(), &value); err != nil {
+		t.Fatal(err)
+	}
+	if value.Turns != 0 {
 		t.Fatalf("empty date range info = %q", stdout.String())
 	}
 }
@@ -1100,7 +1099,7 @@ func TestRunCtxSourceAggregatesAgents(t *testing.T) {
 		return ctxsource.IngestResult{Turns: turns, Sessions: []ctxsource.SessionMetadata{{ID: turns[0].SessionID}, {ID: turns[1].SessionID}}, Agents: []string{"opencode", "codex"}}, nil
 	}
 	var stdout, stderr bytes.Buffer
-	if code := runWithCtxLoader([]string{"stats", "--source", "ctx", "--json"}, &stdout, &stderr, loader); code != 0 {
+	if code := runWithCtxLoader([]string{"stats", "--source", "ctx"}, &stdout, &stderr, loader); code != 0 {
 		t.Fatalf("ctx stats exit=%d stderr=%s", code, stderr.String())
 	}
 	var stats struct {
@@ -1122,7 +1121,7 @@ func TestRunCtxSourceAggregatesAgents(t *testing.T) {
 	}
 
 	stdout.Reset()
-	if code := runWithCtxLoader([]string{"tools", "--source", "ctx", "--json"}, &stdout, &stderr, loader); code != 0 {
+	if code := runWithCtxLoader([]string{"tools", "--source", "ctx"}, &stdout, &stderr, loader); code != 0 {
 		t.Fatalf("ctx tools exit=%d stderr=%s", code, stderr.String())
 	}
 	var toolsValue struct {
@@ -1140,7 +1139,7 @@ func TestRunCtxSourceAggregatesAgents(t *testing.T) {
 	}
 
 	stdout.Reset()
-	if code := runWithCtxLoader([]string{"skills", "--source", "ctx", "--json"}, &stdout, &stderr, loader); code != 0 {
+	if code := runWithCtxLoader([]string{"skills", "--source", "ctx"}, &stdout, &stderr, loader); code != 0 {
 		t.Fatalf("ctx skills exit=%d stderr=%s", code, stderr.String())
 	}
 	var skillsValue struct {
@@ -1162,7 +1161,7 @@ func TestRunCtxVerboseReportsSourceDiagnosticsOnStderr(t *testing.T) {
 		return ctxsource.IngestResult{}, nil
 	}
 	var stdout, stderr bytes.Buffer
-	if code := runWithCtxLoader([]string{"stats", "--source", "ctx", "--verbose", "--json"}, &stdout, &stderr, func(root string, options ctxsource.IngestOptions) (ctxsource.IngestResult, error) {
+	if code := runWithCtxLoader([]string{"stats", "--source", "ctx", "--verbose"}, &stdout, &stderr, func(root string, options ctxsource.IngestOptions) (ctxsource.IngestResult, error) {
 		if options.Diagnostic == nil {
 			t.Fatal("ctx diagnostic callback is nil in verbose mode")
 		}
@@ -1184,7 +1183,7 @@ func TestRunCtxStrictInputKeepsJSONAndReturnsNonZero(t *testing.T) {
 		return ctxsource.IngestResult{Warnings: []usage.Warning{{Reason: "ctx_unknown_event", Type: "future", Count: 1}}}, nil
 	}
 	var stdout, stderr bytes.Buffer
-	if code := runWithCtxLoader([]string{"stats", "--source", "ctx", "--json", "--strict-input"}, &stdout, &stderr, loader); code != 1 {
+	if code := runWithCtxLoader([]string{"stats", "--source", "ctx", "--strict-input"}, &stdout, &stderr, loader); code != 1 {
 		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 	var value map[string]any
@@ -1205,7 +1204,7 @@ func TestRunCtxUnusedSkillsKeepsPhysicalRowsAndUsesAgentUnion(t *testing.T) {
 		return ctxsource.IngestResult{Agents: []string{"codex", "opencode"}}, nil
 	}
 	var stdout, stderr bytes.Buffer
-	args := []string{"skills", "--source", "ctx", "--unused", "--root", first, "--root", second, "--json"}
+	args := []string{"skills", "--source", "ctx", "--unused", "--root", first, "--root", second}
 	if code := runWithCtxLoader(args, &stdout, &stderr, loader); code != 0 {
 		t.Fatalf("unused ctx exit=%d stderr=%s", code, stderr.String())
 	}
@@ -1281,7 +1280,7 @@ func TestRunLoadsGitHubCopilotFromDefaultHome(t *testing.T) {
 	}
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 	var stdout, stderr bytes.Buffer
-	if code := run([]string{"stats", "--source", "copilot", "--json"}, &stdout, &stderr); code != 0 {
+	if code := run([]string{"stats", "--source", "copilot"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("GitHub Copilot stats exit=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 	var report struct {
@@ -1300,7 +1299,7 @@ func TestRunLoadsGitHubCopilotFromDefaultHome(t *testing.T) {
 	for _, command := range []string{"activity", "models", "tools", "skills", "sessions"} {
 		stdout.Reset()
 		stderr.Reset()
-		if code := run([]string{command, "--source", "copilot", "--json"}, &stdout, &stderr); code != 0 {
+		if code := run([]string{command, "--source", "copilot"}, &stdout, &stderr); code != 0 {
 			t.Fatalf("GitHub Copilot %s exit=%d stdout=%s stderr=%s", command, code, stdout.String(), stderr.String())
 		}
 		var document any
@@ -1333,7 +1332,7 @@ func TestRunAutoDetectsGitHubCopilotHistory(t *testing.T) {
 		ctxCalled = true
 		return ctxsource.IngestResult{}, nil
 	}
-	if code := runWithCtxLoader([]string{"stats", "--json"}, &stdout, &stderr, loadCtx); code != 0 {
+	if code := runWithCtxLoader([]string{"stats"}, &stdout, &stderr, loadCtx); code != 0 {
 		t.Fatalf("GitHub Copilot auto-detection exit=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 	if ctxCalled {
@@ -1432,7 +1431,7 @@ func TestRunHelpIsScopedToCommand(t *testing.T) {
 			t.Errorf("root help contains obsolete section or usage %q: %s", unwanted, stdout.String())
 		}
 	}
-	for _, unwanted := range []string{"--days", "--from", "--to", "--layer", "--strict", "--json"} {
+	for _, unwanted := range []string{"--days", "--from", "--to", "--layer"} {
 		if helpContainsOption(stdout.String(), unwanted) {
 			t.Errorf("root help contains command option %q: %s", unwanted, stdout.String())
 		}
@@ -1483,14 +1482,14 @@ func TestRunHelpDocumentsDefaults(t *testing.T) {
 			command: "stats",
 			want: []string{
 				"--days N          Include the last N days (N >= 1; default: all time)",
-				"--color MODE      auto, always, or never (default: auto; human report only)",
+				"--color MODE      auto, always, or never (default: auto; accepted for compatibility; JSON is unchanged)",
 			},
 		},
 		{
 			command: "tools",
 			want: []string{
 				"--days N          Include the last N days (N >= 1; default: all time)",
-				"--color MODE      auto, always, or never (default: auto; human report only)",
+				"--color MODE      auto, always, or never (default: auto; accepted for compatibility; JSON is unchanged)",
 				"--layer LAYER     effective, runtime, or model (default: effective)",
 			},
 		},
@@ -1498,9 +1497,9 @@ func TestRunHelpDocumentsDefaults(t *testing.T) {
 			command: "skills",
 			want: []string{
 				"--days N          Include the last N days (N >= 1; default: all time)",
-				"--color MODE      auto, always, or never (default: auto; human report only)",
+				"--color MODE      auto, always, or never (default: auto; accepted for compatibility; JSON is unchanged)",
 				"--group-by UNIT   turn or session (default: turn; no effect on --unused)",
-				"--view VIEW       auto, compact, mode, state, or all (default: auto; human report only)",
+				"--view VIEW       auto, compact, mode, state, or all (default: auto; accepted for compatibility; JSON is unchanged)",
 				"--root PATH       Scan a scope root for .agents/skills, .codex/skills, plugin cache layouts (repeatable; only with --unused; default if omitted: ~/.agents/skills)",
 			},
 		},
@@ -1607,7 +1606,7 @@ func TestRunSkillsSupportsSessionGrouping(t *testing.T) {
 	writeSession("s2", 1)
 
 	var stdout, stderr bytes.Buffer
-	if code := run([]string{"skills", "--json"}, &stdout, &stderr); code != 0 {
+	if code := run([]string{"skills"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("turn grouping exit=%d stderr=%s", code, stderr.String())
 	}
 	var turnValue struct {
@@ -1625,7 +1624,7 @@ func TestRunSkillsSupportsSessionGrouping(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	if code := run([]string{"skills", "--json", "--group-by", "session"}, &stdout, &stderr); code != 0 {
+	if code := run([]string{"skills", "--group-by", "session"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("session grouping exit=%d stderr=%s", code, stderr.String())
 	}
 	var sessionValue struct {
@@ -1643,7 +1642,7 @@ func TestRunSkillsSupportsSessionGrouping(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	if code := run([]string{"stats", "--json"}, &stdout, &stderr); code != 0 {
+	if code := run([]string{"stats"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("stats overview grouping exit=%d stderr=%s", code, stderr.String())
 	}
 	var statsValue struct {
@@ -1668,7 +1667,7 @@ func TestRunUnusedSkillsEndToEnd(t *testing.T) {
 	writeTestSkill(t, filepath.Join(root, "repo", "skills", "ignored"), "ignored")
 
 	var stdout, stderr bytes.Buffer
-	if code := run([]string{"skills", "--root", root, "--unused", "--json"}, &stdout, &stderr); code != 0 {
+	if code := run([]string{"skills", "--root", root, "--unused"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("unused JSON exit=%d stderr=%s", code, stderr.String())
 	}
 	var value struct {
@@ -1704,13 +1703,15 @@ func TestRunUnusedSkillsEndToEnd(t *testing.T) {
 	stdout.Reset()
 	stderr.Reset()
 	if code := run([]string{"skills", "--root", root, "--unused", "--color", "never"}, &stdout, &stderr); code != 0 {
-		t.Fatalf("unused human exit=%d stderr=%s", code, stderr.String())
+		t.Fatalf("unused default exit=%d stderr=%s", code, stderr.String())
 	}
-	for _, want := range []string{"UNUSED SKILLS", "canonical-review", "data-analytics:router", "Strict: false", "2 unused skills, 3 installed skills total"} {
-		if !strings.Contains(stdout.String(), want) {
-			t.Errorf("unused human missing %q: %s", want, stdout.String())
-		}
+	if err := json.Unmarshal(stdout.Bytes(), &value); err != nil {
+		t.Fatal(err)
 	}
+	if value.InstalledCount != 3 || value.UnusedCount != 2 || len(value.Rows) != 2 || stderr.Len() != 0 {
+		t.Fatalf("default unused: %#v stderr=%s", value, &stderr)
+	}
+
 }
 
 func TestRunUnusedSkillsUsesDefaultRoot(t *testing.T) {
@@ -1719,7 +1720,7 @@ func TestRunUnusedSkillsUsesDefaultRoot(t *testing.T) {
 	writeTestSkill(t, filepath.Join(userHome, ".agents", "skills", "default-skill"), "default-skill")
 
 	var stdout, stderr bytes.Buffer
-	if code := run([]string{"skills", "--unused", "--json"}, &stdout, &stderr); code != 0 {
+	if code := run([]string{"skills", "--unused"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("default root exit=%d stderr=%s", code, stderr.String())
 	}
 	var value struct {
@@ -1743,7 +1744,7 @@ func TestRunUnusedSkillsSupportsRepeatableRoots(t *testing.T) {
 	writeTestSkill(t, filepath.Join(second, ".codex", "skills", "second"), "second")
 
 	var stdout, stderr bytes.Buffer
-	if code := run([]string{"skills", "--unused", "--root", second, "--root", first, "--json"}, &stdout, &stderr); code != 0 {
+	if code := run([]string{"skills", "--unused", "--root", second, "--root", first}, &stdout, &stderr); code != 0 {
 		t.Fatalf("multiple roots exit=%d stderr=%s", code, stderr.String())
 	}
 	var value struct {
@@ -1775,7 +1776,7 @@ func TestRunUnusedSkillsKeepsWarningsSeparate(t *testing.T) {
 	writeTestSkill(t, filepath.Join(root, ".agents", "skills", "report"), "report")
 
 	var stdout, stderr bytes.Buffer
-	if code := run([]string{"skills", "--root", root, "--unused", "--json"}, &stdout, &stderr); code != 0 {
+	if code := run([]string{"skills", "--root", root, "--unused"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("warning JSON exit=%d stderr=%s", code, stderr.String())
 	}
 	var value map[string]any
@@ -1794,7 +1795,7 @@ func TestRunUnusedSkillsKeepsWarningsSeparate(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	if code := run([]string{"skills", "--root", root, "--unused", "--json", "--strict-input"}, &stdout, &stderr); code != 1 {
+	if code := run([]string{"skills", "--root", root, "--unused", "--strict-input"}, &stdout, &stderr); code != 1 {
 		t.Fatalf("strict-input exit=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 	if err := json.Unmarshal(stdout.Bytes(), &value); err != nil {
@@ -1811,7 +1812,7 @@ func TestRunUnusedSkillsAppliesStrictAndDays(t *testing.T) {
 
 	usageHomeAt(t, time.Now().UTC().Add(-24*time.Hour))
 	var stdout, stderr bytes.Buffer
-	if code := run([]string{"skills", "--root", root, "--unused", "--json"}, &stdout, &stderr); code != 0 {
+	if code := run([]string{"skills", "--root", root, "--unused"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("recent default exit=%d stderr=%s", code, stderr.String())
 	}
 	var value struct {
@@ -1827,7 +1828,7 @@ func TestRunUnusedSkillsAppliesStrictAndDays(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	if code := run([]string{"skills", "--root", root, "--unused", "--strict", "--json"}, &stdout, &stderr); code != 0 {
+	if code := run([]string{"skills", "--root", root, "--unused", "--strict"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("strict exit=%d stderr=%s", code, stderr.String())
 	}
 	if err := json.Unmarshal(stdout.Bytes(), &value); err != nil {
@@ -1840,7 +1841,7 @@ func TestRunUnusedSkillsAppliesStrictAndDays(t *testing.T) {
 	usageHomeAt(t, time.Now().UTC().Add(-40*24*time.Hour))
 	stdout.Reset()
 	stderr.Reset()
-	if code := run([]string{"skills", "--root", root, "--unused", "--days", "30", "--json"}, &stdout, &stderr); code != 0 {
+	if code := run([]string{"skills", "--root", root, "--unused", "--days", "30"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("days exit=%d stderr=%s", code, stderr.String())
 	}
 	if err := json.Unmarshal(stdout.Bytes(), &value); err != nil {
@@ -1915,43 +1916,31 @@ func TestRunRejectsInvalidArguments(t *testing.T) {
 	stderr.Reset()
 	missingRoot := filepath.Join(t.TempDir(), "missing")
 	testHome(t)
-	if code := run([]string{"skills", "--unused", "--root", missingRoot, "--json"}, &stdout, &stderr); code == 0 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "scan skill roots") {
+	if code := run([]string{"skills", "--unused", "--root", missingRoot}, &stdout, &stderr); code == 0 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "scan skill roots") {
 		t.Fatalf("missing root exit=%d stdout=%q stderr=%s", code, stdout.String(), stderr.String())
 	}
 }
 
-func TestRunSkillsViewOptionAndAutoContext(t *testing.T) {
+func TestRunSkillsViewOptionPreservesJSONFields(t *testing.T) {
 	testHome(t)
-	var stdout, stderr bytes.Buffer
-	if code := run([]string{"skills", "--color", "never"}, &stdout, &stderr); code != 0 {
-		t.Fatalf("auto view exit=%d stderr=%s", code, stderr.String())
-	}
-	if !strings.Contains(stdout.String(), "View: auto (selected: mode)") {
-		t.Fatalf("auto view was not reported:\n%s", stdout.String())
-	}
-
-	stdout.Reset()
-	stderr.Reset()
-	if code := run([]string{"skills", "--view", "state", "--color", "never"}, &stdout, &stderr); code != 0 {
-		t.Fatalf("state view exit=%d stderr=%s", code, stderr.String())
-	}
-	for _, want := range []string{"View: state", "Confirmed", "Inferred", "Unconfirmed"} {
-		if !strings.Contains(stdout.String(), want) {
-			t.Errorf("state view missing %q:\n%s", want, stdout.String())
+	for _, view := range []string{"auto", "compact", "mode", "state", "all"} {
+		var stdout, stderr bytes.Buffer
+		if code := run([]string{"skills", "--view", view}, &stdout, &stderr); code != 0 {
+			t.Fatalf("%s: exit=%d stderr=%s", view, code, &stderr)
 		}
-	}
-	if strings.Contains(stdout.String(), "Last Used") {
-		t.Fatalf("state view contains Last Used:\n%s", stdout.String())
-	}
-
-	stdout.Reset()
-	stderr.Reset()
-	if code := run([]string{"skills", "--view", "all", "--color", "never"}, &stdout, &stderr); code != 0 {
-		t.Fatalf("all view exit=%d stderr=%s", code, stderr.String())
-	}
-	for _, want := range []string{"View: all", "ACTIVATION MODE", "EVIDENCE STATE", "Explicit", "Confirmed", "Last Used"} {
-		if !strings.Contains(stdout.String(), want) {
-			t.Errorf("all view missing %q:\n%s", want, stdout.String())
+		var value struct {
+			Rows []map[string]any `json:"rows"`
+		}
+		if err := json.Unmarshal(stdout.Bytes(), &value); err != nil {
+			t.Fatal(err)
+		}
+		if len(value.Rows) != 1 {
+			t.Fatalf("%s: %#v", view, value)
+		}
+		for _, field := range []string{"explicit", "implicit", "confirmed", "inferred", "unconfirmed", "total", "last_used"} {
+			if _, ok := value.Rows[0][field]; !ok {
+				t.Errorf("%s missing %s: %#v", view, field, value.Rows[0])
+			}
 		}
 	}
 }
@@ -1970,7 +1959,7 @@ func TestRunKeepsWarningsOffMachineReadableStdout(t *testing.T) {
 		t.Fatal(err)
 	}
 	var stdout, stderr bytes.Buffer
-	if code := run([]string{"stats", "--json"}, &stdout, &stderr); code != 0 {
+	if code := run([]string{"stats"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("exit=%d stderr=%s", code, stderr.String())
 	}
 	var value map[string]any
@@ -2158,7 +2147,7 @@ func TestRunStrictInputReturnsNonZeroAfterRenderingReport(t *testing.T) {
 	}
 }
 
-func TestRunStylesDiagnosticPrefixesOnly(t *testing.T) {
+func TestRunDefaultJSONDiagnosticsStayPlain(t *testing.T) {
 	home := testHome(t)
 	path := filepath.Join(home, "sessions", "2026", "one.jsonl")
 	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
@@ -2177,11 +2166,11 @@ func TestRunStylesDiagnosticPrefixesOnly(t *testing.T) {
 		t.Fatalf("exit=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 	got := stderr.String()
-	warningPrefix := "\x1b[1;93mwarning:\x1b[m "
-	if !strings.HasPrefix(got, "\n"+warningPrefix) {
+	warningPrefix := "warning: "
+	if !strings.HasPrefix(got, warningPrefix) {
 		t.Fatalf("warning prefix is not yellow and bold: %q", got)
 	}
-	if strings.Contains(strings.TrimPrefix(got, "\n"+warningPrefix), "\x1b[") {
+	if strings.Contains(strings.TrimPrefix(got, warningPrefix), "\x1b[") {
 		t.Fatalf("warning body is styled with its prefix: %q", got)
 	}
 
@@ -2203,7 +2192,7 @@ func TestRunStylesDiagnosticPrefixesOnly(t *testing.T) {
 	if code := run([]string{"stats", "--days", "0", "--color", "always"}, &stdout, &stderr); code == 0 {
 		t.Fatalf("invalid days unexpectedly succeeded: stdout=%q stderr=%q", stdout.String(), stderr.String())
 	}
-	if got := stderr.String(); !strings.Contains(got, "\x1b[1;91merror:\x1b[m --days must be at least 1") {
+	if got := stderr.String(); !strings.Contains(got, "error: --days must be at least 1") {
 		t.Fatalf("error prefix is not red and bold: %q", got)
 	}
 }
@@ -2223,7 +2212,7 @@ func TestRunKeepsDiagnosticsPlainForJSON(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	if code := run([]string{"stats", "--json", "--color", "always"}, &stdout, &stderr); code != 0 {
+	if code := run([]string{"stats", "--color", "always"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("exit=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 	if strings.Contains(stdout.String(), "\x1b[") || strings.Contains(stderr.String(), "\x1b[") {
@@ -2466,5 +2455,39 @@ func TestPurposeClassificationSkipsInjectedOnlySessions(t *testing.T) {
 	}
 	if len(input.Purposes) != 0 {
 		t.Fatal("injected-only session received a purpose")
+	}
+}
+
+func TestRunJSONDefaultAndDeprecatedFlag(t *testing.T) {
+	testHome(t)
+	for _, command := range []string{"stats", "activity", "models", "tools", "skills", "sessions"} {
+		for _, option := range []string{"", "--json", "--json=true", "--json=false", "-json", "-json=false"} {
+			t.Run(command+option, func(t *testing.T) {
+				args := []string{command}
+				if option != "" {
+					args = append(args, option)
+				}
+				var stdout, stderr bytes.Buffer
+				if code := run(args, &stdout, &stderr); code != 0 {
+					t.Fatalf("exit=%d: %s", code, &stderr)
+				}
+				if !json.Valid(stdout.Bytes()) {
+					t.Fatalf("invalid JSON: %s", &stdout)
+				}
+				warning := stderr.String()
+				if option == "" && strings.Contains(warning, "deprecated") {
+					t.Fatalf("unexpected deprecation: %s", warning)
+				}
+				if option != "" && (!strings.Contains(warning, "--json is unnecessary because JSON is now default") || !strings.Contains(warning, "v0.7.0")) {
+					t.Fatalf("missing deprecation: %s", warning)
+				}
+			})
+		}
+	}
+	for _, args := range [][]string{{"--json=false"}, {"stats", "--json=invalid"}, {"stats", "--json", "false"}} {
+		var stdout, stderr bytes.Buffer
+		if code := run(args, &stdout, &stderr); code != 2 || stdout.Len() != 0 {
+			t.Fatalf("%v: exit=%d stdout=%s stderr=%s", args, code, &stdout, &stderr)
+		}
 	}
 }
