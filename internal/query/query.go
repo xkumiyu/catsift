@@ -8,21 +8,24 @@ import (
 	"strings"
 	"time"
 
+	"github.com/xkumiyu/catsift/internal/aggregate"
+	"github.com/xkumiyu/catsift/internal/skillinventory"
 	"github.com/xkumiyu/catsift/internal/usage"
 )
 
 // Input is the normalized source result passed to Build.
 type Input struct {
-	Turns    []usage.Turn
-	Sessions []usage.Session
-	Agents   []string
-	Warnings []usage.Warning
-	Source   usage.SourceKind
-	Sources  []usage.SourceKind
-	From     time.Time
-	To       time.Time
-	Filter   Filter
-	Purposes map[string]string
+	SkillInventory *skillinventory.InventorySnapshot
+	Turns          []usage.Turn
+	Sessions       []usage.Session
+	Agents         []string
+	Warnings       []usage.Warning
+	Source         usage.SourceKind
+	Sources        []usage.SourceKind
+	From           time.Time
+	To             time.Time
+	Filter         Filter
+	Purposes       map[string]string
 }
 
 // Filter is shared by the static input path and interactive views. From is
@@ -210,12 +213,13 @@ type TurnSummary struct {
 // are intentionally private so marshaling the model cannot expose an
 // implementation-only payload.
 type ReadModel struct {
-	Filter   Filter           `json:"filter"`
-	Overview OverviewView     `json:"overview"`
-	Models   []ModelSummary   `json:"models,omitempty"`
-	Skills   []SkillSummary   `json:"skills,omitempty"`
-	Sessions []SessionSummary `json:"sessions,omitempty"`
-	Warnings []usage.Warning  `json:"warnings,omitempty"`
+	UnusedSkills aggregate.Report `json:"-"`
+	Filter       Filter           `json:"filter"`
+	Overview     OverviewView     `json:"overview"`
+	Models       []ModelSummary   `json:"models,omitempty"`
+	Skills       []SkillSummary   `json:"skills,omitempty"`
+	Sessions     []SessionSummary `json:"sessions,omitempty"`
+	Warnings     []usage.Warning  `json:"warnings,omitempty"`
 
 	modelDetails   map[string]ModelDetail
 	skillDetails   map[string]SkillDetail
@@ -227,6 +231,13 @@ type ReadModel struct {
 // but are not needed to rebuild this read model.
 func SanitizeInput(input Input) Input {
 	result := input
+	if input.SkillInventory != nil {
+		snapshot := *input.SkillInventory
+		snapshot.Roots = append([]string(nil), snapshot.Roots...)
+		snapshot.Entries = append([]skillinventory.InventoryEntry(nil), snapshot.Entries...)
+		snapshot.Warnings = cloneWarnings(snapshot.Warnings)
+		result.SkillInventory = &snapshot
+	}
 	result.Agents = append([]string(nil), input.Agents...)
 	result.Sources = append([]usage.SourceKind(nil), input.Sources...)
 	result.Warnings = cloneWarnings(input.Warnings)
@@ -334,6 +345,14 @@ func Build(input Input, filters ...Filter) ReadModel {
 		skillDetails:   make(map[string]SkillDetail),
 		sessionDetails: make(map[string]SessionDetail),
 	}
+	if input.SkillInventory != nil {
+		turns := make([]usage.Turn, 0, len(selected))
+		for _, item := range selected {
+			turns = append(turns, item.turn)
+		}
+		readModel.UnusedSkills = aggregate.BuildUnusedReport(aggregate.Input{Turns: turns, Warnings: input.Warnings}, *input.SkillInventory, filter.Strict, aggregate.SkillGroupByTurn)
+		readModel.Warnings = cloneWarnings(readModel.UnusedSkills.Warnings)
+	}
 	readModel.Models = modelRows(modelAccumulators)
 	readModel.Skills = skillRows(skillAccumulators)
 
@@ -350,7 +369,7 @@ func Build(input Input, filters ...Filter) ReadModel {
 			sessionKeys[key] = struct{}{}
 		}
 	}
-	readModel.Overview = buildOverview(filter, input.Agents, input.Warnings, selected, len(sessionKeys), skillUses)
+	readModel.Overview = buildOverview(filter, input.Agents, readModel.Warnings, selected, len(sessionKeys), skillUses)
 	readModel.Sessions = sessionRows(index, sessionKeys, selectedBySession, skillUses)
 	readModel.buildDetails(index, sessionKeys, selectedBySession, modelAccumulators, skillUses, skillAccumulators)
 	for i := range readModel.Sessions {

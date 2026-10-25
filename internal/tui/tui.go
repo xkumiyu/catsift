@@ -19,6 +19,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/xkumiyu/catsift/internal/output"
 	"github.com/xkumiyu/catsift/internal/query"
+	"github.com/xkumiyu/catsift/internal/skillinventory"
 	"github.com/xkumiyu/catsift/internal/usage"
 	"golang.org/x/term"
 )
@@ -142,6 +143,7 @@ type State struct {
 	sortMode          sortMode
 	history           []navigationContext
 	activityMonthly   bool
+	skillsUnused      bool
 	sourcePath        string
 	sourcePaths       map[usage.SourceKind]string
 	sourceFilterOpen  bool
@@ -280,6 +282,11 @@ func (state *State) updateKey(message tea.KeyMsg) (tea.Model, tea.Cmd) {
 		state.periodInput = ""
 		state.Status = ""
 		state.clearPeriodNotice()
+	case "u":
+		if state.Route == RouteSkills {
+			state.skillsUnused = !state.skillsUnused
+			state.Selected, state.Offset = 0, 0
+		}
 	case "m":
 		if state.Route == RouteActivity {
 			state.activityMonthly = !state.activityMonthly
@@ -700,6 +707,9 @@ func (state *State) openSelected() {
 		}
 		state.push(RouteModelDetail, rows[state.Selected].Model.Key())
 	case RouteSkills:
+		if state.skillsUnused {
+			return
+		}
 		rows := state.filteredSkills()
 		if state.Selected >= len(rows) {
 			return
@@ -782,6 +792,9 @@ func (state *State) filterSelectedRow() {
 			state.Filter.ModelName = ""
 		}
 	case RouteSkills:
+		if state.skillsUnused {
+			return
+		}
 		rows := state.filteredSkills()
 		if state.Selected < len(rows) {
 			state.Filter.Skill = rows[state.Selected].Name
@@ -1021,6 +1034,9 @@ func (state *State) rowCount() int {
 	case RouteModels:
 		return len(state.filteredModels())
 	case RouteSkills:
+		if state.skillsUnused {
+			return len(state.filteredUnusedSkills())
+		}
 		return len(state.filteredSkills())
 	case RouteSessions:
 		return len(state.filteredSessions())
@@ -1037,6 +1053,9 @@ func (state *State) rowCount() int {
 }
 
 func (state *State) canOpenSelected() bool {
+	if state.Route == RouteSkills && state.skillsUnused {
+		return false
+	}
 	if state.Selected < 0 || state.Selected >= state.rowCount() {
 		return false
 	}
@@ -1054,6 +1073,9 @@ func (state *State) selectedRow(index int) bool {
 
 func (state *State) visibleHeight() int {
 	value := state.frameBodyHeight() - state.routePrefixLines()
+	if state.Route == RouteSkills && state.skillsUnused {
+		value /= 2
+	}
 	if value < 1 {
 		return 1
 	}
@@ -1070,7 +1092,12 @@ func (state *State) frameBodyHeight() int {
 
 func (state *State) routePrefixLines() int {
 	switch state.Route {
-	case RouteActivity, RouteModels, RouteSkills, RouteSessions:
+	case RouteSkills:
+		if state.skillsUnused {
+			return 5
+		}
+		return 3
+	case RouteActivity, RouteModels, RouteSessions:
 		return 3
 	case RouteModelDetail, RouteSkillDetail:
 		return 6
@@ -1392,10 +1419,15 @@ func (state *State) footerLines() []string {
 		value = "j/k scroll   Home/End jump   d period   1-5 switch   o sources   r reload   ? help   q quit"
 	case state.Route == RouteActivity:
 		value = "j/k scroll   m daily/monthly   d period   1-5 switch   o sources   r reload   ? help   q quit"
+	case state.Route == RouteSkills && state.skillsUnused:
+		value = "j/k move   u usage/unused   / search   d period   o sources   r reload   ? help   q quit"
 	case state.Route == RouteModels || state.Route == RouteSkills:
 		value = "j/k move   / search rows   s sort   f filter   d period   o sources   r reload   ? help   q quit"
 		if state.canOpenSelected() {
 			value = "j/k move   Enter detail   / search rows   s sort   f filter   d period   o sources   r reload   ? help   q quit"
+		}
+		if state.Route == RouteSkills {
+			value = strings.Replace(value, "j/k move", "j/k move   u usage/unused", 1)
 		}
 	case state.Route == RouteSessions:
 		value = "j/k move   / search rows   s sort   a agent   p project   d period   o sources   r reload   ? help   q quit"
@@ -1439,6 +1471,7 @@ func (state *State) viewHelp() string {
 		"  r         reload snapshot",
 		"  s         cycle list sort",
 		"  m         switch Activity daily/monthly",
+		"  u         switch Skills usage/unused",
 		"  c         clear TUI filters",
 		"  ?/Esc     close help",
 		"  q/Ctrl+C  quit",
@@ -1921,9 +1954,12 @@ func (state *State) viewModels(height int) []string {
 }
 
 func (state *State) viewSkills(height int) []string {
+	if state.skillsUnused {
+		return state.viewUnusedSkills(height)
+	}
 	rows := state.filteredSkills()
 	width := state.renderWidth()
-	lines := []string{primaryListHeading("Skills ["+state.sortLabel()+"]", len(rows), state.Selected, width)}
+	lines := []string{primaryListHeading("Skills / Usage [u: unused] ["+state.sortLabel()+"]", len(rows), state.Selected, width)}
 	if len(rows) == 0 {
 		if strings.TrimSpace(state.Filter.Search) != "" {
 			return append(lines, mutedStyle.Render("No matching rows."))
@@ -2977,4 +3013,54 @@ func compactError(err error) string {
 		return ""
 	}
 	return strings.Join(strings.Fields(err.Error()), " ")
+}
+
+func (state *State) filteredUnusedSkills() []skillinventory.InventoryEntry {
+	rows := state.ReadModel.UnusedSkills.UnusedSkills
+	search := strings.ToLower(strings.TrimSpace(state.Filter.Search))
+	result := make([]skillinventory.InventoryEntry, 0, len(rows))
+	for _, row := range rows {
+		if search == "" || strings.Contains(strings.ToLower(row.Name+" "+row.Path), search) {
+			result = append(result, row)
+		}
+	}
+	return result
+}
+
+func (state *State) viewUnusedSkills(height int) []string {
+	width := state.renderWidth()
+	report := state.ReadModel.UnusedSkills
+	rows := state.filteredUnusedSkills()
+	lines := []string{
+		primaryListHeading("Skills / Unused [u: usage]", len(rows), state.Selected, width),
+		truncate("Unobserved in selected history (not lifetime unused)", width),
+		truncate(fmt.Sprintf("Installed: %d  Unobserved: %d  Strict: %t", report.InstalledSkills, len(report.UnusedSkills), state.Filter.Strict), width),
+		truncate("Roots: "+strings.Join(report.UnusedRoots, ", "), width),
+	}
+	if len(rows) == 0 {
+		message := "No installed skills unobserved in selected history."
+		if state.Input.SkillInventory == nil {
+			message = "Skill inventory not loaded."
+		} else if report.InstalledSkills == 0 {
+			message = "No installed skills in scan roots."
+		} else if strings.TrimSpace(state.Filter.Search) != "" {
+			message = "No matching rows."
+		}
+		return fitBody(append(lines, truncate(message, width)), height)
+	}
+	// Each entry uses two lines so narrow terminals retain space for install paths.
+	lines = append(lines, truncate("Skill / Install path", width))
+	count := (height - len(lines)) / 2
+	if count < 1 {
+		count = 1
+	}
+	start, end := window(len(rows), state.Offset, count)
+	for i := start; i < end; i++ {
+		name := truncate(rows[i].Name, width)
+		if i == state.Selected {
+			name = selectedStyle.Render(padRightDisplay(name, width))
+		}
+		lines = append(lines, name, truncate("  "+rows[i].Path, width))
+	}
+	return fitBody(lines, height)
 }

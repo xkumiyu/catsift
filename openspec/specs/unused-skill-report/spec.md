@@ -85,32 +85,27 @@
 
 ### Requirement: 未使用Skillを決定的なhuman-readable reportとJSONで出力する
 
-未使用viewは、inventory全体ではなく未使用entryだけをrowsへ出力しなければならない（SHALL）。human-readable reportは未使用viewであること、選択history source、Agent一覧、選択期間、strict状態、およびscopeが分かるcontextを表示し、各rowのSkill nameとpathを表示しなければならない（SHALL）。同じcanonical nameを持つ異なる物理pathは別rowとして表示しなければならない（SHALL）。JSONは既存のreport contextに加えて `view: "unused"`、source、Agent一覧、解決済みroot一覧、inventory総数、未使用総数、および `rows` arrayを持たなければならない（SHALL）。各JSON rowは少なくとも `name`、Skill directoryを示すabsolute `path`、`name_source`、および `name_mismatch` を保持しなければならない（SHALL）。rowsはcanonical name昇順、同名の場合はabsolute path昇順で並べなければならない（SHALL）。inventoryと未使用件数は論理Skill名ではなく物理entry数として数えなければならない（SHALL）。
-
-#### Scenario: 未使用Skillをhuman-readableで表示する
-
-- **WHEN** `catsift skills --unused` をhuman-readable modeで実行し、未使用Skillが存在する
-- **THEN** システムは未使用view、source、Agent一覧、期間、strict状態、scope、Skill name、およびpathを含むstatic reportを出力する
-
-#### Scenario: ctxで同名・異PATHのSkillを表示する
-
-- **WHEN** ctx sourceを選択し、同じcanonical nameの未使用Skillが2つの異なるabsolute pathに存在する
-- **THEN** システムは同じnameを持つ2つのrowをpath順に出力し、未使用件数を2として扱う
+未使用CLIは既定でJSONを出力し、人向け表示はTUIのSkills unusedを使用しなければならない（SHALL）。JSONは既存contextと`view: "unused"`、source、agents、roots、installed_count、unused_count、rowsを維持しなければならない（SHALL）。各rowはname、absolute path、name_source、name_mismatchを保持し、name昇順・同名path昇順で物理entryを数えなければならない（SHALL）。
 
 #### Scenario: 未使用SkillをJSONで表示する
+- **WHEN** userが`catsift skills --unused`を実行する
+- **THEN** stdoutは単独のJSONとなり、未使用entryだけをrowsへ出力し、空でも`[]`を保持する
 
-- **WHEN** userが `catsift skills --unused --json` を実行する
-- **THEN** stdoutは単独の有効なJSON documentとなり、`view` が `unused`、`rows` は未使用entryだけ、空の場合も `[]` となる
+#### Scenario: ctxで同名・異PATHのSkillを表示する
+- **WHEN** 同じcanonical nameの未観測entryが異なるpathに存在する
+- **THEN** JSONとTUIはpath順の別rowとして表示し、物理entry数として数える
 
 #### Scenario: すべて使用済みの場合にempty stateを表示する
+- **WHEN** 全inventory entryに選択条件内の利用が存在する
+- **THEN** JSONはinstalled_countを保持してunused_countを0とし、TUIは選択履歴に未観測entryがないと表示する
 
-- **WHEN** scope内の全inventory entryに選択条件内の利用が存在する
-- **THEN** human-readable reportは空tableではなく、source・Agent・scope・履歴filterに未使用Skillがないことを説明し、JSONは `installed_count` を保持したまま `unused_count: 0` と `rows: []` を出力する
+#### Scenario: 未使用Skillをhuman-readableで表示する
+- **WHEN** userが人向け表示を必要とする
+- **THEN** static reportでなくTUIのSkills unusedでcontextとinstall pathを表示する
 
 #### Scenario: 出力順をfilesystem列挙順から独立させる
-
-- **WHEN** 同一内容のSkillが異なるfilesystem列挙順で発見される
-- **THEN** human-readable reportとJSONのrows順、件数、および各identityは一致する
+- **WHEN** 同一inventoryを異なる順序で列挙する
+- **THEN** JSONとTUIは同じ名前/path順と件数を表示する
 
 ### Requirement: unused viewが既存の履歴filterとoutput optionを継承する
 

@@ -59,7 +59,7 @@ catsift
 | Overview | 利用状況の合計、Recent Activity、最近のSession、上位Skill/Model |
 | Activity | 日別または月別activity |
 | Models | providerおよびModelごとのToken usageと関連Session |
-| Skills | [Skill usage](#skill-usage-fields)、evidence state、関連Session |
+| Skills | [Skill usage](#skill-usage-fields)、evidence state、関連Session、選択履歴で未観測のインストール済みSkill |
 | Sessions | Session metadataと時系列のTurn詳細 |
 
 期間やキーワードで利用状況の絞り込みや、リストをソートできます。詳細は、TUI内で`?`を押すと表示されます。
@@ -101,11 +101,35 @@ activation modeとevidence stateは独立した軸です。1つの利用に複�
 
 1つのModel、Skill、Sessionのdetailは、各commandの`detail` subcommandで表示できます。
 
-`--json`でmachine-readableな出力を生成します。
-
 詳細は各commandの`--help`を参照してください。
 
+### Skill usage
+
+`--group-by`でturn単位またはsession単位に集計し、`--strict`で`Confirmed`の利用だけを集計します。
+
+```sh
+catsift skills --group-by session --strict
+catsift skills detail review
+```
+
+#### Unused skills
+
+TUIのSkillsまたは`catsift skills --unused`で、選択した履歴で未観測のインストール済みSkillを確認できます。
+
+```sh
+catsift skills --unused
+```
+
+rowはcanonical skill nameと絶対pathの組み合わせで識別し、同名でもpathが違えば別rowになります。
+選択した履歴sourceでいずれかのAgentが使用した名前は、使用済みとみなします。
+
+`--root`は走査起点で、配下の`.agents/skills/`、`.codex/skills/`、plugin cache配置のみ認識します。
+flatな`SKILL.md`配置は無視されます。
+
 ### Optional: Session purpose classification
+
+> [!NOTE]
+> この機能は試験的です。
 
 Jevでセッションの用途を分類できます。
 
@@ -121,100 +145,6 @@ Jevでセッションの用途を分類できます。
 2. 設定ファイルを開き、`session_purpose.enabled`を`true`にします。
 3. 環境変数`TYPESAFE_API_KEY`を設定します。
 
-### Usage overview
-
-```sh
-catsift stats
-```
-
-```text
-USAGE OVERVIEW
-Source: Codex (~/.codex), OpenCode (~/.local/share/opencode)
-Agents: Codex, OpenCode
-Period: 2026-01-01 to 2026-01-31
-
-Activity
-  Sessions                    123
-  Turns                       456
-  User Prompts                789
-  Tool Calls                   42
-
-Skill Usage
-  By turn                       9
-  By session                    6
-
-Token Usage
-  Total Tokens                3.16B
-    Input Tokens              3.14B
-      Cached Tokens           3.06B
-    Output Tokens             13.3M
-      Reasoning Tokens        6.40M
-```
-
-`Period`は、集計に含まれるdataの期間を表示します。
-
-ctx sourceではtoken usageを利用できません。
-
-### Skill usage
-
-```sh
-catsift skills --view mode
-```
-
-```text
-SKILL USAGE
-Source: Codex (~/.codex), OpenCode (~/.local/share/opencode)
-Agents: Codex, OpenCode
-Period: 2026-01-01 to 2026-01-31
-Group by: turn
-Strict: false
-View: mode
-
-Skill                       Explicit  Implicit  Unknown  Total
-──────────────────────────────────────────────────────────────
-code-review                       5         1        0      6
-openspec-apply-change             2         1        0      3
-
-2 skills, 9 uses total
-```
-
-### Skill command options
-
-#### Skill usage view
-
-`--view`でSkill usage viewを選択します。
-
-```sh
-catsift skills --view compact  # Total only
-catsift skills --view mode     # Activation mode
-catsift skills --view state    # Evidence state
-catsift skills --view all      # Both tables
-```
-
-デフォルトの`--view auto`は、terminal幅に応じて`compact`、`mode`、`all`のいずれかを選択します。
-
-`--group-by`でturn単位またはsession単位に集計し、`--strict`で`Confirmed`の利用だけを集計します。
-
-`skills detail NAME`で1つのSkillのdeduplicated detailと関連Sessionを表示できます。
-
-```sh
-catsift skills detail review
-```
-
-#### Unused skills
-
-`skills`に`--unused`を指定すると、選択した履歴sourceとインストール済みSkill inventoryを比較できます。
-
-```sh
-catsift skills --unused
-```
-
-rowはcanonical skill nameと絶対pathの組み合わせで識別し、同名でもpathが違えば別rowになります。
-選択した履歴sourceでいずれかのAgentが使用した名前は、使用済みとみなします。
-
-`--root`は走査起点で、配下の`.agents/skills/`、`.codex/skills/`、plugin cache配置のみ認識します。
-flatな`SKILL.md`配置は無視されます。
-
 ## Cache
 
 解析結果は、次回以降の実行を高速化するためOS標準のuser cache directoryに保存されます。
@@ -223,4 +153,4 @@ flatな`SKILL.md`配置は無視されます。
 
 - CatSiftは、選択したCodex、GitHub Copilot CLI、OpenCode、またはctxの履歴をread-onlyで読み取ります。
 - Optional purpose classificationを有効にした場合、Session titleとuser-authored messageをTypeSafe System Oneへ送信します。送信した内容は保存しません。
-- `skills --unused`ではインストール済みSkill inventoryも読み取ります。TUIとreportではprompt本文、command本文、Tool arguments、Skill bodies、provider payload、その他のraw event detailsを含めません。
+- TUIと`skills --unused`ではインストール済みSkill inventoryも読み取ります。TUIとreportではprompt本文、command本文、Tool arguments、Skill bodies、provider payload、その他のraw event detailsを含めません。

@@ -12,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/xkumiyu/catsift/internal/query"
+	"github.com/xkumiyu/catsift/internal/skillinventory"
 	"github.com/xkumiyu/catsift/internal/usage"
 )
 
@@ -1940,5 +1941,65 @@ func TestRunRejectsNonInteractiveStreams(t *testing.T) {
 	err := Run(RunOptions{Input: explorerInput(), Stdin: strings.NewReader(""), Stdout: &bytes.Buffer{}})
 	if !errors.Is(err, ErrNotInteractive) {
 		t.Fatalf("Run error = %v, want ErrNotInteractive", err)
+	}
+}
+
+func TestSkillsUnusedUsesSelectedHistoryAndInventory(t *testing.T) {
+	input := explorerInput()
+	input.SkillInventory = &skillinventory.InventorySnapshot{Roots: []string{"/synthetic/.agents/skills"}, InstalledCount: 3, Entries: []skillinventory.InventoryEntry{
+		{Name: "review", Path: "/synthetic/.agents/skills/review"},
+		{Name: "idle", Path: "/synthetic/.agents/skills/idle"},
+		{Name: "idle", Path: "/other/.agents/skills/idle"},
+	}, Warnings: []usage.Warning{{Reason: "skill_inventory", Count: 1}}}
+	state := NewState(input, query.Filter{}, nil)
+	state.Width, state.Height = 140, 40
+	state.setRoute(RouteSkills)
+	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("u")})
+	view := ansi.Strip(state.View())
+	for _, want := range []string{"Unobserved in selected history", "Roots:", "/synthetic/.agents/skills", "idle", "/other/.agents/skills/idle", "Period:", "Source:"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("missing %q: %s", want, view)
+		}
+	}
+	if state.rowCount() != 2 || state.canOpenSelected() {
+		t.Fatalf("unused rows=%d open=%t", state.rowCount(), state.canOpenSelected())
+	}
+	state.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if state.Route != RouteSkills {
+		t.Fatal("unused opened a history detail")
+	}
+	if len(state.ReadModel.Warnings) != 2 {
+		t.Fatalf("warnings=%v", state.ReadModel.Warnings)
+	}
+	state.Filter.Search = "/other/"
+	if state.rowCount() != 1 {
+		t.Fatal("install path search not applied")
+	}
+	state.Filter.Search = ""
+	state.Filter.From = input.Turns[0].StartedAt.Add(24 * time.Hour)
+	state.rebuildReadModel()
+	if state.rowCount() != 3 {
+		t.Fatal("period did not update unused")
+	}
+	state.Filter.From = time.Time{}
+	state.Filter.Sources = []usage.SourceKind{}
+	state.rebuildReadModel()
+	if state.rowCount() != 3 {
+		t.Fatal("source filter did not update unused")
+	}
+	state.Filter.Sources = []usage.SourceKind{usage.SourceCodex}
+	state.Input.Turns[0].SkillEvidence[0].State = usage.StateInferred
+	state.Filter.Strict = true
+	state.rebuildReadModel()
+	if state.rowCount() != 3 {
+		t.Fatal("strict did not update unused")
+	}
+	state.Update(ReloadResultMsg{Input: query.Input{SkillInventory: &skillinventory.InventorySnapshot{Roots: []string{"/empty"}}}})
+	if state.rowCount() != 0 || !strings.Contains(ansi.Strip(state.View()), "No installed skills") {
+		t.Fatal("reload inventory/empty state not applied")
+	}
+	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("u")})
+	if state.skillsUnused {
+		t.Fatal("usage switch did not return")
 	}
 }
