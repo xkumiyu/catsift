@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestInputBoundsPreservingEnds(t *testing.T) {
@@ -177,6 +178,69 @@ func TestStoreContainsOnlyResults(t *testing.T) {
 	}
 	if loaded["s"].ModeID != "debug" {
 		t.Fatalf("bad roundtrip: %+v", loaded)
+	}
+}
+
+func TestSaveStoreWritesSchemaVersionAndVerificationMetadata(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "classification.json")
+	verified := time.Date(2026, 10, 26, 0, 0, 0, 0, time.UTC)
+	results := map[string]Result{"s": {
+		InputFingerprint: "hash", TaxonomyFingerprint: TaxonomyFingerprint(), Version: Version,
+		ModeID: "debug", ModeName: "Debug", VerifiedAt: verified, Evidence: "evidence",
+	}}
+	if err := SaveStore(path, results); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw struct {
+		SchemaVersion int               `json:"schema_version"`
+		Results       map[string]Result `json:"results"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+	if raw.SchemaVersion != StoreSchemaVersion {
+		t.Fatalf("schema version = %d, want %d", raw.SchemaVersion, StoreSchemaVersion)
+	}
+	if raw.Results["s"].Evidence != "evidence" || !raw.Results["s"].VerifiedAt.Equal(verified) {
+		t.Fatalf("verification metadata lost: %+v", raw.Results["s"])
+	}
+}
+
+func TestLoadStoreReadsLegacyLayout(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "classification.json")
+	legacy := `{"results":{"s":{"input_fingerprint":"hash","taxonomy_fingerprint":"tax","version":"1","mode_id":"debug","mode_name":"Debug"}}}`
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded["s"].ModeID != "debug" {
+		t.Fatalf("legacy result was not loaded: %+v", loaded)
+	}
+}
+
+func TestEvidenceReuse(t *testing.T) {
+	updated := time.Date(2026, 10, 26, 1, 2, 3, 0, time.UTC)
+	evidence := Evidence("Title", updated, "10:20")
+	result := Result{Version: Version, TaxonomyFingerprint: TaxonomyFingerprint(), Evidence: evidence}
+	if !Reusable(result, evidence) {
+		t.Fatal("matching evidence should be reusable")
+	}
+	if Reusable(result, Evidence("Title", updated, "10:21")) {
+		t.Fatal("changed file revision should require verification")
+	}
+	if Reusable(result, Evidence("Changed", updated, "10:20")) {
+		t.Fatal("changed title should require verification")
+	}
+	result.Evidence = ""
+	if Reusable(result, evidence) {
+		t.Fatal("result without evidence must not be reused")
 	}
 }
 

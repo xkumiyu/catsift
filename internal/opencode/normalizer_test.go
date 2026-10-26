@@ -80,6 +80,32 @@ func TestNormalizerPreservesSessionTitle(t *testing.T) {
 	}
 }
 
+func TestNormalizerGroupsUserMessageParts(t *testing.T) {
+	n := newNormalizer("/synthetic/opencode.db")
+	for _, row := range []Row{
+		{Kind: RowSession, Session: SessionRow{ID: "s1"}},
+		{Kind: RowMessage, Message: MessageRow{ID: "m1", SessionID: "s1", Data: []byte(`{"role":"user"}`)}},
+		{Kind: RowPart, Part: PartRow{ID: "p1", MessageID: "m1", Data: []byte(`{"type":"text","text":"first part"}`)}},
+		{Kind: RowPart, Part: PartRow{ID: "p2", MessageID: "m1", Data: []byte(`{"type":"text","text":"<skill_content name=\"review\">instructions</skill_content>"}`)}},
+		{Kind: RowPart, Part: PartRow{ID: "p3", MessageID: "m1", Data: []byte(`{"type":"text","text":"second part"}`)}},
+	} {
+		if err := n.consume(row); err != nil {
+			t.Fatal(err)
+		}
+	}
+	result := n.result()
+	if len(result.Turns) != 1 || result.Turns[0].UserPrompts != 1 {
+		t.Fatalf("turns = %#v", result.Turns)
+	}
+	turn := result.Turns[0]
+	if !reflect.DeepEqual(turn.UserMessages, []string{"first part\nsecond part"}) {
+		t.Fatalf("classification messages = %#v", turn.UserMessages)
+	}
+	if len(turn.SkillEvidence) != 1 || turn.SkillEvidence[0].SkillName != "review" {
+		t.Fatalf("skill evidence = %#v", turn.SkillEvidence)
+	}
+}
+
 func TestLoadUsesOpenCodeSessionModelForModelAttribution(t *testing.T) {
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "opencode.db")

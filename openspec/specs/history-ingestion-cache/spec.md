@@ -80,3 +80,17 @@ Codexとctxの履歴を安全に再利用し、同じ入力に対する複数の
 
 - **WHEN** userが有効なCodex、ctx、OpenCode、またはGitHub Copilot cacheを利用する統計commandを実行する
 - **THEN** 分類が無効またはkey未設定ならcache・履歴を外部networkへ送信せず、分類を有効にした場合もsession titleと実際のuser-authored messageだけをTypeSafe System One互換endpointへ送り、cacheにはraw内容を保存せず、各sourceのdata rootとprovider-owned履歴を変更しない
+
+### Requirement: cache由来のsessionへsource pathをメモリ上だけで付与する
+
+ingestion cacheから復元したsessionには、対応するsource file pathをメモリ上でのみ付与しなければならない（SHALL）。このpathはcache snapshotへ保存してはならず（MUST NOT）、report、store、diagnosticへ永続化・表示してはならない（MUST NOT）。pathを必要としないsourceでは付与しなくてよい。
+
+#### Scenario: cacheから復元したsessionで本文parse対象を決める
+
+- **WHEN** cacheからsession一覧を復元し、分類の再検証対象を決める
+- **THEN** systemはメモリ上のsource pathを使って対象fileを特定できる
+
+#### Scenario: pathを永続化しない
+
+- **WHEN** source pathを付与したsessionを含むsnapshotをcacheへ書き込む、またはreportを出力する
+- **THEN** source pathはcacheとreportに含まれない

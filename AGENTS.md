@@ -10,7 +10,7 @@
 ## Git and worktrees
 
 - `main` is the current default branch. Do not make tracked or commit-target changes directly on it.
-- Starting from `main`, one task worktree per session may be created without additional approval for tracked changes. If already in a suitable non-default task worktree, continue there. A second worktree needs explicit approval. Follow the `git-worktree-workflow` skill for procedure.
+- Starting from `main`, one task worktree per session may be created without additional approval for tracked changes. If already in a suitable non-default task worktree, continue there. A second worktree needs explicit approval.
 - Preserve existing user changes; never stash, reset, overwrite, or clean them automatically.
 
 ## Development
@@ -45,3 +45,4 @@
 
 - Before opening a PR, run `openspec list --json` and check for completed changes still outside `openspec/changes/archive/`.
 - Archive completed changes with OpenSpec tooling, for example `openspec archive <change-name>`, before opening the PR.
+- Write pull request bodies in English.
