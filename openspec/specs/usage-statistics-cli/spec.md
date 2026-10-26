@@ -261,8 +261,6 @@ JSON reportと診断はTTY、NO_COLOR、`--color`の値にかかわらずANSIを
 
 interactive terminalでcommandを省略した`catsift`は、既存のhistory source選択、cache、およびwarningの規則を継承してTUI Usage Explorerを起動しなければならない（SHALL）。Usage Explorerの期間はTUI上で変更でき、CLI report用の`--days`、`--from`、`--to` optionを受け付けてはならない（MUST NOT）。Usage Explorerは履歴をread-onlyで扱い、既存の`stats`、`tools`、`skills`を置き換えてはならない（MUST NOT）。
 
-CLIとTUIは同じnormalized data、scope filter、warning、および集計意味論を使用しなければならない（SHALL）。TUIの`Period`は実際に集計されたdata範囲を表示し、`Daily activity`も同じ日付範囲を表示しなければならない（SHALL）。指定されたperiodと一致しない場合は`Input notes`で差分を説明し、period確定直後にはtab直下に`Notice:` messageを表示幅に合わせて折り返し表示してtab移動またはclearまで保持しなければならない（SHALL）。ただしCLIはJSONのsummary/detail、TUIは一覧からdetailへ辿るinteractive viewとして、それぞれの用途に適した表示量を提供してよい（MAY）。
-
 #### Scenario: commandなしでUsage Explorerを起動する
 
 - **WHEN** userがinteractive terminalで `catsift --source codex` を実行する
@@ -277,6 +275,22 @@ CLIとTUIは同じnormalized data、scope filter、warning、および集計意�
 
 - **WHEN** userが `stats`、`tools`、または`skills`を既存optionで実行する
 - **THEN** システムは既存のJSON field、集計、終了規則を維持し、既定でJSONを出力する
+
+### Requirement: CLIとTUIで共通の集計と期間表示を提供する
+
+CLIとTUIは同じnormalized data、scope filter、warning、および集計意味論を使用しなければならない（SHALL）。TUIの`Period`は実際に集計されたdata範囲を表示し、`Daily activity`も同じ日付範囲を表示しなければならない（SHALL）。指定されたperiodと一致しない場合は`Input notes`で差分を説明し、period確定直後にはtab直下に`Notice:` messageを表示幅に合わせて折り返し表示してtab移動またはclearまで保持しなければならない（SHALL）。ただしCLIはJSONのsummary/detail、TUIは一覧からdetailへ辿るinteractive viewとして、それぞれの用途に適した表示量を提供してよい（MAY）。
+
+#### Scenario: 同じscopeをCLIとTUIで表示する
+
+- **WHEN** userが同じnormalized dataとscope filterでCLIとTUIを使う
+- **THEN** warningと集計意味論は共通となる
+- **AND** CLIはJSONのsummary/detail、TUIは一覧からdetailへ辿るinteractive viewとして、それぞれの用途に適した表示量を提供してよい
+
+#### Scenario: 指定periodと実際のdata範囲が異なる
+
+- **WHEN** Usage Explorerでperiodを確定し、実際の集計data範囲が指定periodと一致しない
+- **THEN** PeriodとDaily activityは同じ実際のdata範囲を表示し、Input notesは指定periodとの差分を説明する
+- **AND** tab直下のNotice: messageは表示幅で折り返され、tab移動またはclearまで保持される
 
 ### Requirement: TUIの出力形式とterminal境界を検証する
 
