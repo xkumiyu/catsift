@@ -466,14 +466,14 @@ func TestOverviewWrapsWarningDetailsWithoutTruncating(t *testing.T) {
 
 	lines := state.overviewLines()
 	view := strings.Join(lines, "\n")
-	for _, want := range []string{"statistics may be incomplete", "update catsift or report this record type"} {
+	for _, want := range []string{"statistical impact is unconfirmed", "update catsift or report this record type"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("wrapped warning missing %q: %s", want, view)
 		}
 	}
 	for _, line := range lines {
 		plain := ansi.Strip(line)
-		if strings.Contains(plain, "GitHub Copilot") || strings.Contains(plain, "statistics may be incomplete") || strings.Contains(plain, "update catsift") {
+		if strings.Contains(plain, "GitHub Copilot") || strings.Contains(plain, "statistical impact is unconfirmed") || strings.Contains(plain, "update catsift") {
 			if lipgloss.Width(line) > state.Width || strings.Contains(plain, "…") {
 				t.Fatalf("warning line was truncated or exceeded width: %q", plain)
 			}
@@ -2001,5 +2001,21 @@ func TestSkillsUnusedUsesSelectedHistoryAndInventory(t *testing.T) {
 	state.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("u")})
 	if state.skillsUnused {
 		t.Fatal("usage switch did not return")
+	}
+}
+
+func TestOverviewShowsUnattributedSkillDiagnostic(t *testing.T) {
+	input := explorerInput()
+	input.Warnings = []usage.Warning{{Reason: "copilot_unattributed_skill", Type: "skill.invoked_ref", Source: usage.SourceCopilot, Count: 2}}
+	state := NewState(input, query.Filter{}, nil)
+	state.Width = 160
+	view := strings.Join(state.overviewLines(), "\n")
+	for _, want := range []string{"[GitHub Copilot]", "2 skill references skipped without an active turn", "type=skill.invoked_ref", "turn-level skill statistics may be incomplete"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("overview missing %q: %s", want, view)
+		}
+	}
+	if strings.Contains(view, "copilot_unattributed_skill") {
+		t.Fatalf("machine warning reason leaked to human view: %s", view)
 	}
 }

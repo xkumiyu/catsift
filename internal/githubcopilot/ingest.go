@@ -65,7 +65,7 @@ func Load(dataRoot string, options IngestOptions) (IngestResult, error) {
 	}
 
 	n := newNormalizer()
-	warnings := &WarningCollector{}
+	warnings := n.warnings
 	complete := true
 	for _, path := range files {
 		diagnose(options, fmt.Sprintf("copilot source: reading path=%q", path))
@@ -82,7 +82,6 @@ func Load(dataRoot string, options IngestOptions) (IngestResult, error) {
 		}
 	}
 	result := n.result()
-	result.Warnings = warnings.Warnings()
 	if store.Dir != "" && complete {
 		afterFiles, discoverErr := Discover(root)
 		if discoverErr != nil {

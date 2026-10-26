@@ -1,0 +1,11 @@
+{"id":"metadata-0","timestamp":"2026-01-01T00:00:00Z","type":"abort","data":{"reason":"user_initiated"}}
+{"id":"metadata-1","timestamp":"2026-01-01T00:00:00Z","type":"human_response.recorded","data":{"requestId":"question-1","actor":"human_response","response":{"responseKind":"user_input","answer":"synthetic-human-response","question":"synthetic-question","wasFreeform":true}}}
+{"id":"metadata-2","timestamp":"2026-01-01T00:00:00Z","type":"subagent.selected","data":{"agentName":"reviewer","agentDisplayName":"Reviewer","tools":null}}
+{"id":"metadata-3","timestamp":"2026-01-01T00:00:00Z","type":"subagent.configured","data":{"model":"subagent-model","multiTurn":false}}
+{"id":"metadata-4","timestamp":"2026-01-01T00:00:00Z","type":"session.binary_asset","data":{"assetId":"sha256:synthetic","byteLength":3,"data":"YWJj","mimeType":"image/png","type":"image","description":"synthetic-binary-description"}}
+{"id":"metadata-5","timestamp":"2026-01-01T00:00:00Z","type":"session.mode_changed","data":{"previousMode":"interactive","newMode":"plan"}}
+{"id":"metadata-6","timestamp":"2026-01-01T00:00:00Z","type":"session.task_complete","data":{"summary":"synthetic-task-summary"}}
+{"id":"metadata-7","timestamp":"2026-01-01T00:00:00Z","type":"session.mode_notice_delivered","data":{"mode":"plan","content":"synthetic-mode-notice"}}
+{"id":"metadata-8","timestamp":"2026-01-01T00:00:00Z","type":"session.permissions_changed","data":{"mode":"autopilot","previousMode":"interactive"}}
+{"id":"metadata-9","timestamp":"2026-01-01T00:00:00Z","type":"session.warning","data":{"message":"synthetic-provider-warning","warningType":"policy"}}
+{"id":"metadata-10","timestamp":"2026-01-01T00:00:00Z","type":"subagent.failed","data":{"toolCallId":"task-1","agentName":"reviewer","agentDisplayName":"Reviewer","error":"synthetic-agent-error","totalTokens":900,"totalToolCalls":10,"model":"subagent-model"}}

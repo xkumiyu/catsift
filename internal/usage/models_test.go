@@ -1,6 +1,8 @@
 package usage
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -171,5 +173,40 @@ func TestSessionTimeRangeFallsBackToTurnObservations(t *testing.T) {
 	from, to := SessionTimeRange(session, []Turn{turn})
 	if !from.Equal(turn.StartedAt) || !to.Equal(turn.EndedAt) {
 		t.Fatalf("session range = %s to %s", from, to)
+	}
+}
+
+func TestUnknownTypeWarningAdviceDoesNotAssertMissingStatistics(t *testing.T) {
+	if got := WarningAdvice("unknown_type"); got != "statistical impact is unconfirmed; update catsift or report this record type" {
+		t.Fatalf("advice = %q", got)
+	}
+	for _, reason := range []string{"ctx_unknown_record", "ctx_unknown_event", "malformed_json"} {
+		if !strings.Contains(WarningAdvice(reason), "statistics may be incomplete") {
+			t.Fatalf("unrelated advice changed for %s", reason)
+		}
+	}
+}
+
+func TestUnknownTypeWarningJSONShape(t *testing.T) {
+	warning := Warning{Reason: "unknown_type", Type: "session.future_event", Source: SourceCopilot, Path: "/synthetic/events.jsonl", Line: 12, Count: 2}
+	got, err := json.Marshal(warning)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"reason":"unknown_type","type":"session.future_event","source":"copilot","path":"/synthetic/events.jsonl","line":12,"count":2}`
+	if string(got) != want {
+		t.Fatalf("warning JSON = %s", got)
+	}
+}
+
+func TestUnattributedSkillWarningDoesNotAssertMissingUses(t *testing.T) {
+	if got := WarningAdvice("copilot_unattributed_skill"); got != "turn-level skill statistics may be incomplete; some references could not be attributed" {
+		t.Fatalf("advice = %q", got)
+	}
+	if got := WarningDescription("copilot_unattributed_skill"); got != "skipped skill reference without an active turn" {
+		t.Fatalf("description = %q", got)
+	}
+	if got := WarningDiagnosticLevel(Warning{Reason: "copilot_unattributed_skill"}); got != "warning" {
+		t.Fatalf("level = %q", got)
 	}
 }

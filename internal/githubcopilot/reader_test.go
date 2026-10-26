@@ -3,6 +3,7 @@ package githubcopilot
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -206,5 +207,34 @@ func TestDecodeFixtureIsReadOnly(t *testing.T) {
 	}
 	if before.Size() != after.Size() || before.Mode() != after.Mode() || !before.ModTime().Equal(after.ModTime()) {
 		t.Fatalf("fixture metadata changed: before=%v after=%v", before, after)
+	}
+}
+
+func TestDecodeReportedMetadataDoesNotInventUsage(t *testing.T) {
+	warnings := &WarningCollector{}
+	var events []Envelope
+	if err := DecodeFile(filepath.Join("testdata", "event-compatibility.jsonl"), DecodeOptions{Warnings: warnings}, func(event Envelope) { events = append(events, event) }); err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 11 || len(warnings.Warnings()) != 0 {
+		t.Fatalf("events = %d, warnings = %#v", len(events), warnings.Warnings())
+	}
+	result := Normalize(events)
+	if len(result.Turns) != 0 {
+		t.Fatalf("metadata invented turns: %#v", result.Turns)
+	}
+	if len(result.Sessions) != 1 || result.Sessions[0].CreatedAt.IsZero() || result.Sessions[0].UpdatedAt.IsZero() {
+		t.Fatalf("metadata-only session identity/times not retained: %#v", result.Sessions)
+	}
+	// Metadata must also leave an existing turn's observations unchanged.
+	start := testEvent("metadata-session", "start", "assistant.turn_start", time.Unix(1, 0), map[string]any{"turnId": "turn-1", "model": "parent-model"})
+	for i := range events {
+		events[i].SessionID = start.SessionID
+	}
+	result = Normalize(append([]Envelope{start}, events...))
+	baseline := Normalize([]Envelope{start})
+	got, want := result.Turns[0], baseline.Turns[0]
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("metadata changed turn: got=%#v want=%#v", got, want)
 	}
 }

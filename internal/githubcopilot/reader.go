@@ -184,12 +184,15 @@ func knownEventType(eventType string) bool {
 	case "session.start", "session.shutdown", "session.error", "session.info", "session.model_change", "session.usage_record",
 		"session.context_changed", "session.usage_checkpoint", "session.compaction_start", "session.compaction_complete",
 		"session.plan_changed", "session.auto_mode_resolved", "session.resume", "session.workspace_file_changed",
+		"session.binary_asset", "session.mode_changed", "session.task_complete", "session.mode_notice_delivered",
+		"session.permissions_changed", "session.warning", "abort", "human_response.recorded",
 		"system.message", "user.message", "assistant.message", "assistant.usage", "assistant.turn_start", "assistant.turn_end",
 		"system.notification",
 		"model.captured_assignment_context", "model.message", "model.messages_snapshot",
 		"model.model_call_started", "model.model_call_success", "model.response", "model.turn_started", "model.turn_ended",
 		"tool.execution_start", "tool.execution_complete", "tool.user_requested", "permission.requested", "permission.completed", "skill.invoked",
-		"skill.context_delivered_ref", "subagent.started", "subagent.completed", "hook.start", "hook.end":
+		"skill.invoked_ref", "skill.context_delivered_ref", "subagent.started", "subagent.completed",
+		"subagent.selected", "subagent.configured", "subagent.failed", "hook.start", "hook.end":
 		return true
 	default:
 		return false

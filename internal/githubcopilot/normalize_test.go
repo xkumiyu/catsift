@@ -2,6 +2,7 @@ package githubcopilot
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -287,5 +288,174 @@ func testEvent(sessionID, id, eventType string, timestamp time.Time, data map[st
 	return Envelope{
 		ID: id, Type: eventType, Timestamp: timestamp, Data: data, SessionID: sessionID,
 		Source: usage.SourceRef{Path: "/synthetic/session-state/" + sessionID + "/events.jsonl", Line: 1, Source: usage.SourceCopilot, Agent: "copilot", Provider: "copilot", ProviderSessionID: sessionID, EventID: id},
+	}
+}
+
+func TestNormalizeSkillInvocationReferences(t *testing.T) {
+	for _, order := range [][]string{{"skill.invoked", "skill.invoked_ref"}, {"skill.invoked_ref", "skill.invoked"}, {"skill.invoked_ref", "skill.invoked_ref"}} {
+		t.Run(strings.Join(order, "/"), func(t *testing.T) {
+			events := []Envelope{testEvent("session-a", "start", "assistant.turn_start", time.Unix(1, 0), map[string]any{"turnId": "turn-1"})}
+			for i, kind := range order {
+				events = append(events, testEvent("session-a", kind, kind, time.Unix(int64(i+2), 0), map[string]any{"name": "review", "path": "/private/skills/review/SKILL.md", "content": "synthetic-reference-body", "contentId": "sha256:synthetic-reference-id", "contentLength": 24, "invokedAtTurn": 42}))
+			}
+			events = append(events,
+				testEvent("session-a", "end", "assistant.turn_end", time.Unix(4, 0), map[string]any{"turnId": "turn-1"}),
+				testEvent("session-a", "next", "assistant.turn_start", time.Unix(5, 0), map[string]any{"turnId": "turn-2"}),
+				testEvent("session-a", "ref-next", "skill.invoked_ref", time.Unix(6, 0), map[string]any{"name": "review", "contentId": "sha256:synthetic-reference-id"}),
+			)
+			result := Normalize(events)
+			if len(result.Turns) != 2 {
+				t.Fatalf("turns = %#v", result.Turns)
+			}
+			for _, turn := range result.Turns {
+				if len(turn.SkillEvidence) != 1 {
+					t.Fatalf("evidence = %#v", turn.SkillEvidence)
+				}
+				e := turn.SkillEvidence[0]
+				if e.SkillName != "review" || e.Method != usage.MethodSkillInvoked || e.State != usage.StateConfirmed {
+					t.Fatalf("evidence = %#v", e)
+				}
+			}
+			serialized, err := json.Marshal(result)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, forbidden := range []string{"/private/skills", "synthetic-reference-body", "synthetic-reference-id"} {
+				if strings.Contains(string(serialized), forbidden) {
+					t.Fatalf("raw reference payload leaked: %s", serialized)
+				}
+			}
+		})
+	}
+}
+
+func TestNormalizeSkillReferenceUsesOnlyDocumentedIdentity(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		data map[string]any
+		want string
+	}{
+		{"path", map[string]any{"path": "/private/skills/review/SKILL.md", "contentId": "sha256:synthetic"}, "review"},
+		{"name", map[string]any{"name": "review"}, "review"},
+		{"no identity", map[string]any{"contentId": "sha256:synthetic"}, ""},
+		{"unsupported aliases", map[string]any{"skillName": "guessed", "skillPath": "/private/skills/guessed/SKILL.md"}, ""},
+		{"invalid identity", map[string]any{"name": 42, "path": false}, ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			events := []Envelope{}
+			if tt.want != "" {
+				events = append(events, testEvent("session-a", "start", "assistant.turn_start", time.Unix(0, 0), map[string]any{"turnId": "turn-1"}))
+			}
+			result := Normalize(append(events, testEvent("session-a", "ref", "skill.invoked_ref", time.Unix(1, 0), tt.data)))
+			var evidence []usage.SkillEvidence
+			for _, turn := range result.Turns {
+				evidence = append(evidence, turn.SkillEvidence...)
+			}
+			if tt.want == "" {
+				if len(result.Turns) != 0 {
+					t.Fatalf("unidentified reference invented turns: %#v", result.Turns)
+				}
+				if len(evidence) != 0 {
+					t.Fatalf("invented evidence: %#v", evidence)
+				}
+				return
+			}
+			if len(evidence) != 1 || evidence[0].SkillName != tt.want {
+				t.Fatalf("evidence = %#v", evidence)
+			}
+		})
+	}
+}
+
+func TestNormalizeUnidentifiedSkillsLeaveTurnsUnchanged(t *testing.T) {
+	start := testEvent("session-a", "start", "assistant.turn_start", time.Unix(2, 0), map[string]any{"turnId": "turn-1"})
+	end := testEvent("session-a", "end", "assistant.turn_end", time.Unix(4, 0), map[string]any{"turnId": "turn-1"})
+	for _, state := range []struct {
+		name   string
+		events []Envelope
+	}{
+		{"empty", nil}, {"active", []Envelope{start}}, {"finished", []Envelope{start, end}},
+	} {
+		for _, kind := range []string{"skill.invoked", "skill.invoked_ref"} {
+			for _, timestamp := range []int64{1, 6} {
+				t.Run(state.name+"/"+kind+"/"+time.Unix(timestamp, 0).Format(time.RFC3339), func(t *testing.T) {
+					baseline := Normalize(state.events)
+					events := append([]Envelope(nil), state.events...)
+					events = append(events, testEvent("session-a", "unidentified", kind, time.Unix(timestamp, 0), map[string]any{"contentId": "sha256:synthetic"}))
+					result := Normalize(events)
+					if !reflect.DeepEqual(result.Turns, baseline.Turns) {
+						t.Fatalf("unidentified skill changed turns: got=%#v want=%#v", result.Turns, baseline.Turns)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestNormalizeUnattributedSkillReferencesDoNotChangeStatistics(t *testing.T) {
+	start := testEvent("session-a", "start", "assistant.turn_start", time.Unix(1, 0), map[string]any{"turnId": "turn-1"})
+	end := testEvent("session-a", "end", "assistant.turn_end", time.Unix(3, 0), map[string]any{"turnId": "turn-1"})
+	shutdown := testEvent("session-a", "shutdown", "session.shutdown", time.Unix(4, 0), map[string]any{"modelMetrics": map[string]any{"model-a": map[string]any{"usage": map[string]any{"inputTokens": 10, "outputTokens": 5}}}})
+	for _, state := range []struct {
+		name   string
+		events []Envelope
+	}{
+		{"empty", nil}, {"ended", []Envelope{start, end}}, {"shutdown", []Envelope{start, shutdown}}, {"aggregate-only", []Envelope{shutdown}},
+	} {
+		t.Run(state.name, func(t *testing.T) {
+			baseline := Normalize(state.events)
+			events := append([]Envelope(nil), state.events...)
+			for i := range 2 {
+				ref := testEvent("session-a", "late-ref", "skill.invoked_ref", time.Unix(int64(6+i), 0), map[string]any{"name": "review", "path": "/private/skills/review/SKILL.md", "contentId": "sha256:synthetic-private-ref", "invokedAtTurn": 1, "model": "unattributed-model"})
+				ref.Source.Line = i + 10
+				events = append(events, ref)
+			}
+			result := Normalize(events)
+			if !reflect.DeepEqual(result.Turns, baseline.Turns) {
+				t.Fatalf("unattributed references changed turns: got=%#v want=%#v", result.Turns, baseline.Turns)
+			}
+			if !reflect.DeepEqual(result.Sessions, baseline.Sessions) {
+				t.Fatalf("unattributed references changed session metadata")
+			}
+			if len(result.Warnings) != 1 {
+				t.Fatalf("warnings = %#v", result.Warnings)
+			}
+			warning := result.Warnings[0]
+			if warning.Reason != "copilot_unattributed_skill" || warning.Type != "skill.invoked_ref" || warning.Source != usage.SourceCopilot || warning.Count != 2 || warning.Line != 0 {
+				t.Fatalf("warning = %#v", warning)
+			}
+			data, err := json.Marshal(result)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, forbidden := range []string{"/private/skills", "synthetic-private-ref", "unattributed-model"} {
+				if strings.Contains(string(data), forbidden) {
+					t.Fatalf("raw receipt payload leaked: %s", data)
+				}
+			}
+		})
+	}
+}
+
+func TestNormalizeLateReferenceKeepsCountedInlineAndDiagnostic(t *testing.T) {
+	events := []Envelope{
+		testEvent("session-a", "start", "assistant.turn_start", time.Unix(1, 0), map[string]any{"turnId": "turn-1"}),
+		testEvent("session-a", "inline", "skill.invoked", time.Unix(2, 0), map[string]any{"name": "review"}),
+		testEvent("session-a", "end", "assistant.turn_end", time.Unix(3, 0), map[string]any{"turnId": "turn-1"}),
+	}
+	baseline := Normalize(events)
+	result := Normalize(append(events, testEvent("session-a", "late", "skill.invoked_ref", time.Unix(4, 0), map[string]any{"name": "review"})))
+	if !reflect.DeepEqual(result.Turns, baseline.Turns) || len(result.Turns) != 1 || len(result.Turns[0].SkillEvidence) != 1 {
+		t.Fatalf("counted inline evidence changed: %#v", result.Turns)
+	}
+	if len(result.Warnings) != 1 || result.Warnings[0].Reason != "copilot_unattributed_skill" || result.Warnings[0].Count != 1 {
+		t.Fatalf("unattributed receipt diagnostic lost: %#v", result.Warnings)
+	}
+}
+
+func TestNormalizeInlineSkillPreservesScalarIdentityCompatibility(t *testing.T) {
+	result := Normalize([]Envelope{testEvent("session-a", "inline", "skill.invoked", time.Unix(1, 0), map[string]any{"name": 42})})
+	if len(result.Turns) != 1 || len(result.Turns[0].SkillEvidence) != 1 || result.Turns[0].SkillEvidence[0].SkillName != "42" {
+		t.Fatalf("legacy inline scalar identity changed: %#v", result.Turns)
 	}
 }

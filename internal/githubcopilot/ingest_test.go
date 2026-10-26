@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/xkumiyu/catsift/internal/cache"
+	"github.com/xkumiyu/catsift/internal/usage"
 )
 
 func TestLoadCachesFullSnapshotAndAppliesPeriodFilter(t *testing.T) {
@@ -450,3 +451,226 @@ func mustAbs(t *testing.T, path string) string {
 }
 
 func stringSource() string { return string("copilot") }
+
+func TestLoadCopilotEventCompatibilityRefreshesV7Cache(t *testing.T) {
+	root := t.TempDir()
+	writeCopilotFixture(t, root, "session-a", false)
+	path := filepath.Join(root, "session-state", "session-a", "events.jsonl")
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := os.ReadFile(filepath.Join("testdata", "event-compatibility.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	content = append(content, metadata...)
+	content = append(content, []byte(strings.Join([]string{
+		`{"id":"ref-turn-start","timestamp":"2026-01-01T00:00:07Z","type":"assistant.turn_start","data":{"turnId":"turn-2"}}`,
+		`{"id":"ref-only","timestamp":"2026-01-01T00:00:08Z","type":"skill.invoked_ref","data":{"name":"ref-skill","path":"/private/skills/ref-skill/SKILL.md","contentId":"sha256:synthetic-private-id","contentLength":12}}`,
+		`{"id":"usage","timestamp":"2026-01-01T00:00:09Z","type":"session.usage_record","data":{"model":"model-b","usage":{"inputTokens":7,"outputTokens":3}}}`,
+		`{"id":"future-1","timestamp":"2026-01-01T00:00:10Z","type":"session.future_event","data":{"content":"synthetic-future-secret"}}`,
+		`{"id":"future-2","timestamp":"2026-01-01T00:00:11Z","type":"session.future_event","data":{"content":"synthetic-future-secret"}}`,
+	}, "\n")+"\n")...)
+	if err := os.WriteFile(path, content, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	files, err := Discover(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope := mustAbs(t, root)
+	revision, err := sourceRevision(scope, files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cacheDir := t.TempDir()
+	oldWarnings := &WarningCollector{}
+	oldWarnings.AddType("unknown_type", "skill.invoked_ref", path, 1)
+	if err := cache.New(cacheDir).Write(stringSource(), scope, revision, "copilot-normalizer-v7", snapshotFromResult(IngestResult{Warnings: oldWarnings.Warnings()})); err != nil {
+		t.Fatal(err)
+	}
+	var baseline IngestResult
+	for i, name := range []string{"fresh", "reparsed", "warm"} {
+		options := IngestOptions{}
+		if i > 0 {
+			options.CacheDir = cacheDir
+		}
+		var diagnostics []string
+		options.Diagnostic = func(message string) { diagnostics = append(diagnostics, message) }
+		result, err := Load(root, options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if name == "warm" && !containsDiagnostic(diagnostics, "copilot cache hit") {
+			t.Fatalf("warm load did not use cache: %v", diagnostics)
+		}
+		if i == 1 && !containsDiagnostic(diagnostics, "cache miss; reading source") {
+			t.Fatalf("cold load did not reparse source: %v", diagnostics)
+		}
+		if len(result.Turns) != 2 || len(result.Turns[1].SkillEvidence) != 1 || result.Turns[1].SkillEvidence[0].SkillName != "ref-skill" || len(result.Turns[1].TokenUsageEvents) != 1 || result.Turns[1].TokenUsageEvents[0].Usage.TotalTokens != 10 {
+			t.Fatalf("%s turns = %#v", name, result.Turns)
+		}
+		if len(result.Warnings) != 1 {
+			t.Fatalf("%s warnings = %#v", name, result.Warnings)
+		}
+		warning := result.Warnings[0]
+		if warning.Reason != "unknown_type" || warning.Type != "session.future_event" || warning.Count != 2 || warning.Line != 0 || string(warning.Source) != stringSource() {
+			t.Fatalf("%s warning = %#v", name, warning)
+		}
+		normalized := stripSourcePaths(result)
+		// Cached warnings intentionally omit source locations.
+		for i := range normalized.Warnings {
+			normalized.Warnings[i].Path = ""
+			normalized.Warnings[i].Line = 0
+		}
+		if i == 0 {
+			baseline = normalized
+		} else if !reflect.DeepEqual(baseline, normalized) {
+			t.Fatalf("%s differs from fresh: got=%#v want=%#v", name, normalized, baseline)
+		}
+	}
+	serialized, err := os.ReadFile(cache.New(cacheDir).Path(stringSource(), scope))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"/private/skills", "synthetic-private-id", "synthetic-future-secret", "synthetic-human-response", "synthetic-binary-description", "synthetic-task-summary", "synthetic-mode-notice", "synthetic-provider-warning", "synthetic-agent-error"} {
+		if strings.Contains(string(serialized), forbidden) {
+			t.Fatalf("raw payload %q leaked to cache", forbidden)
+		}
+	}
+	if _, hit, err := cache.New(cacheDir).Read(stringSource(), scope, revision, "copilot-normalizer-v7"); err != nil || hit {
+		t.Fatalf("v7 cache hit=%v err=%v", hit, err)
+	}
+}
+
+func TestLoadUnattributedSkillDiagnosticsSurviveCache(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "session-state", "session-a", "events.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := strings.Join([]string{
+		`{"id":"start","timestamp":"2026-01-01T00:00:01Z","type":"assistant.turn_start","data":{"turnId":"turn-1"}}`,
+		`{"id":"shutdown","timestamp":"2026-01-01T00:00:03Z","type":"session.shutdown","data":{"modelMetrics":{"model-a":{"usage":{"inputTokens":10,"outputTokens":5}}}}}`,
+		`{"id":"ref-1","timestamp":"2026-01-01T00:00:06Z","type":"skill.invoked_ref","data":{"name":"review","contentId":"sha256:synthetic-private-ref"}}`,
+		`{"id":"ref-2","timestamp":"2026-01-01T00:00:07Z","type":"skill.invoked_ref","data":{"name":"review","path":"/private/skills/review/SKILL.md"}}`,
+		`{"id":"unknown","timestamp":"2026-01-01T00:00:08Z","type":"session.future_event","data":{}}`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	files, err := Discover(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope := mustAbs(t, root)
+	revision, err := sourceRevision(scope, files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cacheDir := t.TempDir()
+	if err := cache.New(cacheDir).Write(stringSource(), scope, revision, "copilot-normalizer-v9", snapshotFromResult(IngestResult{})); err != nil {
+		t.Fatal(err)
+	}
+	var baseline IngestResult
+	for i, name := range []string{"fresh", "reparsed-v9", "warm"} {
+		options := IngestOptions{}
+		if i > 0 {
+			options.CacheDir = cacheDir
+		}
+		var diagnostics []string
+		options.Diagnostic = func(message string) { diagnostics = append(diagnostics, message) }
+		result, err := Load(root, options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if name == "warm" && !containsDiagnostic(diagnostics, "copilot cache hit") {
+			t.Fatalf("warm load did not use cache: %v", diagnostics)
+		}
+		if i == 1 && !containsDiagnostic(diagnostics, "cache miss; reading source") {
+			t.Fatalf("cold load did not reparse source: %v", diagnostics)
+		}
+		if len(result.Turns) != 1 || result.Turns[0].ID != "turn-1" || len(result.Turns[0].SkillEvidence) != 0 || len(result.Turns[0].TokenUsageEvents) != 1 || result.Turns[0].TokenUsageEvents[0].Usage.TotalTokens != 15 || !result.Turns[0].TokenUsageEvents[0].Timestamp.Equal(time.Date(2026, 1, 1, 0, 0, 3, 0, time.UTC)) {
+			t.Fatalf("%s turns = %#v", name, result.Turns)
+		}
+		if len(result.Warnings) != 2 {
+			t.Fatalf("%s warnings = %#v", name, result.Warnings)
+		}
+		for _, warning := range result.Warnings {
+			if warning.Source != usage.SourceCopilot {
+				t.Fatalf("warning = %#v", warning)
+			}
+			switch warning.Reason {
+			case "copilot_unattributed_skill":
+				if warning.Type != "skill.invoked_ref" || warning.Count != 2 {
+					t.Fatalf("warning = %#v", warning)
+				}
+			case "unknown_type":
+				if warning.Type != "session.future_event" || warning.Count != 1 {
+					t.Fatalf("warning = %#v", warning)
+				}
+			default:
+				t.Fatalf("unexpected warning: %#v", warning)
+			}
+		}
+		normalized := stripSourcePaths(result)
+		for i := range normalized.Warnings {
+			normalized.Warnings[i].Path = ""
+			normalized.Warnings[i].Line = 0
+		}
+		if i == 0 {
+			baseline = normalized
+		} else if !reflect.DeepEqual(normalized, baseline) {
+			t.Fatalf("%s differs from fresh", name)
+		}
+	}
+	data, err := os.ReadFile(cache.New(cacheDir).Path(stringSource(), scope))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"synthetic-private-ref", "/private/skills"} {
+		if strings.Contains(string(data), forbidden) {
+			t.Fatalf("raw receipt payload leaked: %s", data)
+		}
+	}
+	if _, hit, err := cache.New(cacheDir).Read(stringSource(), scope, revision, "copilot-normalizer-v9"); err != nil || hit {
+		t.Fatalf("v9 cache hit=%v err=%v", hit, err)
+	}
+}
+
+func TestLoadReceiptOnlyDoesNotCreateSession(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "session-state", "session-a", "events.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"id":"ref","timestamp":"2026-01-01T00:00:06Z","type":"skill.invoked_ref","data":{"name":"review"}}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cacheDir := t.TempDir()
+	for i, name := range []string{"fresh", "cold", "warm"} {
+		options := IngestOptions{}
+		if i > 0 {
+			options.CacheDir = cacheDir
+		}
+		var diagnostics []string
+		options.Diagnostic = func(message string) { diagnostics = append(diagnostics, message) }
+		result, err := Load(root, options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if name == "warm" && !containsDiagnostic(diagnostics, "copilot cache hit") {
+			t.Fatalf("warm load did not use cache: %v", diagnostics)
+		}
+		if i == 1 && !containsDiagnostic(diagnostics, "cache miss; reading source") {
+			t.Fatalf("cold load did not reparse source: %v", diagnostics)
+		}
+		if len(result.Turns) != 0 || len(result.Sessions) != 0 {
+			t.Fatalf("%s receipt created usage: %#v", name, result)
+		}
+		if len(result.Warnings) != 1 || result.Warnings[0].Reason != "copilot_unattributed_skill" || result.Warnings[0].Count != 1 {
+			t.Fatalf("%s warnings = %#v", name, result.Warnings)
+		}
+	}
+}
