@@ -125,8 +125,9 @@ func TestSpinnerDoesNotRenderAtDelayBoundaryWhenStopped(t *testing.T) {
 		},
 	}
 
-	stop := spinner.Start("Reading Codex history")
-	stop()
+	done := make(chan struct{})
+	close(done)
+	spinner.run("Reading Codex history", done, make(chan struct{}))
 
 	if got := output.String(); got != "" {
 		t.Fatalf("spinner output at delay boundary = %q, want empty", got)
