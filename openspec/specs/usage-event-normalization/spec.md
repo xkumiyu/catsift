@@ -67,7 +67,7 @@ Codex固有の履歴recordを、二重計上を避けながらsession・prompt�
 - **THEN** effective viewはCallsを1増やし、Failuresも1増やす
 
 ### Requirement: Skill利用を証拠種別とともに検出する
-システムはCodex raw record、OpenCode raw履歴、またはctx normalized eventで取得できる証拠を対象に、Skill専用recordの存在だけを前提としてはならない（MUST NOT）。注入されたstructured `<skill>` blockを `explicit-injected`、structured Skill toolまたは同等のOpenCode・ctx activityを `structured-tool`、canonicalな先頭 `$skill-name` user入力を `explicit-request`、既知Skillの `SKILL.md` または `scripts` 配下への実行時accessを `implicit-access` として識別しなければならない（SHALL）。各Skill観測はSkill名、利用mode、検出方式、確認状態、timestamp、session、turn、およびsource位置を取得できる範囲で保持しなければならない（SHALL）。ctxが根拠を保持していない通常文からSkill利用を推測してはならない（MUST NOT）。
+システムはCodex raw record、OpenCode raw履歴、またはctx normalized eventで取得できる証拠を対象に、Skill専用recordの存在だけを前提としてはならない（MUST NOT）。各Skill観測はSkill名、利用mode、検出方式、確認状態、timestamp、session、turn、およびsource位置を取得できる範囲で保持しなければならない（SHALL）。ctxが根拠を保持していない通常文からSkill利用を推測してはならない（MUST NOT）。
 
 #### Scenario: Skillがcontextへ正常に注入される
 - **WHEN** contextual user inputに有効な `<skill>` blockとSkill名が含まれる

@@ -550,7 +550,11 @@ type Warning struct {
 // problem. An empty result means the caller should use generic guidance.
 func WarningAdvice(reason string) string {
 	switch strings.TrimSpace(reason) {
-	case "unknown_type", "ctx_unknown_record", "ctx_unknown_event":
+	case "copilot_unattributed_skill":
+		return "turn-level skill statistics may be incomplete; some references could not be attributed"
+	case "unknown_type":
+		return "statistical impact is unconfirmed; update catsift or report this record type"
+	case "ctx_unknown_record", "ctx_unknown_event":
 		return "statistics may be incomplete; update catsift or report this record type"
 	case "opencode_unknown_part":
 		return "some message details may be missing; update catsift or report this part type"
@@ -614,6 +618,8 @@ func WarningDescription(reason string) string {
 		return "skipped oversized ctx event record"
 	case "ctx_missing_agent":
 		return "ctx event has no agent identity"
+	case "copilot_unattributed_skill":
+		return "skipped skill reference without an active turn"
 	case "unknown_type":
 		return "skipped unknown record type"
 	case "invalid_timestamp":

@@ -8,7 +8,7 @@
 
 ### Requirement: TUIは五つの探索対象を提供する
 
-システムはTUIでOverview、Activity、Models、Skills、Sessionsのtop-level viewを提供しなければならない（SHALL）。Overviewは対象scopeの利用状況summary（Skill Usesを含む）、直近7日間のRecent Activity、最近のSession、上位Model、および上位Skillを個別のsectionで表示し、利用状況summary、Token Usage、Top Models、Recent Activity、Recent Sessions、Top Skillsの順に配置しなければならない（SHALL）。Activityは対象scopeのactivityを日別または月別で表示しなければならない（SHALL）。ModelsはproviderとModel nameごとのToken usageを表示し、Token dataがないsourceではTurn数へfallbackしなければならない（SHALL）。SkillsはSkill名ごとの利用状況を表示し、SessionsはSession一覧を表示しなければならない（SHALL）。
+システムはTUIでOverview、Activity、Models、Skills、Sessionsのtop-level viewを提供しなければならない（SHALL）。Overviewは対象scopeの利用状況summary（Skill Usesを含む）、直近7日間のRecent Activity、最近のSession、上位Model、および上位Skillを個別のsectionで表示し、利用状況summary、Token Usage、Top Models、Recent Activity、Recent Sessions、Top Skillsの順に配置しなければならない（SHALL）。Activityは対象scopeのactivityを日別または月別で表示しなければならない（SHALL）。SkillsはSkill名ごとの利用状況を表示し、SessionsはSession一覧を表示しなければならない（SHALL）。
 
 #### Scenario: Overviewを表示する
 
@@ -25,6 +25,7 @@
 
 - **WHEN** userがModels viewを選択する
 - **THEN** システムはModelのprovider・name、Session数、Turn数、Token usage、およびfirst/last usedを表示する
+- **AND** Token dataがないsourceではTurn数へfallbackする
 - **AND** システムはToken dataが利用できる場合はToken usageの降順、利用できない場合はTurn数の降順をprimary sortとして適用する
 
 #### Scenario: Skill一覧を表示する

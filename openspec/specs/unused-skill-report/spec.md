@@ -32,7 +32,7 @@
 
 ### Requirement: Skillのcanonical nameと物理identityを保持する
 
-各inventory entryは、読取可能で有効な `SKILL.md` frontmatterの `name` をcanonical nameとして優先しなければならず（SHALL）、frontmatterがない、無効である、または読取できない場合はSkill directoryのbasenameをcanonical nameへfallbackしなければならない（SHALL）。ただしplugin cache layoutでは、既存のSkill name解決規則に従ってplugin namespaceとdirectory basenameを組み合わせたcanonical nameを使用しなければならない（SHALL）。Reportはcanonical `name`、Skill directoryを指すabsolute `path`、nameの解決元、およびfrontmatter nameの最終componentとpathのbasenameの不一致を判別できる情報を保持しなければならない（SHALL）。同じcanonical nameを持つ異なる物理pathは、別々のinventory entryとして保持しなければならない（SHALL）。
+各inventory entryは、読取可能で有効な `SKILL.md` frontmatterの `name` をcanonical nameとして優先しなければならず（SHALL）、frontmatterがない、無効である、または読取できない場合はSkill directoryのbasenameをcanonical nameへfallbackしなければならない（SHALL）。Reportはcanonical `name`、Skill directoryを指すabsolute `path`、nameの解決元、およびfrontmatter nameの最終componentとpathのbasenameの不一致を判別できる情報を保持しなければならない（SHALL）。同じcanonical nameを持つ異なる物理pathは、別々のinventory entryとして保持しなければならない（SHALL）。
 
 #### Scenario: frontmatter nameをcanonical nameとして使う
 
@@ -48,6 +48,7 @@
 
 - **WHEN** plugin cacheの `data-analytics/1.0.0/skills/router/SKILL.md` に有効なfrontmatter nameがない
 - **THEN** entryの `name` は `data-analytics:router`、directory nameは `router`、解決元は `directory` として表現される
+- **AND** plugin cache layoutのfallbackは既存のSkill name解決規則に従い、plugin namespaceとdirectory basenameを組み合わせる
 
 #### Scenario: 同名Skillを異なるpathから検出する
 
@@ -56,7 +57,7 @@
 
 ### Requirement: 履歴の利用集合とinventoryを比較する
 
-未使用判定は、選択されたCodexまたはctx history sourceのSkill利用検出・turn単位の重複排除・canonical name解決を通過した履歴を対象にし、inventory entryのcanonical nameと履歴のSkill nameが完全一致する利用が選択条件内に1回もない場合だけ、そのentryを未使用としなければならない（SHALL）。ctx sourceで複数Agentが対象になる場合は、全Agentの利用集合をunionして判定しなければならない（SHALL）。`--days` は履歴の対象期間を制限し、既定では選択sourceから読み込める履歴全体を対象としなければならない（SHALL）。`--strict` が指定された場合は `confirmed` の利用だけを使用済み判定へ含めなければならない（SHALL）。`--group-by` の値は、少なくとも1回利用されたかどうかという未使用判定を変えてはならない（MUST NOT）。nameのcase変換やdirectory nameをcanonical nameの別名として暗黙に統合してはならない（MUST NOT）。
+未使用判定は、選択されたCodexまたはctx history sourceのSkill利用検出・turn単位の重複排除・canonical name解決を通過した履歴を対象にし、inventory entryのcanonical nameと履歴のSkill nameが完全一致する利用が選択条件内に1回もない場合だけ、そのentryを未使用としなければならない（SHALL）。ctx sourceで複数Agentが対象になる場合は、全Agentの利用集合をunionして判定しなければならない（SHALL）。`--days` は履歴の対象期間を制限し、既定では選択sourceから読み込める履歴全体を対象としなければならない（SHALL）。`--strict` が指定された場合は `confirmed` の利用だけを使用済み判定へ含めなければならない（SHALL）。nameのcase変換やdirectory nameをcanonical nameの別名として暗黙に統合してはならない（MUST NOT）。
 
 #### Scenario: 選択期間内に利用されたSkillを除外する
 
@@ -82,6 +83,11 @@
 
 - **WHEN** directory nameが `dir-name` でfrontmatter nameが `canonical-name` のSkillに、履歴上 `canonical-name` の利用がある
 - **THEN** entryは未使用として列挙されない
+
+#### Scenario: group-byを変更する
+
+- **WHEN** 同じ履歴と選択条件で `--group-by` の値だけを変更する
+- **THEN** 少なくとも1回利用されたかどうかという未使用判定は変わらない
 
 ### Requirement: 未使用Skillを決定的なhuman-readable reportとJSONで出力する
 

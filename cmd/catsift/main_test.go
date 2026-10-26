@@ -2063,7 +2063,7 @@ func TestWriteWarningsVerboseIncludesSourceAndAction(t *testing.T) {
 	got := output.String()
 	for _, want := range []string{
 		"warning: [Codex] skipped unknown record type type=system.message (4)",
-		"statistics may be incomplete",
+		"statistical impact is unconfirmed",
 		"update catsift or report this record type",
 	} {
 		if !strings.Contains(got, want) {
@@ -2077,7 +2077,7 @@ func TestWriteWarningSummaryIncludesSourceAndAction(t *testing.T) {
 	var output bytes.Buffer
 	writeWarnings(&output, warnings, false)
 	got := output.String()
-	for _, want := range []string{"from Codex", "statistics may be incomplete", "update catsift or report this record type"} {
+	for _, want := range []string{"from Codex", "statistical impact is unconfirmed", "update catsift or report this record type"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("warning summary missing %q: %q", want, got)
 		}
@@ -3175,6 +3175,29 @@ func TestRunJSONDefaultAndDeprecatedFlag(t *testing.T) {
 		var stdout, stderr bytes.Buffer
 		if code := run(args, &stdout, &stderr); code != 2 || stdout.Len() != 0 {
 			t.Fatalf("%v: exit=%d stdout=%s stderr=%s", args, code, &stdout, &stderr)
+		}
+	}
+}
+
+func TestWriteUnattributedSkillDiagnostics(t *testing.T) {
+	warnings := []usage.Warning{{Reason: "copilot_unattributed_skill", Type: "skill.invoked_ref", Source: usage.SourceCopilot, Path: "/synthetic/events.jsonl", Count: 2}}
+	for _, verbose := range []bool{false, true} {
+		var output bytes.Buffer
+		writeWarnings(&output, warnings, verbose)
+		got := output.String()
+		for _, want := range []string{"GitHub Copilot", "turn-level skill statistics may be incomplete"} {
+			if !strings.Contains(got, want) {
+				t.Fatalf("verbose=%v missing %q: %q", verbose, want, got)
+			}
+		}
+		if verbose {
+			for _, want := range []string{"skipped skill reference without an active turn", "type=skill.invoked_ref", "(2)"} {
+				if !strings.Contains(got, want) {
+					t.Fatalf("verbose missing %q: %q", want, got)
+				}
+			}
+		} else if !strings.Contains(got, "skipped 2 records") {
+			t.Fatalf("missing skipped count: %q", got)
 		}
 	}
 }

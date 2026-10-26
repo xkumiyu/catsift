@@ -11,7 +11,7 @@ import (
 	"github.com/xkumiyu/catsift/internal/usage"
 )
 
-const ParserVersion = "copilot-normalizer-v7"
+const ParserVersion = "copilot-normalizer-v10"
 
 type IngestResult struct {
 	Turns    []usage.Turn
@@ -21,6 +21,7 @@ type IngestResult struct {
 }
 
 type normalizer struct {
+	warnings  *WarningCollector
 	sessions  map[string]*sessionState
 	tokenSeen map[string]struct{}
 }
@@ -43,7 +44,7 @@ type turnState struct {
 }
 
 func newNormalizer() *normalizer {
-	return &normalizer{sessions: make(map[string]*sessionState), tokenSeen: make(map[string]struct{})}
+	return &normalizer{sessions: make(map[string]*sessionState), tokenSeen: make(map[string]struct{}), warnings: &WarningCollector{}}
 }
 
 func Normalize(events []Envelope) IngestResult {
@@ -56,12 +57,28 @@ func Normalize(events []Envelope) IngestResult {
 
 func (n *normalizer) consume(event Envelope) {
 	session := n.session(event.SessionID, event.Source)
+	data := event.Data
+	eventType := strings.ToLower(strings.TrimSpace(event.Type))
+	if eventType == "skill.invoked_ref" {
+		// Durable receipts retain name/path; contentId identifies the body, not an invocation.
+		name, _ := data["name"].(string)
+		path, _ := data["path"].(string)
+		data = map[string]any{"name": name, "path": path}
+		if session.current == nil {
+			// Do not invent a turn or move shutdown token attribution for a late receipt.
+			if copilotSkillName(data) != "" {
+				n.warnings.AddType("copilot_unattributed_skill", "skill.invoked_ref", event.Source.Path, event.Source.Line)
+			}
+			return
+		}
+	}
+	// Register only after references that cannot contribute usage have been skipped.
+	n.sessions[session.meta.QualifiedKey()] = session
 	if title := strings.TrimSpace(event.SessionName); title != "" && session.meta.Title == "" {
 		session.meta.Title = title
 	}
 	n.touchSession(session, event.Timestamp)
-	data := event.Data
-	switch strings.ToLower(strings.TrimSpace(event.Type)) {
+	switch eventType {
 	case "session.start":
 		if version := firstString(data, "version", "cliVersion", "cli_version"); version != "" {
 			session.meta.CLIVersion = version
@@ -74,13 +91,15 @@ func (n *normalizer) consume(event Envelope) {
 	case "session.shutdown":
 		n.observeSessionTokenUsage(session, event)
 		n.finishCurrent(session)
-	case "skill.invoked":
+	case "skill.invoked", "skill.invoked_ref":
+		name := copilotSkillName(data)
+		if name == "" {
+			return
+		}
 		turn := n.ensureTurn(session, event, turnID(data))
 		n.touchTurn(turn, event.Timestamp, false)
-		if name := copilotSkillName(data); name != "" {
-			source := n.sourceFor(session, event.Source)
-			n.addEvidence(turn, usage.NewSkillEvidence(turn.turn.SessionID, turn.turn.ID, name, usage.ModeUnknown, usage.MethodSkillInvoked, usage.StateConfirmed, event.Timestamp, source))
-		}
+		source := n.sourceFor(session, event.Source)
+		n.addEvidence(turn, usage.NewSkillEvidence(turn.turn.SessionID, turn.turn.ID, name, usage.ModeUnknown, usage.MethodSkillInvoked, usage.StateConfirmed, event.Timestamp, source))
 	case "session.model_change":
 		n.observeSessionModel(session, event)
 	case "session.auto_mode_resolved":
@@ -146,7 +165,6 @@ func (n *normalizer) session(providerID string, source usage.SourceRef) *session
 		return current
 	}
 	current := &sessionState{meta: meta, turns: make(map[string]*turnState)}
-	n.sessions[key] = current
 	return current
 }
 
@@ -442,7 +460,7 @@ func (n *normalizer) result() IngestResult {
 		n.finishCurrent(session)
 		n.applySessionTokenUsage(session)
 	}
-	result := IngestResult{Agents: []string{"copilot"}}
+	result := IngestResult{Agents: []string{"copilot"}, Warnings: n.warnings.Warnings()}
 	turns := make([]*turnState, 0)
 	for _, session := range n.sessions {
 		result.Sessions = append(result.Sessions, session.meta)

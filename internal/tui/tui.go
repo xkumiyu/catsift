@@ -1678,6 +1678,8 @@ func warningSummaryText(summary warningSummary) string {
 		singular, plural = "ctx event has an invalid timestamp", "ctx events have invalid timestamps"
 	case "ctx_missing_agent":
 		singular, plural = "ctx event has no agent identity", "ctx events have no agent identity"
+	case "copilot_unattributed_skill":
+		singular, plural = "skill reference skipped without an active turn", "skill references skipped without an active turn"
 	case "unknown_type":
 		singular, plural = "unknown record type skipped", "unknown record types skipped"
 	case "invalid_timestamp":
